@@ -1,10 +1,10 @@
 ![Red Copilot — Security Engineering for the Agentic Era](https://raw.githubusercontent.com/red-copilot/.github/main/assets/red-copilot-banner.svg)
 
-# Red Harness Go SDK
+# Red Harness · Go SDK
 
-**A Go-native execution and trust boundary for security agents.**
+**A Go-native execution boundary for security agents, available as a library, CLI, and local HTTP service.**
 
-**面向安全智能体的 Go 原生执行与信任边界。** 可作为 Go 库集成，也可通过 CLI 和本地 HTTP 服务运行；独立于 Python Runtime，拥有自己的执行、隔离、审计与验证契约。
+**面向安全智能体的 Go 原生执行边界，提供库、CLI 与本地 HTTP 服务三种接入方式。** 它与 Python Runtime 相互独立，拥有自己的执行、隔离、审计和验证契约。
 
 The agent owns its reasoning loop. The SDK provides controlled execution, container isolation, budgets, Pi RPC transport, SQLite audit records, and authoritative verification.
 
@@ -45,7 +45,7 @@ Verifier / Benchmark Evaluator
 Authoritative Verdict
 ```
 
-## Requirements
+## Requirements · 环境要求
 
 - Go 1.24+
 - Docker, with Docker Compose for Compose targets
@@ -56,7 +56,7 @@ go build ./cmd/harness
 ./harness image build --tag ghcr.io/red-copilot/harness-pi-kali:0.1.0
 ```
 
-## Library
+## Library · Go 库接入
 
 ```go
 store, err := sqlite.Open(".harness/harness.db")
@@ -94,7 +94,7 @@ Only the verifier or benchmark evaluator can produce a successful verdict.
 Agent messages, tool exit codes and self-reported completion are observations,
 not evidence.
 
-## CLI
+## CLI · 命令行
 
 Create a Go-first `harness/v1alpha1` YAML/JSON file, then run:
 
@@ -116,7 +116,7 @@ harness doctor
 harness migrate --task task.yaml --agent agent.yaml --out run.json
 ```
 
-## HTTP
+## HTTP API · 本地服务
 
 ```bash
 export BENCHMARK_BASE_URL=...
@@ -137,7 +137,7 @@ Keep the listener bound to loopback unless you configure an external security bo
 - `POST /v1/runs/{id}/steer` sends operator guidance to a live session.
 - `POST /v1/tsec/sweeps` starts a batch of TSec challenge runs.
 
-## TSec
+## TSec · 竞赛适配
 
 TSec uses the platform API directly from Go:
 
@@ -151,7 +151,7 @@ Go 版会将 `BENCHMARK_TOKEN` 传入智能体容器供提交 skill 使用。写
 
 See [`docs/tsec.md`](docs/tsec.md).
 
-## Storage and security
+## Storage and Security · 存储与安全
 
 SQLite at `.harness/harness.db` is the canonical persistence layer. Raw RPC
 events, agent stdout/stderr, session outcomes and verdicts are stored there.
@@ -161,7 +161,7 @@ Containers use a read-only root filesystem, `no-new-privileges`, dropped
 capabilities with `NET_RAW` by default, bounded CPU/memory/PIDs and no Docker
 socket. The default HTTP listener is `127.0.0.1:8080`.
 
-## Tests
+## Tests · 测试
 
 ```bash
 go test ./...
