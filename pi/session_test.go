@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -211,4 +213,84 @@ func (p *fakeProcess) exit() {
 		_ = p.stdoutWriter.Close()
 		_ = p.stderrWriter.Close()
 	})
+}
+
+func TestFactoryWritesModelsJSONBeforeStartingPi(t *testing.T) {
+	workspace := t.TempDir()
+	starter := &fakeStarter{proc: newFakeProcess()}
+	models := `{"providers":{"opencode-go":{"models":[{"id":"minimax-m3.1-flash-free"}]}}}`
+	session, err := pi.NewFactory().NewSession(context.Background(), harness.SessionRequest{
+		RunID: "run", SessionID: "s1",
+		Agent: harness.AgentSpec{ID: "pi", Image: "kali-pi:test", Pi: &harness.PiSpec{
+			Provider: "opencode-go", Model: "minimax-m3.1-flash-free", ModelsJSON: models,
+		}},
+		WorkspaceDir: workspace, TaskDir: t.TempDir(), SkillsDir: t.TempDir(),
+		Env: map[string]string{}, Starter: starter,
+	})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	_ = session.Close(context.Background())
+	data, err := os.ReadFile(filepath.Join(workspace, ".pi", "models.json"))
+	if err != nil {
+		t.Fatalf("read models.json: %v", err)
+	}
+	if string(data) != models {
+		t.Fatalf("models.json = %s", data)
+	}
+}
+
+func TestFactoryRejectsInvalidModelsJSON(t *testing.T) {
+	_, err := pi.NewFactory().NewSession(context.Background(), harness.SessionRequest{
+		RunID: "run", SessionID: "s1",
+		Agent:        harness.AgentSpec{ID: "pi", Image: "kali-pi:test", Pi: &harness.PiSpec{ModelsJSON: "not-json"}},
+		WorkspaceDir: t.TempDir(), TaskDir: t.TempDir(), SkillsDir: t.TempDir(),
+		Env: map[string]string{}, Starter: &fakeStarter{proc: newFakeProcess()},
+	})
+	if err == nil {
+		t.Fatal("expected invalid models.json error")
+	}
+}
+
+func TestPromptDoesNotBlockOnUnreadStdin(t *testing.T) {
+	proc := newFakeProcess()
+	_ = proc.stdoutWriter.Close()
+	_ = proc.stderrWriter.Close()
+	session, err := pi.NewFactory().NewSession(context.Background(), harness.SessionRequest{
+		RunID: "run", SessionID: "s1",
+		Agent:        harness.AgentSpec{ID: "pi", Image: "kali-pi:test", Pi: &harness.PiSpec{Model: "test"}},
+		WorkspaceDir: t.TempDir(), TaskDir: t.TempDir(), SkillsDir: t.TempDir(),
+		Env: map[string]string{}, Starter: &fakeStarter{proc: proc},
+	})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err = session.Prompt(ctx, "hello")
+	if time.Since(started) > time.Second {
+		t.Fatalf("Prompt blocked for %s", time.Since(started))
+	}
+	if err == nil {
+		t.Fatal("expected context error from blocked stdin")
+	}
+	_ = session.Close(context.Background())
+}
+
+func TestWaitReturnsUsageOnCancel(t *testing.T) {
+	h := newRPCHarness(t)
+	session := h.session(t)
+	h.write(t, `{"type":"message_update","usage":{"input":10,"output":5,"totalTokens":15},"assistantMessageEvent":{"type":"text_delta","delta":"x"}}`)
+	time.Sleep(30 * time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result, err := session.Wait(ctx)
+	if err == nil {
+		t.Fatal("expected cancellation error")
+	}
+	if result.Usage.TotalTokens != 15 {
+		t.Fatalf("usage = %#v, want 15 total tokens", result.Usage)
+	}
+	_ = session.Close(context.Background())
 }

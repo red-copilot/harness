@@ -102,6 +102,9 @@ func BuildRunArgsChecked(spec harness.ProcessSpec) ([]string, error) {
 	if spec.WorkingDir != "" {
 		args = append(args, "-w", spec.WorkingDir)
 	}
+	if spec.User != "" {
+		args = append(args, "--user", spec.User)
+	}
 	args = append(args, spec.Image)
 	args = append(args, spec.Command...)
 	return args, nil

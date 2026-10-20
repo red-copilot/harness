@@ -17,7 +17,7 @@ func TestBuildRunArgsHardensAndScopesContainer(t *testing.T) {
 			{Source: "/host/ws", Destination: "/workspace"},
 		},
 		Name: "harness_pi_test", Labels: map[string]string{"harness.run_id": "r1", "harness.session_id": "s1"},
-		WorkingDir: "/workspace", ReadOnlyRoot: true, PidsLimit: 256, Memory: "2g", CPUs: "2",
+		WorkingDir: "/workspace", User: "1000:1000", ReadOnlyRoot: true, PidsLimit: 256, Memory: "2g", CPUs: "2",
 	})
 	joined := strings.Join(args, " ")
 	for _, want := range []string{
@@ -26,7 +26,7 @@ func TestBuildRunArgsHardensAndScopesContainer(t *testing.T) {
 		"--cap-drop ALL", "--cap-add NET_RAW", "--security-opt no-new-privileges",
 		"--pids-limit 256", "--memory 2g", "--cpus 2",
 		"-v /host/task:/task:ro", "-v /host/ws:/workspace",
-		"-w /workspace", "-e A", "harness/pi:test pi --mode rpc",
+		"-w /workspace", "--user 1000:1000", "-e A", "harness/pi:test pi --mode rpc",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("args %q missing %q", joined, want)

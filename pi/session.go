@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,6 +43,18 @@ func (f *Factory) NewSession(ctx context.Context, req harness.SessionRequest) (h
 	if image == "" {
 		image = DefaultImage
 	}
+	if piSpec.ModelsJSON != "" {
+		if !json.Valid([]byte(piSpec.ModelsJSON)) {
+			return nil, errors.New("pi models_json is not valid JSON")
+		}
+		piDir := filepath.Join(req.WorkspaceDir, ".pi")
+		if err := os.MkdirAll(piDir, 0o700); err != nil {
+			return nil, fmt.Errorf("create pi config directory: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(piDir, "models.json"), []byte(piSpec.ModelsJSON), 0o600); err != nil {
+			return nil, fmt.Errorf("write pi models.json: %w", err)
+		}
+	}
 	command := BuildCommand(req.Agent, tsecSkillPath)
 	network := req.Agent.Network
 	if network == "" {
@@ -69,7 +83,7 @@ func (f *Factory) NewSession(ctx context.Context, req harness.SessionRequest) (h
 		Network: network, CapAdd: caps,
 		Name:       "harness_pi_" + safeName(req.RunID+"_"+req.SessionID),
 		Labels:     map[string]string{"harness.run_id": req.RunID, "harness.session_id": req.SessionID},
-		WorkingDir: "/workspace", ReadOnlyRoot: true,
+		WorkingDir: "/workspace", User: fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), ReadOnlyRoot: true,
 		PidsLimit: 256, Memory: "2g", CPUs: "2",
 	}
 	proc, err := req.Starter.Start(ctx, spec)
@@ -140,6 +154,12 @@ type session struct {
 	pending   map[string]chan responseRecord
 	nextID    atomic.Uint64
 
+	writeMu   sync.Mutex
+	stdinOnce sync.Once
+
+	streamMu      sync.RWMutex
+	streamsClosed bool
+
 	usageMu sync.Mutex
 	usage   harness.Usage
 
@@ -203,7 +223,9 @@ func (s *session) Wait(ctx context.Context) (harness.AgentResult, error) {
 	case <-s.exited:
 		return s.snapshotResult(), nil
 	case <-ctx.Done():
-		return harness.AgentResult{Status: harness.StatusCancelled, Error: ctx.Err().Error()}, ctx.Err()
+		return harness.AgentResult{
+			Status: harness.StatusCancelled, Error: ctx.Err().Error(), Usage: s.snapshotUsage(),
+		}, ctx.Err()
 	}
 }
 
@@ -215,9 +237,7 @@ func (s *session) Abort(ctx context.Context) error {
 func (s *session) Close(ctx context.Context) error {
 	var err error
 	s.closeOnce.Do(func() {
-		if s.stdin != nil {
-			_ = s.stdin.Close()
-		}
+		s.closeStdin()
 		select {
 		case <-s.exited:
 		case <-time.After(2 * time.Second):
@@ -227,9 +247,12 @@ func (s *session) Close(ctx context.Context) error {
 		}
 		s.cancel()
 		_ = s.proc.Kill(ctx)
-		s.readWG.Wait()
+		s.waitReaders(2 * time.Second)
+		s.streamMu.Lock()
+		s.streamsClosed = true
 		close(s.events)
 		close(s.logs)
+		s.streamMu.Unlock()
 		close(s.closed)
 	})
 	return err
@@ -251,8 +274,8 @@ func (s *session) sendAndWait(ctx context.Context, command map[string]any) (resp
 	if err != nil {
 		return responseRecord{}, err
 	}
-	if _, err := s.stdin.Write(append(data, '\n')); err != nil {
-		return responseRecord{}, fmt.Errorf("write rpc command: %w", err)
+	if err := s.writeCommand(ctx, append(data, '\n')); err != nil {
+		return responseRecord{}, err
 	}
 	select {
 	case record := <-response:
@@ -267,6 +290,49 @@ func (s *session) sendAndWait(ctx context.Context, command map[string]any) (resp
 		return responseRecord{}, ctx.Err()
 	case <-s.exited:
 		return responseRecord{}, errors.New("pi exited before responding")
+	}
+}
+
+func (s *session) writeCommand(ctx context.Context, data []byte) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.stdin.Write(data)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("write rpc command: %w", err)
+		}
+		return nil
+	case <-ctx.Done():
+		s.closeStdin()
+		return ctx.Err()
+	case <-s.exited:
+		s.closeStdin()
+		return errors.New("pi exited before writing command")
+	}
+}
+
+func (s *session) closeStdin() {
+	s.stdinOnce.Do(func() {
+		if s.stdin != nil {
+			_ = s.stdin.Close()
+		}
+	})
+}
+
+func (s *session) waitReaders(timeout time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		s.readWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(timeout):
 	}
 }
 
@@ -326,11 +392,16 @@ func (s *session) readStderr() {
 	for {
 		line, err := s.stderr.ReadString('\n')
 		if len(line) > 0 {
+			s.streamMu.RLock()
+			if s.streamsClosed {
+				s.streamMu.RUnlock()
+				return
+			}
 			select {
 			case s.logs <- harness.LogEvent{Stream: "stderr", Text: line}:
 			case <-s.ctx.Done():
-				return
 			}
+			s.streamMu.RUnlock()
 		}
 		if err != nil {
 			return
@@ -411,6 +482,11 @@ func (s *session) snapshotResult() harness.AgentResult {
 }
 
 func (s *session) emitEvent(event harness.AgentEvent) {
+	s.streamMu.RLock()
+	defer s.streamMu.RUnlock()
+	if s.streamsClosed {
+		return
+	}
 	select {
 	case s.events <- event:
 	case <-s.ctx.Done():

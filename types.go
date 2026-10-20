@@ -78,6 +78,7 @@ type PiSpec struct {
 	SystemPrompt   string   `json:"system_prompt,omitempty" yaml:"system_prompt,omitempty"`
 	Skills         []string `json:"skills,omitempty" yaml:"skills,omitempty"`
 	Image          string   `json:"image,omitempty" yaml:"image,omitempty"`
+	ModelsJSON     string   `json:"models_json,omitempty" yaml:"models_json,omitempty"`
 }
 
 // AgentSpec describes one independently runnable agent session.
@@ -106,6 +107,7 @@ type ProcessSpec struct {
 	Name         string
 	Labels       map[string]string
 	WorkingDir   string
+	User         string
 	ReadOnlyRoot bool
 	PidsLimit    int
 	Memory       string
