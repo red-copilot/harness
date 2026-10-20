@@ -2,6 +2,10 @@
 
 # Red Harness Go SDK
 
+**A Go-native execution runtime for security agents.**
+
+**面向安全智能体的 Go 原生执行运行时。** 独立于 Python Runtime，可作为 Go 库集成，也可通过 CLI 和本地 HTTP 服务运行。
+
 Red Harness is a Go-native execution and trust boundary for offense-oriented
 agents. It supplies environments, container isolation, budgets, Pi RPC
 transport, SQLite audit records and authoritative verification. The agent keeps
@@ -9,6 +13,34 @@ its own reasoning loop.
 
 The SDK does not depend on Python and is independent of the legacy
 `red-copilot` runtime.
+
+
+> **Design principle / 设计原则:** Agent claims are observations, not proof. Only the verifier or benchmark evaluator can produce an authoritative verdict. 智能体自述只是观测，不是证据；成功结论由验证器或竞赛评测器给出。
+
+## Architecture · 架构
+
+```text
+Go Library / CLI / HTTP
+          │
+          ▼
+     Run Controller
+          │
+     ┌────┴─────┐
+     ▼          ▼
+Agent Runtime  SQLite Store
+     │          │
+     ▼          ▼
+Isolated Agent  Events / Runs
+     │
+     ▼
+Target Environment
+     │
+     ▼
+Verifier / Benchmark Evaluator
+     │
+     ▼
+Authoritative Verdict
+```
 
 ## Requirements
 
@@ -91,6 +123,9 @@ export BENCHMARK_TOKEN=...
 
 The service is intentionally local/single-user and has no authentication or
 tenant isolation.
+Keep the listener bound to loopback unless you configure an external security boundary. Do not expose this service directly to an untrusted network.
+
+该服务面向本地单用户场景，不提供认证或租户隔离。除非另行配置安全边界，否则应仅监听 loopback，不要直接暴露给不可信网络。
 
 - `POST /v1/runs` creates an asynchronous run.
 - `GET /v1/runs/{id}` returns the SQLite-backed record.
@@ -105,9 +140,11 @@ TSec uses the platform API directly from Go:
 
 - SDK owns `list`, `start`, `close` and completion polling.
 - Pi owns `submit` through the embedded `tsec-submit` skill.
-- `BENCHMARK_TOKEN` is passed into the agent container as requested, and is
-  redacted before events and logs are written to SQLite.
-- The skill never starts or closes a challenge and never prints the token.
+- `BENCHMARK_TOKEN` is passed into the agent container for the embedded submission skill. Known token values are redacted before events and logs are written to SQLite.
+- **Security boundary:** redaction protects persisted records; it does not prevent code running inside the agent container from reading the token. Treat the container as inside the credential trust boundary.
+- The skill never starts or closes a challenge and is not intended to print the token.
+
+Go 版会将 `BENCHMARK_TOKEN` 传入智能体容器供提交 skill 使用。写入 SQLite 前会对已知 Token 值脱敏，但脱敏不能阻止容器内代码读取 Token；因此容器属于凭据信任边界的一部分。
 
 See [`docs/tsec.md`](docs/tsec.md).
 
