@@ -1,0 +1,9 @@
+.harness/
+dist/
+coverage.out
+*.test
+*.db
+*.db-shm
+*.db-wal
+
+/harness

@@ -1,0 +1,131 @@
+# Red Harness Go SDK
+
+Red Harness is a Go-native execution and trust boundary for offense-oriented
+agents. It supplies environments, container isolation, budgets, Pi RPC
+transport, SQLite audit records and authoritative verification. The agent keeps
+its own reasoning loop.
+
+The SDK does not depend on Python and is independent of the legacy
+`red-copilot` runtime.
+
+## Requirements
+
+- Go 1.24+
+- Docker, with Docker Compose for Compose targets
+- A Pi/Kali image, or build the bundled image:
+
+```bash
+go build ./cmd/harness
+./harness image build --tag ghcr.io/red-copilot/harness-pi-kali:0.1.0
+```
+
+## Library
+
+```go
+store, err := sqlite.Open(".harness/harness.db")
+if err != nil {
+    log.Fatal(err)
+}
+defer store.Close()
+
+dockerRuntime := docker.New()
+runner, err := harness.NewRunner(harness.Config{
+    Store:          store,
+    Starter:        dockerRuntime,
+    DefaultFactory: pi.NewFactory(),
+    WorkspaceRoot:  ".harness/workspaces",
+    Cleaner:        dockerRuntime,
+})
+if err != nil {
+    log.Fatal(err)
+}
+defer runner.Close(context.Background())
+
+result, err := runner.Run(ctx, harness.RunSpec{
+    Task: harness.Task{ID: "demo", Objective: "Find and submit the flag."},
+    Target: harness.Target{ID: "local", Addresses: []string{"10.0.0.5:8080"}},
+    Agents: []harness.AgentSpec{{
+        ID: "pi",
+        Pi: &harness.PiSpec{Provider: "openai", Model: "gpt-5", Thinking: "high"},
+        EnvFrom: []string{"OPENAI_API_KEY"},
+    }},
+    Verifier: verify.Command{Path: "./verify.sh"},
+})
+```
+
+Only the verifier or benchmark evaluator can produce a successful verdict.
+Agent messages, tool exit codes and self-reported completion are observations,
+not evidence.
+
+## CLI
+
+Create a Go-first `harness/v1alpha1` YAML/JSON file, then run:
+
+```bash
+./harness run --file examples/run.yaml
+```
+
+The CLI also supports:
+
+```text
+harness serve
+harness run --file run.yaml
+harness tsec list
+harness tsec run --file examples/tsec.yaml --challenge WEB-001
+harness tsec run --file examples/tsec.yaml --all --parallel 3
+harness runs show --id run_...
+harness runs events --id run_...
+harness doctor
+harness migrate --task task.yaml --agent agent.yaml --out run.json
+```
+
+## HTTP
+
+```bash
+export BENCHMARK_BASE_URL=...
+export BENCHMARK_TOKEN=...
+./harness serve --listen 127.0.0.1:8080
+```
+
+The service is intentionally local/single-user and has no authentication or
+tenant isolation.
+
+- `POST /v1/runs` creates an asynchronous run.
+- `GET /v1/runs/{id}` returns the SQLite-backed record.
+- `GET /v1/runs/{id}/events` streams SSE with `after_seq` replay.
+- `POST /v1/runs/{id}/cancel` cancels a live run.
+- `POST /v1/runs/{id}/steer` sends operator guidance to a live session.
+- `POST /v1/tsec/sweeps` starts a batch of TSec challenge runs.
+
+## TSec
+
+TSec uses the platform API directly from Go:
+
+- SDK owns `list`, `start`, `close` and completion polling.
+- Pi owns `submit` through the embedded `tsec-submit` skill.
+- `BENCHMARK_TOKEN` is passed into the agent container as requested, and is
+  redacted before events and logs are written to SQLite.
+- The skill never starts or closes a challenge and never prints the token.
+
+See [`docs/tsec.md`](docs/tsec.md).
+
+## Storage and security
+
+SQLite at `.harness/harness.db` is the canonical persistence layer. Raw RPC
+events, agent stdout/stderr, session outcomes and verdicts are stored there.
+Workspace files are runtime artifacts, not the authoritative record.
+
+Containers use a read-only root filesystem, `no-new-privileges`, dropped
+capabilities with `NET_RAW` by default, bounded CPU/memory/PIDs and no Docker
+socket. The default HTTP listener is `127.0.0.1:8080`.
+
+## Tests
+
+```bash
+go test ./...
+go test -race ./...
+go vet ./...
+```
+
+Docker and live TSec/VPN tests are environment-dependent and should be run
+explicitly rather than as part of the default unit suite.
