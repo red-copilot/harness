@@ -1,3 +1,5 @@
+![Red Copilot — AI-Native Offensive Security Engineering](https://raw.githubusercontent.com/red-copilot/.github/main/assets/red-copilot-banner.svg)
+
 # Red Harness Go SDK
 
 Red Harness is a Go-native execution and trust boundary for offense-oriented
