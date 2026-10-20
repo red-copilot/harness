@@ -6,9 +6,9 @@
 
 **面向安全智能体的 Go 原生执行边界，提供库、CLI 与本地 HTTP 服务三种接入方式。** 它与 Python Runtime 相互独立，拥有自己的执行、隔离、审计和验证契约。
 
-The agent owns its reasoning loop. The SDK provides controlled execution, container isolation, budgets, Pi RPC transport, SQLite audit records, and authoritative verification.
+The agent owns its reasoning loop. The SDK governs execution, container isolation, budgets, Pi RPC transport, persistent audit records, recovery, and the hand-off to an authoritative verifier.
 
-智能体保留自己的推理循环；SDK 提供受控执行、容器隔离、预算约束、Pi RPC 通信、SQLite 审计记录与权威验证。
+<sub>推理循环由智能体负责；SDK 负责执行控制、容器隔离、预算约束、Pi RPC 通信、持久化审计、恢复，以及向权威验证器交付结果。</sub>
 
 > **Evidence over claims:** Agent statements and tool exit codes are observations, not proof. Only the verifier or benchmark evaluator can produce an authoritative verdict.
 >
@@ -90,9 +90,9 @@ result, err := runner.Run(ctx, harness.RunSpec{
 })
 ```
 
-Only the verifier or benchmark evaluator can produce a successful verdict.
-Agent messages, tool exit codes and self-reported completion are observations,
-not evidence.
+Only the verifier or benchmark evaluator can produce an authoritative success verdict. Agent messages, tool exit codes, and self-reported completion are observations—not proof.
+
+<sub>只有验证器或基准评测器能够给出权威的成功结论。智能体消息、工具退出码和自述完成状态都只是观测，不是证明。</sub>
 
 ## CLI · 命令行
 
