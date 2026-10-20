@@ -1,21 +1,24 @@
-![Red Copilot — AI-Native Offensive Security Engineering](https://raw.githubusercontent.com/red-copilot/.github/main/assets/red-copilot-banner.svg)
+![Red Copilot — Security Engineering for the Agentic Era](https://raw.githubusercontent.com/red-copilot/.github/main/assets/red-copilot-banner.svg)
 
 # Red Harness Go SDK
 
-**A Go-native execution runtime for security agents.**
+**A Go-native execution and trust boundary for security agents.**
 
-**面向安全智能体的 Go 原生执行运行时。** 独立于 Python Runtime，可作为 Go 库集成，也可通过 CLI 和本地 HTTP 服务运行。
+**面向安全智能体的 Go 原生执行与信任边界。** 可作为 Go 库集成，也可通过 CLI 和本地 HTTP 服务运行；独立于 Python Runtime，拥有自己的执行、隔离、审计与验证契约。
 
-Red Harness is a Go-native execution and trust boundary for offense-oriented
-agents. It supplies environments, container isolation, budgets, Pi RPC
-transport, SQLite audit records and authoritative verification. The agent keeps
-its own reasoning loop.
+The agent owns its reasoning loop. The SDK provides controlled execution, container isolation, budgets, Pi RPC transport, SQLite audit records, and authoritative verification.
 
-The SDK does not depend on Python and is independent of the legacy
-`red-copilot` runtime.
+智能体保留自己的推理循环；SDK 提供受控执行、容器隔离、预算约束、Pi RPC 通信、SQLite 审计记录与权威验证。
 
+> **Evidence over claims:** Agent statements and tool exit codes are observations, not proof. Only the verifier or benchmark evaluator can produce an authoritative verdict.
+>
+> **证据优先：** 智能体自述与工具退出码只是观测，不等于证明；权威结论由验证器或竞赛评测器给出。
 
-> **Design principle / 设计原则:** Agent claims are observations, not proof. Only the verifier or benchmark evaluator can produce an authoritative verdict. 智能体自述只是观测，不是证据；成功结论由验证器或竞赛评测器给出。
+<p>
+  <a href="https://github.com/red-copilot/red-copilot">Python Runtime</a> ·
+  <a href="https://github.com/red-copilot/harness">Go SDK</a> ·
+  <a href="https://github.com/red-copilot/red-x">ARL 3.0</a>
+</p>
 
 ## Architecture · 架构
 
