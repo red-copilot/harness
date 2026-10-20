@@ -40,6 +40,7 @@ type Client struct {
 	baseURL        string
 	token          string
 	http           *http.Client
+	healthHTTP     *http.Client
 	healthcheckURL string
 	retryDelay     time.Duration
 	limiter        *tokenBucket
@@ -76,6 +77,7 @@ func New(cfg Config) (*Client, error) {
 	}
 	return &Client{
 		baseURL: strings.TrimRight(cfg.BaseURL, "/"), token: cfg.Token, http: cfg.HTTPClient,
+		healthHTTP:     directHTTPClient(cfg.HTTPClient),
 		healthcheckURL: cfg.HealthcheckURL,
 		retryDelay:     time.Duration(cfg.RetryDelayMS) * time.Millisecond,
 		limiter:        newTokenBucket(cfg.RatePerSecond, cfg.Burst),
@@ -197,7 +199,7 @@ func (c *Client) CheckVPN(ctx context.Context) (VpnCheckResult, error) {
 	if err != nil {
 		return result, err
 	}
-	resp, err := c.http.Do(req)
+	resp, err := c.healthHTTP.Do(req)
 	if err != nil {
 		return result, &Error{Code: "vpn_check_failed", Message: "VPN检测未通过,请检查靶场VPN网络配置", Detail: json.RawMessage(`{"reason":"network_error"}`)}
 	}
@@ -337,6 +339,21 @@ func parseError(status int, data []byte) error {
 		apiErr.Message = "unexpected benchmark error"
 	}
 	return apiErr
+}
+
+func directHTTPClient(base *http.Client) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if base != nil && base.Transport != nil {
+		if candidate, ok := base.Transport.(*http.Transport); ok {
+			transport = candidate.Clone()
+		}
+	}
+	transport.Proxy = nil
+	timeout := 10 * time.Second
+	if base != nil && base.Timeout > 0 && base.Timeout < timeout {
+		timeout = base.Timeout
+	}
+	return &http.Client{Transport: transport, Timeout: timeout}
 }
 
 type tokenBucket struct {
