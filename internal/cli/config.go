@@ -133,7 +133,8 @@ func enableDefaultExploration(spec *harness.RunSpec) {
 	if spec == nil || spec.Exploration != nil || len(spec.Agents) != 1 {
 		return
 	}
-	spec.Exploration = &harness.ExplorationSpec{Rounds: 6, MaxWorkers: 2}
+	policy := harness.DefaultExplorationPolicy()
+	spec.Exploration = &policy
 }
 
 func applyPiEnvironmentDefaults(spec *harness.RunSpec) {

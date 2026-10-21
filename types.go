@@ -20,6 +20,7 @@ const (
 	StatusCancelled   Status = "cancelled"
 	StatusTimedOut    Status = "timed_out"
 	StatusInterrupted Status = "interrupted"
+	StatusStagnated   Status = "stagnated"
 )
 
 // Task is the caller-owned objective and its read-only inputs.
@@ -264,27 +265,21 @@ type Verifier interface {
 	Verify(context.Context, VerifyRequest) (Verdict, error)
 }
 
-// ExplorationSpec selects the planner/executor roles for the hypothesis
-// frontier engine. Empty IDs expand one ordinary AgentSpec into a read-only
-// planner plus one fresh-context executor.
-type ExplorationSpec struct {
-	Rounds           int      `json:"rounds,omitempty" yaml:"rounds,omitempty"`
-	MaxWorkers       int      `json:"max_workers,omitempty" yaml:"max_workers,omitempty"`
-	PlannerAgentID   string   `json:"planner_agent_id,omitempty" yaml:"planner_agent_id,omitempty"`
-	ExecutorAgentIDs []string `json:"executor_agent_ids,omitempty" yaml:"executor_agent_ids,omitempty"`
-}
+// ExplorationSpec is the legacy name for the v2 exploration policy.
+// Deprecated: use ExplorationPolicy.
+type ExplorationSpec = ExplorationPolicy
 
 // RunSpec is the Go-first input contract for one run.
 type RunSpec struct {
-	Task          Task             `json:"task" yaml:"task"`
-	Target        Target           `json:"target,omitempty" yaml:"target,omitempty"`
-	Agents        []AgentSpec      `json:"agents" yaml:"agents"`
-	Exploration   *ExplorationSpec `json:"exploration,omitempty" yaml:"exploration,omitempty"`
-	Budget        Budget           `json:"budget,omitempty" yaml:"budget,omitempty"`
-	Backend       Backend          `json:"-" yaml:"-"`
-	Verifier      Verifier         `json:"-" yaml:"-"`
-	SecretEnv     []string         `json:"secret_env,omitempty" yaml:"secret_env,omitempty"`
-	WorkspaceRoot string           `json:"workspace_root,omitempty" yaml:"workspace_root,omitempty"`
+	Task          Task               `json:"task" yaml:"task"`
+	Target        Target             `json:"target,omitempty" yaml:"target,omitempty"`
+	Agents        []AgentSpec        `json:"agents" yaml:"agents"`
+	Exploration   *ExplorationPolicy `json:"exploration,omitempty" yaml:"exploration,omitempty"`
+	Budget        Budget             `json:"budget,omitempty" yaml:"budget,omitempty"`
+	Backend       Backend            `json:"-" yaml:"-"`
+	Verifier      Verifier           `json:"-" yaml:"-"`
+	SecretEnv     []string           `json:"secret_env,omitempty" yaml:"secret_env,omitempty"`
+	WorkspaceRoot string             `json:"workspace_root,omitempty" yaml:"workspace_root,omitempty"`
 }
 
 // Event is an append-only run or session event.

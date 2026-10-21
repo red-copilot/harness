@@ -8,6 +8,7 @@ export const RUN_STATUSES = [
   'cancelled',
   'timed_out',
   'interrupted',
+  'stagnated',
 ] as const
 
 export type RunStatus = (typeof RUN_STATUSES)[number]
@@ -177,6 +178,7 @@ export interface RunOverview {
   cancelled: number
   timed_out: number
   interrupted: number
+  stagnated: number
   success_rate: number
 }
 

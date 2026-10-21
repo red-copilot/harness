@@ -19,6 +19,7 @@ const overview = {
     cancelled: 0,
     timed_out: 0,
     interrupted: 0,
+    stagnated: 0,
     success_rate: 0.5,
   },
   usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15, cost_usd: 0.1 },

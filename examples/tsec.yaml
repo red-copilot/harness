@@ -11,8 +11,13 @@ agents:
       env_passthrough: [OPENCODE_API_KEY]
     env_from: [BENCHMARK_BASE_URL, BENCHMARK_TOKEN]
 exploration:
-  rounds: 6
-  max_workers: 3
+  max_depth: 4
+  max_nodes: 15
+  max_active_branches: 2
+  max_attempts_per_branch: 3
+  max_tool_calls_per_attempt: 20
+  max_wall_time_per_attempt: 10m
+  stagnation_rounds: 3
 budget:
   wall_time_seconds: 1800
 tsec:

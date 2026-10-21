@@ -73,7 +73,7 @@ func (s *frontierSession) Prompt(ctx context.Context, message string) error {
 		}
 		payload := s.plannerPayload
 		if payload == "" {
-			payload = `{"next_items":[{"question":"Is the HTTP root served?","target":"web","probe_key":"http.get","params":["/"],"expected_evidence":"HTTP status and headers","failure_evidence":"connection failure"},{"question":"Is an admin page present?","target":"web","probe_key":"http.get","params":["/admin"],"expected_evidence":"admin response","failure_evidence":"HTTP 404"}]}`
+			payload = `{"create_branches":[{"parent_id":"root","topic":"web.root","goal":"identify root","hypothesis":"root is reachable","success_condition":"root reachable","failure_condition":"root unreachable","target":"web","priority":1},{"parent_id":"root","topic":"web.admin","goal":"find admin","hypothesis":"admin exists","success_condition":"admin found","failure_condition":"no admin","target":"web","priority":1}]}`
 		}
 		data, _ := json.Marshal(map[string]any{
 			"type": "turn_end",
@@ -86,15 +86,16 @@ func (s *frontierSession) Prompt(ctx context.Context, message string) error {
 		s.events <- harness.AgentEvent{Type: "agent_settled", Data: json.RawMessage(`{"type":"agent_settled"}`)}
 		return nil
 	}
-	itemID := regexp.MustCompile(`(?m)^- id: (.+)$`).FindStringSubmatch(message)
-	if len(itemID) != 2 {
+	branchID := regexp.MustCompile(`(?m)^Branch: (.+)$`).FindStringSubmatch(message)
+	if len(branchID) != 2 {
 		return os.ErrInvalid
 	}
-	report := harness.ExplorerReport{
-		ItemID:  strings.TrimSpace(itemID[1]),
-		Verdict: harness.VerdictInconclusive,
-		Claims: []harness.ExplorerClaim{{
-			Claim: "HTTP root is reachable", Evidence: "GET / returned 200", Targets: []string{"web"},
+	report := harness.AttemptReport{
+		BranchID: strings.TrimSpace(branchID[1]),
+		Status:   harness.AttemptCompleted,
+		Outcome:  harness.AttemptRefuted,
+		Observations: []harness.Observation{{
+			Kind: "http", Action: "GET /", Target: "web", Summary: "HTTP root reachable", EvidenceRefs: []string{"raw-1"},
 		}},
 	}
 	data, _ := json.Marshal(report)
@@ -158,8 +159,8 @@ func TestRunnerDispatchesFreshFrontierSessions(t *testing.T) {
 	roles := append([]string(nil), factory.roles...)
 	sessions := append([]*frontierSession(nil), factory.sessions...)
 	factory.mu.Unlock()
-	if len(roles) != 4 || roles[0] != "planner" || roles[1] != "executor-1" || roles[2] != "executor-2" || roles[3] != "executor-3" {
-		t.Fatalf("roles = %v, want planner + three executors", roles)
+	if len(roles) != 3 || roles[0] != "planner" || roles[1] != "executor-1" || roles[2] != "executor-2" {
+		t.Fatalf("roles = %v, want planner + two executors", roles)
 	}
 	for _, session := range sessions {
 		session.mu.Lock()
@@ -177,17 +178,17 @@ func TestRunnerDispatchesFreshFrontierSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListEvents: %v", err)
 	}
-	var sawAssign, sawFacts bool
+	var sawBranch, sawAttempt bool
 	for _, event := range events {
 		switch event.Type {
-		case "exploration.item.assigned":
-			sawAssign = true
-		case "exploration.facts.merged":
-			sawFacts = true
+		case "exploration.branch.created":
+			sawBranch = true
+		case "exploration.attempt.completed":
+			sawAttempt = true
 		}
 	}
-	if !sawAssign || !sawFacts {
-		t.Fatalf("missing exploration events assign=%v facts=%v", sawAssign, sawFacts)
+	if !sawBranch || !sawAttempt {
+		t.Fatalf("missing exploration events branch=%v attempt=%v", sawBranch, sawAttempt)
 	}
 }
 
@@ -245,15 +246,15 @@ func TestRunnerStartsExecutorOnlyAfterPlannerProducesFrontier(t *testing.T) {
 	factory.mu.Lock()
 	rolesAfterPlan := append([]string(nil), factory.roles...)
 	factory.mu.Unlock()
-	if len(rolesAfterPlan) != 4 || rolesAfterPlan[1] != "executor-1" ||
-		rolesAfterPlan[2] != "executor-2" || rolesAfterPlan[3] != "executor-3" {
+	if len(rolesAfterPlan) != 3 || rolesAfterPlan[1] != "executor-1" ||
+		rolesAfterPlan[2] != "executor-2" {
 		t.Fatalf("executor was not created after plan: %v", rolesAfterPlan)
 	}
 }
 
 func TestRunnerStartsOneExecutorPerReadyFrontier(t *testing.T) {
 	store := newMemoryStore()
-	factory := &frontierFactory{plannerPayload: `{"next_items":[]}`}
+	factory := &frontierFactory{plannerPayload: `{"create_branches":[]}`}
 	runner, err := harness.NewRunner(harness.Config{
 		Store: store, DefaultFactory: factory, WorkspaceRoot: t.TempDir(),
 	})
@@ -276,17 +277,17 @@ func TestRunnerStartsOneExecutorPerReadyFrontier(t *testing.T) {
 	factory.mu.Lock()
 	roles := append([]string(nil), factory.roles...)
 	factory.mu.Unlock()
-	if len(roles) != 2 || roles[0] != "planner" || roles[1] != "executor-1" {
-		t.Fatalf("roles = %v, want planner plus exactly one executor", roles)
+	if len(roles) != 1 || roles[0] != "planner" {
+		t.Fatalf("roles = %v, want planner only", roles)
 	}
 	idle := 0
 	for _, session := range result.Sessions {
-		if session.Status == harness.StatusCancelled && strings.Contains(session.Error, "no ready frontier") {
+		if session.Status == harness.StatusCancelled && strings.Contains(session.Error, "no ready branch") {
 			idle++
 		}
 	}
-	if idle != 2 {
-		t.Fatalf("idle executors = %d, want executor-2 and executor-3 reported as unused", idle)
+	if idle != 3 {
+		t.Fatalf("idle executors = %d, want all three executors reported as unused", idle)
 	}
 }
 

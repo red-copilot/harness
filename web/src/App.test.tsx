@@ -19,6 +19,7 @@ const overview = {
     cancelled: 0,
     timed_out: 0,
     interrupted: 0,
+    stagnated: 0,
     success_rate: 0,
   },
   usage: {},
@@ -36,7 +37,7 @@ describe('App shell', () => {
     )
     renderWithProviders(<App />)
     expect(await screen.findByText('运行总览')).toBeInTheDocument()
-    expect(screen.getByText('运行')).toBeInTheDocument()
-    expect(screen.getByText('TSec 批次')).toBeInTheDocument()
+    expect(screen.getByLabelText('打开导航')).toBeInTheDocument()
+    expect(screen.queryByText('运行')).not.toBeInTheDocument()
   })
 })

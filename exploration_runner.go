@@ -123,20 +123,19 @@ func (r *Runner) runExplorationSessions(
 	if plannerHandle != nil {
 		handles = append(handles, plannerHandle)
 	}
-	var planner Planner
+	var planner BranchPlanner
 	if plannerHandle != nil {
-		planner = &SessionPlanner{Session: plannerHandle.session, Sink: r.sessionEventSink(run, redactor, plannerHandle, spec.Budget)}
+		planner = &SessionBranchPlanner{Session: plannerHandle.session, Sink: r.sessionEventSink(run, redactor, plannerHandle, spec.Budget)}
 	}
 
-	explorers := make([]Explorer, 0, len(executorSpecs))
+	executors := make([]BranchExecutor, 0, len(executorSpecs))
 	failedResults := make([]SessionResult, 0)
-	// Executor sessions start lazily: one per ready frontier, up to the pool cap.
 	nextExecutorSpec := 0
-	acquireExplorers := func(acquireCtx context.Context, need int) ([]Explorer, error) {
+	acquireBranchExecutors := func(acquireCtx context.Context, need int) ([]BranchExecutor, error) {
 		if need > len(executorSpecs) {
 			need = len(executorSpecs)
 		}
-		for len(explorers) < need && nextExecutorSpec < len(executorSpecs) {
+		for len(executors) < need && nextExecutorSpec < len(executorSpecs) {
 			executorSpec := executorSpecs[nextExecutorSpec]
 			nextExecutorSpec++
 			handle, startErr := r.startExplorationSession(acquireCtx, run, redactor, spec, executorSpec, target, runRoot, taskDir, skillsDir)
@@ -151,30 +150,41 @@ func (r *Runner) runExplorationSessions(
 				continue
 			}
 			handles = append(handles, handle)
-			explorers = append(explorers, &SessionExplorer{
+			executors = append(executors, &SessionBranchExecutor{
 				Session: handle.session, IDValue: handle.id, WorkspaceDir: sessionWorkspace(runRoot, handle.id),
 				Sink: r.sessionEventSink(run, redactor, handle, spec.Budget),
 			})
 		}
-		if len(explorers) == 0 {
-			return nil, fmt.Errorf("no explorer sessions could be started")
+		if len(executors) == 0 {
+			return nil, fmt.Errorf("no branch executor sessions could be started")
 		}
-		return append([]Explorer(nil), explorers...), nil
+		return append([]BranchExecutor(nil), executors...), nil
 	}
 
-	controllerCfg := ControllerConfig{
-		Rounds: spec.Exploration.Rounds, Objective: spec.Task.Objective,
-		Metadata: spec.Task.Metadata,
-		Targets:  taskTargets(spec.Task, target), MaxWorkers: spec.Exploration.MaxWorkers,
-		Progress: progress.Snapshot, AcquireExplorers: acquireExplorers,
+	policy := NormalizeExplorationPolicy(*spec.Exploration)
+	knowledgeStore, _ := r.store.(KnowledgeStore)
+	branchStore, _ := r.store.(BranchStore)
+	engineCfg := BranchEngineConfig{
+		RunID: run.ID, Task: spec.Task, Targets: taskTargets(spec.Task, target),
+		Policy: policy, KnowledgeStore: knowledgeStore, Store: branchStore,
+		Progress: func() ProgressSignal {
+			completion := progress.Snapshot()
+			return ProgressSignal{
+				Authoritative: true, Source: "backend", Done: completion.Done,
+				Success: completion.Success, Progress: completion.Progress, Total: completion.Total,
+				Score: completion.Score, Message: completion.Message,
+			}
+		},
+		OnStagnated:      func() { run.setStagnated() },
+		AcquireExecutors: acquireBranchExecutors,
 	}
-	controller := NewController(controllerCfg, planner, nil, func(event ControllerEvent) {
+	engine := NewBranchEngine(engineCfg, planner, func(event BranchEvent) {
 		r.emitEvent(run, redactor, Event{
 			RunID: run.ID, Source: "control", Type: "exploration." + event.Type,
 			Time: time.Now().UTC(), Data: mustJSON(event.Data),
 		})
 	})
-	controllerErr := controller.Run(ctx)
+	engineErr := engine.Run(ctx)
 
 	results := make([]SessionResult, 0, len(handles)+1)
 	if plannerHandle == nil {
@@ -185,7 +195,7 @@ func (r *Runner) runExplorationSessions(
 		results = append(results, SessionResult{ID: "planner", Status: StatusFailed, Error: redactor.Redact(message)})
 	}
 	for _, handle := range handles {
-		results = append(results, r.finishExplorationSession(ctx, run, redactor, handle, controllerErr))
+		results = append(results, r.finishExplorationSession(ctx, run, redactor, handle, engineErr))
 	}
 	for index, executorSpec := range executorSpecs {
 		if index < nextExecutorSpec {
@@ -193,7 +203,7 @@ func (r *Runner) runExplorationSessions(
 		}
 		results = append(results, SessionResult{
 			ID: executorSpec.ID, Status: StatusCancelled,
-			Error: "executor not started: no ready frontier",
+			Error: "executor not started: no ready branch",
 		})
 	}
 	results = append(results, failedResults...)

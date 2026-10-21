@@ -95,6 +95,7 @@ type RunOverview struct {
 	Cancelled   int     `json:"cancelled"`
 	TimedOut    int     `json:"timed_out"`
 	Interrupted int     `json:"interrupted"`
+	Stagnated   int     `json:"stagnated"`
 	SuccessRate float64 `json:"success_rate"`
 }
 
@@ -110,6 +111,14 @@ type SweepOverview struct {
 	Active    int `json:"active"`
 	Succeeded int `json:"succeeded"`
 	Failed    int `json:"failed"`
+}
+
+type branchReader interface {
+	ListBranches(context.Context, string) ([]harness.Branch, error)
+}
+
+type knowledgeReader interface {
+	ListKnowledge(context.Context, string) ([]harness.Knowledge, error)
 }
 
 type Server struct {
@@ -138,6 +147,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/runs", s.runs)
 	mux.HandleFunc("/v1/runs/", s.run)
 	mux.HandleFunc("/v1/overview", s.overview)
+	mux.HandleFunc("/v1/tasks/", s.task)
 	mux.HandleFunc("/v1/tsec/sweeps", s.sweepListCreate)
 	mux.HandleFunc("/v1/tsec/sweeps/", s.sweepGet)
 	return mux
@@ -236,6 +246,22 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.runVerdict(w, r, runID)
+	case "branches":
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, http.MethodGet)
+			return
+		}
+		reader, ok := s.store.(branchReader)
+		if !ok {
+			writeError(w, http.StatusNotImplemented, "branch reader is not configured")
+			return
+		}
+		branches, err := reader.ListBranches(r.Context(), runID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, branches)
 	case "cancel":
 		if r.Method != http.MethodPost {
 			methodNotAllowed(w, http.MethodPost)
@@ -277,6 +303,30 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func (s *Server) task(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/v1/tasks/")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] != "knowledge" {
+		http.NotFound(w, r)
+		return
+	}
+	reader, ok := s.store.(knowledgeReader)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "knowledge reader is not configured")
+		return
+	}
+	items, err := reader.ListKnowledge(r.Context(), parts[0])
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
 }
 
 func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, runID string) {
@@ -455,6 +505,8 @@ func buildOverview(runs []harness.RunRecord, sweeps []harness.SweepRecord) Overv
 			overview.Runs.TimedOut++
 		case harness.StatusInterrupted:
 			overview.Runs.Interrupted++
+		case harness.StatusStagnated:
+			overview.Runs.Stagnated++
 		}
 		if isActive(run.Status) {
 			overview.Runs.Active++
@@ -548,7 +600,7 @@ func (s *Server) lookupLive(runID string) *harness.Run {
 func isTerminal(status harness.Status) bool {
 	switch status {
 	case harness.StatusSucceeded, harness.StatusFailed, harness.StatusCancelled,
-		harness.StatusTimedOut, harness.StatusInterrupted:
+		harness.StatusTimedOut, harness.StatusInterrupted, harness.StatusStagnated:
 		return true
 	default:
 		return false

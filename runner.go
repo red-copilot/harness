@@ -379,6 +379,10 @@ func (r *Runner) execute(run *Run, spec RunSpec, redactor *Redactor) {
 		}
 		if remaining == 0 && !verifierRan {
 			verifierRan = true
+			if run.isStagnated() && spec.Verifier == nil {
+				status = StatusStagnated
+				break
+			}
 			if reason := exceededBudget(aggregateUsage(results), spec.Budget); reason != "" {
 				status = StatusFailed
 				runErr = fmt.Errorf("budget exceeded: %s", reason)

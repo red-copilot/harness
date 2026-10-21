@@ -30,6 +30,7 @@ const STATUS_ORDER: RunStatus[] = [
   'timed_out',
   'cancelled',
   'interrupted',
+  'stagnated',
 ]
 
 const STATUS_CLASS: Record<RunStatus, string> = {
@@ -42,6 +43,7 @@ const STATUS_CLASS: Record<RunStatus, string> = {
   cancelled: 'bar-cancelled',
   timed_out: 'bar-timed-out',
   interrupted: 'bar-interrupted',
+  stagnated: 'bar-stagnated',
 }
 
 export default function OverviewPage() {
@@ -169,6 +171,7 @@ function statusCountsFromOverview(runs: OverviewCounts): Record<RunStatus, numbe
     cancelled: runs.cancelled,
     timed_out: runs.timed_out,
     interrupted: runs.interrupted,
+    stagnated: runs.stagnated,
   }
 }
 
@@ -182,4 +185,5 @@ interface OverviewCounts {
   cancelled: number
   timed_out: number
   interrupted: number
+  stagnated: number
 }

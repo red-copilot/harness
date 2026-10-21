@@ -155,6 +155,7 @@ export default function RunDetailPage() {
       </div>
 
       <Tabs
+        className="run-detail-tabs"
         activeKey={tab}
         onChange={setTab}
         items={[

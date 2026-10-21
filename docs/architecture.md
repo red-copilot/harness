@@ -21,18 +21,18 @@ The SDK is a Go modular monolith:
    policy and empty blackboard before any Executor process is created.
 4. The backend is observed before planning starts. Its authoritative progress,
    such as `2/6` flags, is injected into every Planner snapshot.
-5. The Planner proposes bounded experiments from `Goal + Facts + Frontiers +
-   recent report evidence`; it never dispatches work or establishes success.
-6. Complete validated frontiers are published before dispatch. Only then are
-   two Executor sessions created lazily and leased one frontier each.
-7. The deterministic Controller rejects incomplete or open-ended experiments,
-   deduplicates exact probe identities, validates the structured report and
-   merges facts through `FactLedger`.
-8. Each Executor resets Pi with `new_session`, receives one frontier and a
-   bounded fact digest, executes only that probe and returns `report.json`.
-   Frontier, tool and tool-call limits are enforced while execution is in
-   progress. `agent_settled` ends a Pi turn; `agent_end` is only an
-   intermediate observation.
+5. The Planner proposes coarse-grained Branches from the Goal, authoritative
+   progress, task memory and recent Attempt summaries; it never dispatches work
+   or establishes success.
+6. The deterministic tree engine validates authorization, topic+scope+kind
+   deduplication, depth/node limits and active-branch limits before dispatch.
+7. Each Executor resets Pi with `new_session`, receives one Branch and a
+   bounded Knowledge digest, and may explore freely inside that Branch until its
+   success/failure condition or budget is reached.
+8. Attempts produce immutable Observations. Model-proposed Knowledge is
+   validated and promoted by code. Local success may expand a Branch into two
+   children; refuted/blocked Branches stop. `agent_settled` ends a Pi turn;
+   `agent_end` is only an intermediate observation.
 9. A backend completion or a caller-provided verifier produces the only
    authoritative verdict.
 10. Target, session processes and labeled Docker resources are closed in all
@@ -40,72 +40,42 @@ The SDK is a Go modular monolith:
 
 ## Exploration control
 
-The exploration state is a run-scoped blackboard implementing the Bounded
-Hypothesis Frontier Engine:
+The v2 exploration core is a binary hypothesis tree:
 
-- Initialization is brief-driven: `initialized` carries the task brief and the
-  deterministic seed frontiers, so the blackboard is populated before the first
-  Planner call and degrades safely when planning fails.
-- `Fact` records a bounded claim with evidence, targets and one of
-  `observed`, `corroborated` or `refuted`.
-- `FrontierItem` is one closed experiment, not a topic. It records one
-  falsifiable hypothesis, one authorized target, one `probe_key`, literal
-  parameters, expected evidence, failure evidence and a hard tool/time budget.
-  Open, assigned, done and failed are the only lifecycle states.
-- `SessionPlanner` resets its context for each plan. It owns the problem
-  statement: objective, task metadata (challenge description, difficulty, flag
-  counts) and authorized targets with their metadata, plus authoritative
-  progress, up to eight relevant facts, recent frontier outcomes with probe
-  identity and up to eight bounded report summaries. It has no tools.
-- `BuildExplorerBrief` is the minimal Executor context: one objective, the one
-  assigned target, one frontier contract and only the facts related to that
-  target. Executors never receive the planning blackboard.
-- Each of the two `SessionExplorer` instances resets its context before every
-  frontier and writes one
-  structured report. Malformed reports, mismatched item IDs and missing evidence
-  fail closed and do not mutate the fact ledger.
-- Executor sessions are started lazily by `AcquireExplorers(ctx, need)`: the
-  batch size is `min(max_workers, ready frontiers)`, so a round opens exactly
-  one fresh-context Executor per frontier. Unused pool slots are recorded as
-  cancelled session results rather than being started.
-- The Controller rejects missing probe/evidence contracts, multiple targets,
-  wordlists, CIDRs, port ranges and wildcard parameters. Fingerprints are
-  `target + probe_key + params`, so rephrasing a hypothesis cannot bypass
-  deduplication across open and closed frontiers.
-- Executors return `supported`, `refuted`, `inconclusive` or `blocked`.
-  `supported` and `refuted` require at least one claim with concrete evidence.
-  Only `inconclusive` work may be narrowed into a new experiment.
-- The Runner records `exploration.items.planned`, `item.assigned`,
-  `initialized`, `frontiers.created`, `batch.ready`, `executor.started`,
-  `report.received`, `facts.merged`, `item.failed`, `round.started`,
-  `round.completed` and `backend.progress` events as the audit trail.
-- `facts.merged` carries the merged `Fact` values, not only their ids, so the
-  console and audit trail can show the claim and its evidence.
-- The console renders the blackboard as a live left-to-right node-link board
-  (`start → frontier → fact`, with derived frontiers linked to their parent or
-  anchor). The layout is derived from the event stream only; clicking a node
-  shows its contract and the executor's live tool calls, which are attributed by
-  session id (`executor-1`, `executor-2`).
+- `Branch` is the durable investigation unit: topic, hypothesis, scope,
+  success/failure conditions, budget, status, priority and knowledge refs.
+- `Attempt` is one bounded execution of a Branch. `Observation` records raw
+  evidence. `Knowledge` is a code-promoted, coarse-grained conclusion.
+- The Planner is read-only and proposes branches. The deterministic engine
+  validates authorization, topic+scope+kind deduplication, depth, node count,
+  and active-branch limits.
+- A local-success branch may expand into two children. Refuted or blocked
+  branches stop. Inconclusive attempts may retry within the branch budget.
+  Operational failures retry once.
+- Local branch success never establishes run success. Only a Backend completion
+  or Verifier can produce an authoritative verdict.
+- Task memory is scoped by `Task.ID`. Stable knowledge can cross runs;
+  instance knowledge must match the target fingerprint or be revalidated.
+  Contradictions mark both items `contested` and require a review branch.
+- SQLite v2 adds normalized `exploration_branches`, `exploration_attempts`,
+  `exploration_observations`, `task_knowledge` and
+  `knowledge_contradictions` tables while the event stream remains the
+  canonical audit source.
+- On first open of a v1 database, Harness deletes exploration-run events and
+  logs, preserves runs/verdicts/sweeps, creates the v2 tables, and runs
+  `VACUUM`. The migration is transactional and idempotent.
 
-Default hard limits are enforced by `SessionExplorer` rather than prompt text:
+Default limits:
 
 | Limit | Default |
 |---|---:|
-| Tool calls per Frontier | 8 |
-| Wall time per Frontier | 90 seconds |
-| Wall time per tool call | 30 seconds |
-| Concurrent Frontiers | 3 |
-| Rounds per run | 6 |
-| Planner tool calls | 4 |
-| Planner wall time | 120 seconds |
-
-Crossing a limit aborts the Pi session and marks the Frontier failed. The
-Controller does not retry the same fingerprint.
-
-Tool output is always an untrusted observation. Neither the Planner, Executor,
-Fact ledger nor Frontier can establish task success. The legacy per-session
-`ExplorationState` projection remains available for direct-session runs, but the
-CLI's single-agent configuration uses the hypothesis frontier path by default.
+| Tree depth | 4 |
+| Tree nodes | 15 |
+| Concurrent branches | 2 |
+| Attempts per branch | 3 |
+| Tool calls per attempt | 20 |
+| Wall time per attempt | 10 minutes |
+| Stagnation rounds | 3 |
 
 ## Trust boundary
 

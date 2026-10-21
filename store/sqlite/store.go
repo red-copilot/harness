@@ -13,7 +13,7 @@ import (
 	"github.com/red-copilot/harness"
 )
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 // Store is the SQLite implementation of harness.Store.
 type Store struct {
@@ -75,70 +75,151 @@ func (s *Store) configure() error {
 }
 
 func (s *Store) migrate() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS schema_meta (
-			version INTEGER NOT NULL
-		)`,
-		`INSERT INTO schema_meta(version)
-		 SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM schema_meta)`,
+	core := []string{
+		`CREATE TABLE IF NOT EXISTS schema_meta (version INTEGER NOT NULL)`,
+		`INSERT INTO schema_meta(version) SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM schema_meta)`,
 		`CREATE TABLE IF NOT EXISTS runs (
-			id TEXT PRIMARY KEY,
-			status TEXT NOT NULL,
-			spec BLOB,
-			result BLOB,
-			error TEXT NOT NULL DEFAULT '',
-			sweep_id TEXT NOT NULL DEFAULT '',
-			metadata BLOB,
-			created_at TEXT NOT NULL,
-			started_at TEXT,
-			finished_at TEXT
+			id TEXT PRIMARY KEY, status TEXT NOT NULL, spec BLOB, result BLOB,
+			error TEXT NOT NULL DEFAULT '', sweep_id TEXT NOT NULL DEFAULT '',
+			metadata BLOB, created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT
 		)`,
 		`CREATE TABLE IF NOT EXISTS events (
 			seq INTEGER PRIMARY KEY AUTOINCREMENT,
 			run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-			session_id TEXT NOT NULL DEFAULT '',
-			source TEXT NOT NULL,
-			type TEXT NOT NULL,
-			time TEXT NOT NULL,
-			data BLOB,
-			raw BLOB
+			session_id TEXT NOT NULL DEFAULT '', source TEXT NOT NULL, type TEXT NOT NULL,
+			time TEXT NOT NULL, data BLOB, raw BLOB
 		)`,
 		`CREATE INDEX IF NOT EXISTS events_run_seq ON events(run_id, seq)`,
 		`CREATE TABLE IF NOT EXISTS logs (
 			seq INTEGER PRIMARY KEY AUTOINCREMENT,
 			run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-			session_id TEXT NOT NULL DEFAULT '',
-			stream TEXT NOT NULL,
-			time TEXT NOT NULL,
-			text TEXT NOT NULL
+			session_id TEXT NOT NULL DEFAULT '', stream TEXT NOT NULL, time TEXT NOT NULL, text TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS logs_run_seq ON logs(run_id, seq)`,
 		`CREATE TABLE IF NOT EXISTS verdicts (
 			run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
-			success INTEGER NOT NULL,
-			score REAL NOT NULL DEFAULT 0,
-			message TEXT NOT NULL DEFAULT '',
-			evidence BLOB,
-			created_at TEXT NOT NULL
+			success INTEGER NOT NULL, score REAL NOT NULL DEFAULT 0,
+			message TEXT NOT NULL DEFAULT '', evidence BLOB, created_at TEXT NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS sweeps (
-			id TEXT PRIMARY KEY,
-			status TEXT NOT NULL,
-			spec BLOB,
-			result BLOB,
-			created_at TEXT NOT NULL,
-			finished_at TEXT
+			id TEXT PRIMARY KEY, status TEXT NOT NULL, spec BLOB, result BLOB,
+			created_at TEXT NOT NULL, finished_at TEXT
 		)`,
-		`UPDATE schema_meta SET version = 1`,
 	}
-	for _, stmt := range stmts {
+	for _, stmt := range core {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("migrate: %w", err)
+			return fmt.Errorf("migrate core: %w", err)
 		}
 	}
+	var version int
+	if err := s.db.QueryRowContext(ctx, `SELECT version FROM schema_meta LIMIT 1`).Scan(&version); err != nil {
+		return fmt.Errorf("read schema version: %w", err)
+	}
+	if version >= schemaVersion {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin schema migration: %w", err)
+	}
+	rollback := func(cause error) error {
+		_ = tx.Rollback()
+		return cause
+	}
+	if version == 1 {
+		runIDs, err := explorationRunIDs(ctx, tx)
+		if err != nil {
+			return rollback(err)
+		}
+		for _, runID := range runIDs {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM events WHERE run_id=?`, runID); err != nil {
+				return rollback(fmt.Errorf("delete exploration events: %w", err))
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM logs WHERE run_id=?`, runID); err != nil {
+				return rollback(fmt.Errorf("delete exploration logs: %w", err))
+			}
+		}
+	}
+	for _, stmt := range v2SchemaStatements() {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return rollback(fmt.Errorf("migrate v2: %w", err))
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE schema_meta SET version=?`, schemaVersion); err != nil {
+		return rollback(fmt.Errorf("update schema version: %w", err))
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit schema migration: %w", err)
+	}
+	_, _ = s.db.ExecContext(ctx, `VACUUM`)
 	return nil
+}
+
+func explorationRunIDs(ctx context.Context, tx *sql.Tx) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT DISTINCT run_id FROM events
+		WHERE type LIKE 'exploration.%' OR source='control'`)
+	if err != nil {
+		return nil, fmt.Errorf("find exploration runs: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func v2SchemaStatements() []string {
+	return []string{
+		`CREATE TABLE IF NOT EXISTS exploration_branches (
+			id TEXT PRIMARY KEY, parent_id TEXT NOT NULL DEFAULT '', task_id TEXT NOT NULL,
+			run_id TEXT NOT NULL DEFAULT '', depth INTEGER NOT NULL, topic TEXT NOT NULL,
+			goal TEXT NOT NULL DEFAULT '', hypothesis TEXT NOT NULL DEFAULT '',
+			success_condition TEXT NOT NULL DEFAULT '', failure_condition TEXT NOT NULL DEFAULT '',
+			scope TEXT NOT NULL, budget BLOB, status TEXT NOT NULL, priority INTEGER NOT NULL DEFAULT 0,
+			knowledge_refs BLOB, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS exploration_branches_task_status ON exploration_branches(task_id, status)`,
+		`CREATE TABLE IF NOT EXISTS exploration_attempts (
+			id TEXT PRIMARY KEY,
+			branch_id TEXT NOT NULL REFERENCES exploration_branches(id) ON DELETE CASCADE,
+			run_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL, outcome TEXT NOT NULL DEFAULT '', observation_ids BLOB,
+			started_at TEXT, finished_at TEXT, error TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS exploration_attempts_branch ON exploration_attempts(branch_id)`,
+		`CREATE TABLE IF NOT EXISTS exploration_observations (
+			id TEXT PRIMARY KEY,
+			branch_id TEXT NOT NULL REFERENCES exploration_branches(id) ON DELETE CASCADE,
+			attempt_id TEXT NOT NULL REFERENCES exploration_attempts(id) ON DELETE CASCADE,
+			kind TEXT NOT NULL, action TEXT NOT NULL DEFAULT '', target TEXT NOT NULL DEFAULT '',
+			summary TEXT NOT NULL DEFAULT '', data BLOB, evidence_refs BLOB, created_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS exploration_observations_attempt ON exploration_observations(attempt_id)`,
+		`CREATE TABLE IF NOT EXISTS task_knowledge (
+			id TEXT PRIMARY KEY, task_id TEXT NOT NULL, run_id TEXT NOT NULL DEFAULT '',
+			topic TEXT NOT NULL, kind TEXT NOT NULL, statement TEXT NOT NULL,
+			scope TEXT NOT NULL, target TEXT NOT NULL DEFAULT '', trust TEXT NOT NULL,
+			reuse TEXT NOT NULL, evidence_refs BLOB, sources BLOB, contradicts BLOB,
+			valid_from TEXT, last_validated_at TEXT, expires_at TEXT,
+			version INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+			UNIQUE(task_id, topic, scope, kind)
+		)`,
+		`CREATE INDEX IF NOT EXISTS task_knowledge_task_trust ON task_knowledge(task_id, trust)`,
+		`CREATE TABLE IF NOT EXISTS knowledge_contradictions (
+			knowledge_id TEXT NOT NULL REFERENCES task_knowledge(id) ON DELETE CASCADE,
+			contradicts_id TEXT NOT NULL REFERENCES task_knowledge(id) ON DELETE CASCADE,
+			status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL,
+			PRIMARY KEY(knowledge_id, contradicts_id)
+		)`,
+	}
 }
 
 func (s *Store) CreateRun(ctx context.Context, record harness.RunRecord) error {

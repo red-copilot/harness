@@ -48,6 +48,24 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+.skip-link {
+  position: fixed;
+  z-index: 1000;
+  top: 8px;
+  left: 8px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgb(15 23 42 / 18%);
+  color: var(--text);
+  transform: translateY(-160%);
+  transition: transform 0.15s ease;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
 .app-layout {
   min-height: 100vh;
   background: var(--bg);
@@ -121,6 +139,12 @@ body {
   white-space: nowrap;
 }
 
+.mobile-nav-close {
+  margin-inline-start: auto;
+  font-size: 22px;
+  line-height: 1;
+}
+
 .app-header {
   display: flex;
   align-items: center;
@@ -130,6 +154,38 @@ body {
   padding: 0 24px;
   background: var(--header) !important;
   border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.header-leading,
+.header-actions {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.mobile-nav-trigger,
+.mobile-brand,
+.mobile-health {
+  display: none;
+}
+
+.mobile-nav-panel {
+  min-height: 100%;
+  background: var(--sider);
+}
+
+.mobile-nav-panel .ant-menu {
+  padding: 8px;
+  background: transparent;
+  border-inline-end: 0;
+}
+
+.mobile-nav-panel .ant-menu-item {
+  width: 100%;
+  margin-inline: 0;
 }
 
 .health-label {
@@ -142,6 +198,10 @@ body {
   padding: 24px;
   overflow: auto;
   background: var(--bg);
+}
+
+.app-content:focus {
+  outline: none;
 }
 
 .page-stack {
@@ -528,6 +588,51 @@ body {
   }
 }
 
+@media (max-width: 991px) {
+  .mobile-nav-trigger {
+    display: inline-flex;
+    width: 40px;
+    height: 40px;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+  }
+
+  .mobile-brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .mobile-brand .brand-mark {
+    width: 30px;
+    height: 30px;
+    flex-basis: 30px;
+  }
+
+  .mobile-brand .ant-typography {
+    overflow: hidden;
+    color: var(--text);
+    font-size: 14px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-health {
+    display: inline-flex;
+    padding-inline: 4px;
+  }
+
+  .header-leading {
+    gap: 4px;
+  }
+
+  .header-actions {
+    gap: 2px;
+  }
+}
+
 @media (max-width: 640px) {
   .app-header {
     height: auto;
@@ -540,12 +645,38 @@ body {
     display: none;
   }
 
+  .header-leading,
+  .header-actions {
+    flex: 0 0 auto;
+  }
+
+  .header-actions .ant-segmented {
+    font-size: 12px;
+  }
+
+  .header-actions .ant-btn {
+    min-width: 36px;
+    height: 36px;
+  }
+
   .app-content {
     padding: 12px;
   }
 
   .detail-title-row h2 {
     font-size: 19px;
+  }
+
+  .page-header-extra {
+    width: 100%;
+  }
+
+  .page-header-extra .ant-btn {
+    width: 100%;
+  }
+
+  .run-detail-tabs > .ant-tabs-nav {
+    margin-bottom: 12px;
   }
 
   .search-input,
@@ -555,10 +686,61 @@ body {
     max-width: none;
   }
 
+  .log-viewer {
+    height: min(520px, 58vh);
+    min-height: 340px;
+    font-size: 11px;
+    line-height: 1.5;
+  }
+
   .log-line {
-    grid-template-columns: 42px 116px 76px 46px minmax(0, 1fr);
-    gap: 4px;
-    padding: 0 6px;
+    grid-template-areas:
+      'seq time stream'
+      'seq session stream'
+      'text text text';
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 0 8px;
+    height: auto;
+    min-height: 72px;
+    padding: 8px 10px;
+    white-space: normal;
+  }
+
+  .log-seq {
+    grid-area: seq;
+    align-self: center;
+  }
+
+  .log-time {
+    grid-area: time;
+    white-space: nowrap;
+  }
+
+  .log-session {
+    grid-area: session;
+  }
+
+  .log-stream {
+    grid-area: stream;
+    align-self: start;
+  }
+
+  .log-text {
+    grid-area: text;
+    padding-top: 5px;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+}
+
+@media (max-width: 480px) {
+  .app-header {
+    padding-inline: 8px;
+  }
+
+  .mobile-brand .ant-typography {
+    display: none;
   }
 }
 
@@ -1132,4 +1314,26 @@ body {
   -webkit-line-clamp: 3;
   line-clamp: 3;
   font-size: 12px;
+}
+
+.branch-tree-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.branch-tree-node {
+  border: 1px solid var(--ant-color-border-secondary);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+}
+
+.branch-tree-node-head {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }

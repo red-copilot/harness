@@ -1,11 +1,13 @@
 import { Card, Col, Row, Space, Statistic, Tag, Typography } from 'antd'
 import { useMemo } from 'react'
 import type { EventRecord } from '@/api/types'
+import { BranchTreeTimeline } from '@/components/BranchTreeTimeline'
 import { EmptyState } from '@/components/EmptyState'
 import { ExplorationGraph } from '@/components/ExplorationGraph'
 import { TimeText } from '@/components/TimeText'
 import { useI18n } from '@/i18n/I18nContext'
 import { extractExplorationCycles, extractHypothesisView } from '@/utils/exploration'
+import { extractBranchView } from '@/utils/explorationTree'
 import type {
   ExplorationCycle,
   ExplorationObservation,
@@ -18,6 +20,10 @@ export function ExplorationTimeline({ events }: { events: EventRecord[] }) {
   const { t } = useI18n()
   const cycles = useMemo(() => extractExplorationCycles(events), [events])
   const hypothesis = useMemo(() => extractHypothesisView(events), [events])
+  const branches = useMemo(() => extractBranchView(events), [events])
+  if (branches.branches.length > 0) {
+    return <BranchTreeTimeline view={branches} />
+  }
   if (hypothesis.attempts.length > 0 || hypothesis.progress) {
     return <HypothesisTimeline view={hypothesis} />
   }

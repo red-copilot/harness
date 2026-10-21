@@ -33,7 +33,7 @@ Go Library / CLI / HTTP
 Planner / Executors    SQLite Store
      │                    │
      ▼                    ▼
-Frontier Engine       Events / Facts / Facts Ledger
+Branch Tree Engine    Events / Knowledge / SQLite v2
      │
      ▼
 Isolated Agent + Target Environment
@@ -86,7 +86,7 @@ result, err := runner.Run(ctx, harness.RunSpec{
         Pi: &harness.PiSpec{Provider: "openai", Model: "gpt-5", Thinking: "high"},
         EnvFrom: []string{"OPENAI_API_KEY"},
     }},
-    Exploration: &harness.ExplorationSpec{Rounds: 6},
+    Exploration: &harness.ExplorationPolicy{MaxDepth: 4, MaxActiveBranches: 2},
     Verifier: verify.Command{Path: "./verify.sh"},
 })
 ```
@@ -95,63 +95,38 @@ Only the verifier or benchmark evaluator can produce an authoritative success ve
 
 <sub>只有验证器或基准评测器能够给出权威的成功结论。智能体消息、工具退出码和自述完成状态都只是观测，不是证明。</sub>
 
-### Bounded Hypothesis Frontier Engine · 有界假设前沿引擎
+### Binary Hypothesis Tree · 二叉假设树
 
 When `Exploration` is configured, the Harness expands one agent spec into a
-read-only Planner and two fresh-context Executors:
+read-only Planner and fresh-context Executors:
 
-- The Planner owns the problem statement: it sees the task brief (objective,
-  task metadata such as the challenge description, difficulty and flag counts,
-  authorized targets with their metadata), authoritative progress, bounded
-  facts, recent frontier outcomes with probe identity, and bounded report
-  summaries. The Executor never plans; it receives one frontier.
-- The Executor brief is minimal by construction: one objective, its one
-  authorized target, one frontier contract and the facts relevant to that
-  target. It cannot widen its own scope.
-- Initialization is derived from the task brief: the `initialized` event
-  publishes the objective, the task brief and one deterministic
-  `service.banner` seed frontier per authorized target (bounded by the worker
-  count). The board therefore has content before the first model call, and
-  every authorized target gets one identification probe even if the Planner
-  stalls.
-- Goal, targets, progress and the complete validated frontier batch are
-  published before Executor sessions are created or assigned work.
-- A Frontier is one closed experiment: one hypothesis, one `probe_key`, literal
-  parameters, expected evidence, failure evidence and a hard budget.
-- The Controller rejects missing evidence, open-ended probes, wordlists, CIDRs,
-  port ranges and combined target labels before dispatch.
-- The Controller deduplicates by `target + probe_key + params`, then assigns
-  exactly one frontier per Executor. Executor sessions start lazily: the run
-  opens one fresh-context Executor per ready frontier, bounded by
-  `max_workers` (default 3). A round with one frontier starts one Executor, not
-  three.
-- The Executor writes `/workspace/report.json` as its structured output.
-  Reports use `supported`, `refuted`, `inconclusive` or `blocked`; they become
-  untrusted facts and never become success verdicts.
-- `facts.merged` publishes fact content (claim, evidence, trust, targets), so the
-  console can render what was actually learned instead of bare ids.
-- Closed, refuted and failed frontier fingerprints are retained so later rounds
-  cannot silently repeat the same action.
+- `Branch` is the long-lived investigation unit. `Attempt` is one bounded
+  execution. `Observation` is immutable evidence. `Knowledge` is a
+  code-promoted, coarse-grained durable conclusion.
+- A successful branch expands into at most two children. A refuted or blocked
+  branch stops. Inconclusive attempts retry within the branch budget.
+- Default bounds are depth 4, 15 nodes, 2 active branches, 3 attempts per
+  branch, 20 tool calls and 10 minutes per attempt.
+- Local branch success only controls expansion; it never establishes run
+  success. Only a Verifier or backend completion can produce an authoritative
+  verdict.
+- Task memory is scoped by `Task.ID`. Stable knowledge can cross runs;
+  instance knowledge must match the target fingerprint or be revalidated.
+- Secrets, flags, and credentials are represented by references, never stored
+  as knowledge values.
 
-Defaults are enforced by code while tools are running: 8 tool calls and 90
-seconds per Frontier, 30 seconds per tool call. A timeout or budget overrun
-aborts the Executor and fails the Frontier closed.
-
-Planning is also bounded: 4 read-only tool calls and 120 seconds per plan. A
-planner timeout degrades to a deterministic, single-service seed experiment.
-
-The CLI enables this path by default for single-agent YAML/JSON runs. Custom
-multi-agent runs can opt in with:
+The CLI enables this path by default for single-agent YAML/JSON runs:
 
 ```yaml
 exploration:
-  rounds: 6
-  max_workers: 3
+  max_depth: 4
+  max_nodes: 15
+  max_active_branches: 2
+  max_attempts_per_branch: 3
+  max_tool_calls_per_attempt: 20
+  max_wall_time_per_attempt: 10m
+  stagnation_rounds: 3
 ```
-
-Planner and Executor IDs can be selected explicitly with `planner_agent_id` and
-`executor_agent_ids`; otherwise the first agent spec is expanded into
-`planner + executor-1 + executor-2`.
 
 ## CLI · 命令行
 
@@ -209,12 +184,10 @@ Keep the listener bound to loopback unless you configure an external security bo
 - `POST /v1/tsec/sweeps` starts a batch of TSec challenge runs.
 
 The embedded read-only observability console is served at `/` by
-`harness serve`. Its exploration view is a live node-link board that grows left
-to right from a single start node: the start fans out into frontier hypotheses,
-each frontier connects to the facts it merged, and derived frontiers link back
-to their parent or anchor. Nodes animate in as rounds advance, and clicking any
-node opens its full contract (hypothesis, probe, parameters, expected and
-failure evidence, hard budget) plus the executor's live tool activity.
+`harness serve`. Its exploration view renders the v2 binary hypothesis tree:
+progress, Branch depth/status, Attempt outcomes, Observations and durable
+Knowledge. The view is derived from the append-only event stream and does not
+allow the UI to establish run success.
 
 ## TSec · 竞赛适配
 

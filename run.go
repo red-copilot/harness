@@ -25,6 +25,7 @@ type Run struct {
 	err        error
 	budgetErr  string
 	controlErr string
+	stagnated  bool
 }
 
 func newRun(runner *Runner, id string, ctx context.Context, cancel context.CancelFunc) *Run {
@@ -117,6 +118,18 @@ func (r *Run) controlError() string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.controlErr
+}
+
+func (r *Run) setStagnated() {
+	r.mu.Lock()
+	r.stagnated = true
+	r.mu.Unlock()
+}
+
+func (r *Run) isStagnated() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.stagnated
 }
 
 func (r *Run) finish(result Result, err error) {

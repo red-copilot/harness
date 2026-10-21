@@ -2,11 +2,14 @@ package harness
 
 import (
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 )
 
 const RedactedValue = "[REDACTED]"
+
+var flagLikePattern = regexp.MustCompile(`(?i)(flag|ctf|tsec)\{[^}]{1,256}\}`)
 
 // Redactor removes known secret values from persisted text. It is intentionally
 // best-effort: callers should never put credentials in prompts or logs.
@@ -32,13 +35,12 @@ func NewRedactor(values ...string) *Redactor {
 }
 
 func (r *Redactor) Redact(value string) string {
-	if r == nil {
-		return value
+	if r != nil {
+		for _, secret := range r.values {
+			value = strings.ReplaceAll(value, secret, RedactedValue)
+		}
 	}
-	for _, secret := range r.values {
-		value = strings.ReplaceAll(value, secret, RedactedValue)
-	}
-	return value
+	return flagLikePattern.ReplaceAllString(value, RedactedValue)
 }
 
 func (r *Redactor) RedactJSON(value []byte) []byte {

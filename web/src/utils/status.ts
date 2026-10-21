@@ -7,6 +7,7 @@ const TERMINAL_STATUSES = new Set<RunStatus>([
   'cancelled',
   'timed_out',
   'interrupted',
+  'stagnated',
 ])
 
 export function isActiveStatus(status: RunStatus): boolean {
@@ -35,5 +36,7 @@ export function statusColor(status: RunStatus): string {
       return 'warning'
     case 'interrupted':
       return 'default'
+    case 'stagnated':
+      return 'warning'
   }
 }

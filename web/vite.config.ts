@@ -40,6 +40,7 @@ export default defineConfig({
     globals: true,
     testTimeout: 15000,
     hookTimeout: 15000,
+    exclude: ['e2e/**', 'node_modules/**'],
     server: {
       deps: {
         inline: ['@ant-design/colors', '@ant-design/icons'],

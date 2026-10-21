@@ -114,10 +114,10 @@ agents:
 	if spec.Exploration == nil {
 		t.Fatal("single-agent config did not enable exploration")
 	}
-	if spec.Exploration.Rounds != 6 {
-		t.Fatalf("rounds = %d, want 6", spec.Exploration.Rounds)
+	if spec.Exploration.MaxDepth != 4 || spec.Exploration.MaxNodes != 15 {
+		t.Fatalf("tree policy = %+v, want depth 4 nodes 15", spec.Exploration)
 	}
-	if spec.Exploration.MaxWorkers != 2 {
-		t.Fatalf("max workers = %d, want 2", spec.Exploration.MaxWorkers)
+	if spec.Exploration.MaxActiveBranches != 2 {
+		t.Fatalf("max active branches = %d, want 2", spec.Exploration.MaxActiveBranches)
 	}
 }
