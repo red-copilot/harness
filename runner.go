@@ -350,12 +350,11 @@ func (r *Runner) persistKnowledge(ctx context.Context, knowledge Knowledge) erro
 }
 
 func (r *Runner) queryReusableKnowledge(ctx context.Context, spec RunSpec) ([]Knowledge, error) {
-	fingerprint := targetFingerprint(spec.Target)
-	items, err := r.store.QueryKnowledge(ctx, KnowledgeQuery{TaskID: spec.Task.ID, RunID: "", TargetFingerprint: fingerprint, AllowCrossRun: true, Now: time.Now().UTC()})
+	items, err := r.store.QueryKnowledge(ctx, KnowledgeQuery{TaskID: spec.Task.ID, RunID: "", TargetFingerprint: spec.Target.ID, AllowCrossRun: true, Now: time.Now().UTC()})
 	if err != nil {
 		return nil, err
 	}
-	return FilterKnowledge(items, KnowledgeQuery{TaskID: spec.Task.ID, TargetFingerprint: fingerprint, AllowCrossRun: true, Now: time.Now().UTC()}), nil
+	return FilterKnowledge(items, KnowledgeQuery{TaskID: spec.Task.ID, TargetFingerprint: spec.Target.ID, AllowCrossRun: true, Now: time.Now().UTC()}), nil
 }
 
 func (r *Runner) Close(ctx context.Context) error {

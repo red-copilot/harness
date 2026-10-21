@@ -500,6 +500,12 @@ func (e *explorationEngine) mergeAttempt(ctx context.Context, execution attemptE
 		}
 	}
 	for _, proposal := range report.Knowledge {
+		if len(state.knowledge) >= state.policy.MaxKnowledgeItems {
+			if err := e.emit("knowledge.rejected", map[string]any{"attempt_id": attempt.ID, "reason": "knowledge_limit_exceeded"}); err != nil {
+				return err
+			}
+			break
+		}
 		promoted, events, err := PromoteKnowledge(KnowledgePromotionRequest{RunID: state.runID, AttemptID: attempt.ID, SessionID: execution.sessionID, Task: state.task, Target: state.target, Branch: *branch, Proposal: proposal, Observations: observationMap, Existing: state.knowledge, Now: time.Now().UTC()})
 		if err != nil {
 			if err := e.emit("knowledge.rejected", map[string]any{"attempt_id": attempt.ID, "error": err.Error()}); err != nil {
@@ -514,6 +520,27 @@ func (e *explorationEngine) mergeAttempt(ctx context.Context, execution attemptE
 		for _, event := range events {
 			if err := e.emit(event.Type, event.Data); err != nil {
 				return err
+			}
+		}
+		if promoted.Trust == KnowledgeContested {
+			for _, conflictID := range promoted.Contradicts {
+				if conflictID == promoted.ID {
+					continue
+				}
+				if existing := findKnowledge(state.knowledge, conflictID); existing != nil {
+					updated := *existing
+					updated.Trust = KnowledgeContested
+					updated.LastValidated = time.Now().UTC()
+					updated.Contradicts = uniqueSorted(append(updated.Contradicts, promoted.ID))
+					updated.Version++
+					state.knowledge = appendOrReplaceKnowledge(state.knowledge, updated)
+					if err := e.runner.persistKnowledge(ctx, updated); err != nil {
+						return err
+					}
+					if err := e.emit("knowledge.contested", updated); err != nil {
+						return err
+					}
+				}
 			}
 		}
 		if len(promoted.Contradicts) >= 2 {

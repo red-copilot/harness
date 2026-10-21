@@ -37,7 +37,28 @@ func PromoteKnowledge(req KnowledgePromotionRequest) (Knowledge, []KnowledgeEven
 	for _, ref := range req.Proposal.ObservationRefs {
 		sources = append(sources, KnowledgeSource{RunID: req.RunID, AttemptID: req.AttemptID, SessionID: req.SessionID, Observation: req.Observations[ref].ID})
 	}
-	candidate := Knowledge{TaskID: req.Task.ID, RunID: req.RunID, Topic: normalizeKnowledgeTopic(req.Proposal.Topic), Kind: req.Proposal.Kind, Statement: req.Proposal.Statement, Scope: req.Proposal.Scope, Target: req.Proposal.Target, Trust: KnowledgeObserved, Reuse: req.Proposal.Reuse, Sources: sources, ValidFrom: now, LastValidated: now, ExpiresAt: req.Proposal.ExpiresAt, Version: 1}
+	if len(req.Proposal.Supports) == 1 && len(req.Proposal.Refutes) == 0 {
+		existing := findKnowledge(req.Existing, req.Proposal.Supports[0])
+		if existing == nil {
+			return Knowledge{}, nil, fmt.Errorf("knowledge support target %q is unknown", req.Proposal.Supports[0])
+		}
+		updated := *existing
+		updated.Sources = appendUniqueSource(updated.Sources, sources...)
+		updated.LastValidated = now
+		if updated.Trust != KnowledgeContested && distinctSessions(updated.Sources) >= 2 {
+			updated.Trust = KnowledgeCorroborated
+		}
+		updated.Version++
+		return updated, []KnowledgeEvent{{Type: "knowledge.supported", Data: map[string]any{"knowledge_id": updated.ID, "sources": sources}}}, nil
+	}
+	if len(req.Existing) >= 200 {
+		return Knowledge{}, nil, errors.New("knowledge limit exceeded")
+	}
+	candidateTarget := req.Proposal.Target
+	if candidateTarget == "" {
+		candidateTarget = req.Target.ID
+	}
+	candidate := Knowledge{TaskID: req.Task.ID, RunID: req.RunID, Topic: normalizeKnowledgeTopic(req.Proposal.Topic), Kind: req.Proposal.Kind, Statement: req.Proposal.Statement, Scope: req.Proposal.Scope, Target: candidateTarget, Trust: KnowledgeObserved, Reuse: req.Proposal.Reuse, Sources: sources, ValidFrom: now, LastValidated: now, ExpiresAt: req.Proposal.ExpiresAt, Version: 1}
 	if candidate.Scope == "" {
 		candidate.Scope = KnowledgeScopeTask
 	}
@@ -52,17 +73,6 @@ func PromoteKnowledge(req KnowledgePromotionRequest) (Knowledge, []KnowledgeEven
 		}
 	}
 	var events []KnowledgeEvent
-	for _, support := range req.Proposal.Supports {
-		existing := findKnowledge(req.Existing, support)
-		if existing == nil {
-			return Knowledge{}, nil, fmt.Errorf("knowledge support target %q is unknown", support)
-		}
-		candidate.Sources = appendUniqueSource(candidate.Sources, sources...)
-		if distinctSessions(candidate.Sources) >= 2 {
-			candidate.Trust = KnowledgeCorroborated
-		}
-		events = append(events, KnowledgeEvent{Type: "knowledge.supported", Data: map[string]any{"knowledge_id": candidate.ID, "supports": support}})
-	}
 	for _, refute := range req.Proposal.Refutes {
 		existing := findKnowledge(req.Existing, refute)
 		if existing == nil {
@@ -71,6 +81,11 @@ func PromoteKnowledge(req KnowledgePromotionRequest) (Knowledge, []KnowledgeEven
 		candidate.Contradicts = uniqueSorted(append(candidate.Contradicts, existing.ID))
 		candidate.Trust = KnowledgeContested
 		events = append(events, KnowledgeEvent{Type: "knowledge.refuted", Data: map[string]any{"knowledge_id": candidate.ID, "refutes": existing.ID}})
+	}
+	if len(candidate.Contradicts) > 0 {
+		candidate.Contradicts = uniqueSorted(append(candidate.Contradicts, candidate.ID))
+		candidate.Trust = KnowledgeContested
+		events = append(events, KnowledgeEvent{Type: "knowledge.review_required", Data: map[string]any{"review_of": candidate.Contradicts}})
 	}
 	candidate.Contradicts = uniqueSorted(candidate.Contradicts)
 	events = append(events, KnowledgeEvent{Type: "knowledge.promoted", Data: candidate})
