@@ -42,6 +42,7 @@ import type {
   VerdictRecord,
 } from '@/api/types'
 import { EmptyState } from '@/components/EmptyState'
+import { ExplorationTimeline } from '@/components/ExplorationTimeline'
 import { JsonViewer } from '@/components/JsonViewer'
 import { LogViewer } from '@/components/LogViewer'
 import { PageError } from '@/components/PageError'
@@ -62,7 +63,7 @@ import {
 import { prettyJson } from '@/utils/json'
 import { isActiveStatus, isTerminalStatus } from '@/utils/status'
 
-type RunTab = 'overview' | 'events' | 'logs' | 'verdict'
+type RunTab = 'overview' | 'exploration' | 'events' | 'logs' | 'verdict'
 
 export default function RunDetailPage() {
   const { runId } = useParams()
@@ -161,6 +162,11 @@ export default function RunDetailPage() {
             key: 'overview',
             label: t('run.tab.overview'),
             children: <RunOverview run={run} verdict={verdict} />,
+          },
+          {
+            key: 'exploration',
+            label: t('run.tab.exploration'),
+            children: <ExplorationTimeline events={eventsState.events} />,
           },
           {
             key: 'events',
@@ -618,7 +624,7 @@ function unique(values: string[]): string[] {
 }
 
 function isRunTab(value: string | null): value is RunTab {
-  return value === 'overview' || value === 'events' || value === 'logs' || value === 'verdict'
+  return value === 'overview' || value === 'exploration' || value === 'events' || value === 'logs' || value === 'verdict'
 }
 
 function PageHeaderLoading({ title, loading }: { title: string; loading: string }) {

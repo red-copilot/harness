@@ -10,6 +10,58 @@ vi.mock('@/hooks/useRunEvents', () => ({
       {
         seq: 1,
         run_id: 'run_1',
+        session_id: 'pi',
+        source: 'agent',
+        type: 'turn_end',
+        time: '2026-10-20T12:00:01Z',
+        data: { message: { content: [{ type: 'toolCall', name: 'bash' }] }, toolResults: [] },
+      },
+      {
+        seq: 2,
+        run_id: 'run_1',
+        session_id: 'pi',
+        source: 'control',
+        type: 'exploration.state.updated',
+        time: '2026-10-20T12:00:02Z',
+        data: {
+          revision: 2,
+          attempts: [{ event_seq: 1, tools: ['bash'], execution_succeeded: true, observations: 1 }],
+          observations: [{ event_seq: 1, tool: 'bash', text: 'port 80 is open', error: false }],
+          items: [],
+        },
+      },
+      {
+        seq: 3,
+        run_id: 'run_1',
+        session_id: 'pi',
+        source: 'control',
+        type: 'exploration.frontier.updated',
+        time: '2026-10-20T12:00:03Z',
+        data: {
+          state_revision: 2,
+          frontier: {
+            items: [
+              {
+                id: 'question:verify:1',
+                kind: 'question',
+                text: 'Verify the port observation',
+                status: 'open',
+                priority: 90,
+              },
+            ],
+          },
+          focus: {
+            id: 'question:verify:1',
+            kind: 'question',
+            text: 'Verify the port observation',
+            status: 'open',
+            priority: 90,
+          },
+        },
+      },
+      {
+        seq: 4,
+        run_id: 'run_1',
         source: 'harness',
         type: 'run.finished',
         time: '2026-10-20T12:00:00Z',
@@ -68,7 +120,10 @@ describe('RunDetailPage', () => {
     )
     expect(await screen.findByText('Find and prove the flag')).toBeInTheDocument()
     expect(await screen.findByText('权威判定：成功')).toBeInTheDocument()
-    fireEvent.click(screen.getByText('事件 (1)'))
+    fireEvent.click(screen.getByText('探索'))
+    expect(await screen.findByText('State r2')).toBeInTheDocument()
+    expect((await screen.findAllByText('Verify the port observation')).length).toBeGreaterThan(0)
+    fireEvent.click(screen.getByText('事件 (4)'))
     expect(await screen.findByText('run.finished')).toBeInTheDocument()
   })
 })
