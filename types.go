@@ -177,6 +177,12 @@ type AgentSession interface {
 	Close(context.Context) error
 }
 
+// ResettableSession can discard its conversation context while keeping the
+// underlying process alive. The Harness uses this for fresh frontier turns.
+type ResettableSession interface {
+	Reset(context.Context) error
+}
+
 // SessionRequest is passed to a SessionFactory. Starter is scoped to the
 // caller's run and is the only supported way to create an agent process.
 type SessionRequest struct {
@@ -211,6 +217,8 @@ type ProvisionRequest struct {
 type Completion struct {
 	Done     bool              `json:"done"`
 	Success  bool              `json:"success"`
+	Progress int               `json:"progress,omitempty"`
+	Total    int               `json:"total,omitempty"`
 	Score    float64           `json:"score,omitempty"`
 	Message  string            `json:"message,omitempty"`
 	Metadata map[string]string `json:"metadata,omitempty"`

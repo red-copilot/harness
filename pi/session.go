@@ -245,6 +245,13 @@ func (s *session) Steer(ctx context.Context, message string) error {
 	return err
 }
 
+// Reset discards Pi's conversation history while keeping the process and
+// transport available for the next frontier.
+func (s *session) Reset(ctx context.Context) error {
+	_, err := s.sendAndWait(ctx, map[string]any{"type": "new_session"})
+	return err
+}
+
 func (s *session) Events() <-chan harness.AgentEvent { return s.events }
 func (s *session) Logs() <-chan harness.LogEvent     { return s.logs }
 func (s *session) Usage() harness.Usage              { return s.snapshotUsage() }
