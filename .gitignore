@@ -16,5 +16,6 @@ coverage.out
 
 web/node_modules/
 web/coverage/
+web/test-results/
 webui/dist/*
 !webui/dist/.gitkeep
