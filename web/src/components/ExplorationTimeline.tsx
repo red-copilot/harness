@@ -125,13 +125,13 @@ function HypothesisExplorationGraph({ view }: { view: HypothesisView }) {
 
         <FlowStage title={t('run.hypothesis.graphFrontiers')} count={view.frontiers.length} tone="frontier">
           {view.frontiers.length ? view.frontiers.slice(0, 20).map((frontier) => (
-            <FlowNode key={frontier.id} tone="frontier" active={view.current === frontier.id}>
+            <FlowNode key={frontier.id} tone="frontier" active={view.current.includes(frontier.id)}>
               <Space wrap size={[4, 4]}>
-                <Tag color={frontier.status === 'failed' ? 'error' : frontier.status === 'done' ? 'success' : view.current === frontier.id ? 'processing' : 'default'}>
+                <Tag color={frontier.status === 'failed' ? 'error' : frontier.status === 'done' ? 'success' : view.current.includes(frontier.id) ? 'processing' : 'default'}>
                   {frontier.status}
                 </Tag>
                 {frontier.round ? <Tag>{t('run.hypothesis.round', { round: frontier.round })}</Tag> : null}
-                {view.current === frontier.id ? <Tag color="processing">{t('run.hypothesis.current')}</Tag> : null}
+                {view.current.includes(frontier.id) ? <Tag color="processing">{t('run.hypothesis.current')}</Tag> : null}
               </Space>
               <Typography.Text strong>{frontier.question}</Typography.Text>
               <Typography.Text type="secondary" ellipsis={{ tooltip: frontier.targetHint }}>
@@ -150,7 +150,7 @@ function HypothesisExplorationGraph({ view }: { view: HypothesisView }) {
 
         <FlowStage title={t('run.hypothesis.graphResults')} count={view.attempts.length} tone="result">
           {view.attempts.length ? view.attempts.slice(0, 20).map((attempt) => (
-            <FlowNode key={attempt.itemId} tone="result" active={view.current === attempt.itemId}>
+            <FlowNode key={attempt.itemId} tone="result" active={view.current.includes(attempt.itemId)}>
               <Space wrap size={[4, 4]}>
                 <Tag color={attempt.status === 'failed' ? 'error' : attempt.status === 'done' ? 'success' : 'processing'}>
                   {attempt.verdict || attempt.status}

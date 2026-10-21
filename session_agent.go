@@ -238,7 +238,8 @@ func buildPlanPrompt(request PlanRequest) string {
 Return exactly one JSON object and no prose:
 {"next_items":[{"question":"one falsifiable next question","target":"authorized target id/address","expected_evidence":"what evidence would settle it","anchors":["corroborated fact id"]}]}
 Rules:
-- Propose at most 3 independent frontiers.
+- Propose exactly 2 independent frontiers when possible, and never more than 3.
+- The Controller dispatches up to 2 frontiers concurrently to two fresh-context Executors.
 - Each question must produce concrete evidence.
 - The target field must contain one exact authorized ID or address, never a label plus address.
 - Anchors may reference only corroborated facts.

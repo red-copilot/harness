@@ -91,7 +91,7 @@ export interface HypothesisView {
   objective?: string
   targets?: HypothesisTarget[]
   frontiers: HypothesisFrontier[]
-  current?: string
+  current: string[]
 }
 
 interface PendingCycle {
@@ -107,7 +107,7 @@ export function extractHypothesisView(events: EventRecord[]): HypothesisView {
   let phase: string | undefined
   let objective: string | undefined
   let targets: HypothesisTarget[] | undefined
-  let current: string | undefined
+  const current = new Set<string>()
 
   for (const event of [...events].sort((a, b) => a.seq - b.seq)) {
     const record = asRecord(event.data)
@@ -156,15 +156,16 @@ export function extractHypothesisView(events: EventRecord[]): HypothesisView {
           frontier.executorId = record.executor_id
         }
         frontier.status = 'assigned'
-        current = itemId
+        current.add(itemId)
         break
       case 'exploration.executor.started':
         phase = 'executing'
-        current = itemId
+        current.add(itemId)
         frontier.status = 'assigned'
         break
       case 'exploration.report.received':
         if (typeof record.verdict === 'string') attempt.verdict = record.verdict
+        current.delete(itemId)
         break
       case 'exploration.facts.merged':
         attempt.status = 'done'
@@ -178,6 +179,7 @@ export function extractHypothesisView(events: EventRecord[]): HypothesisView {
       case 'exploration.item.failed':
         attempt.status = 'failed'
         frontier.status = 'failed'
+        current.delete(itemId)
         if (typeof record.error === 'string') attempt.error = record.error
         break
       default:
@@ -194,7 +196,7 @@ export function extractHypothesisView(events: EventRecord[]): HypothesisView {
     objective,
     targets,
     frontiers: [...frontiers.values()].sort((a, b) => (a.round ?? 0) - (b.round ?? 0) || a.id.localeCompare(b.id)),
-    current,
+    current: [...current],
   }
 }
 

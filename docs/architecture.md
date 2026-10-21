@@ -15,7 +15,7 @@ The SDK is a Go modular monolith:
 
 1. The runner persists a queued run and starts one target provision operation.
 2. When exploration is enabled, one ordinary `AgentSpec` expands into a
-   read-only Planner and one fresh-context Executor. Custom multi-session runs
+   read-only Planner and two fresh-context Executors. Custom multi-session runs
    without `Exploration` retain the direct session path.
 3. Initialization publishes the Goal, authorized targets, backend progress,
    policy and empty blackboard before any Executor process is created.
@@ -24,7 +24,7 @@ The SDK is a Go modular monolith:
 5. The Planner proposes bounded frontiers from `Goal + Facts + Frontiers`; it
    never dispatches work or establishes success.
 6. Complete validated frontiers are published before dispatch. Only then are
-   Executor sessions created lazily and leased exactly one frontier each.
+   two Executor sessions created lazily and leased one frontier each.
 7. The deterministic Controller deduplicates exact frontier fingerprints,
    validates the structured report and merges facts through `FactLedger`.
 8. Each Executor resets Pi with `new_session`, receives one frontier and a
@@ -47,7 +47,8 @@ The exploration state is a run-scoped blackboard:
 - `SessionPlanner` resets its context for each plan and sees only the objective,
   authoritative progress, up to eight relevant facts, recent frontier outcomes
   and the authorized targets.
-- `SessionExplorer` resets its context before every frontier and writes one
+- Each of the two `SessionExplorer` instances resets its context before every
+  frontier and writes one
   structured report. Malformed reports, mismatched item IDs and missing evidence
   fail closed and do not mutate the fact ledger.
 - The Controller rejects duplicate fingerprints across open and closed

@@ -45,9 +45,13 @@ func resolveExplorationAgents(spec RunSpec) (AgentSpec, []AgentSpec, error) {
 
 	executorIDs := spec.Exploration.ExecutorAgentIDs
 	if len(executorIDs) == 0 {
-		executor := cloneAgentSpec(base)
-		executor.ID = "executor-1"
-		return planner, []AgentSpec{executor}, nil
+		executors := make([]AgentSpec, 0, 2)
+		for index := 1; index <= 2; index++ {
+			executor := cloneAgentSpec(base)
+			executor.ID = fmt.Sprintf("executor-%d", index)
+			executors = append(executors, executor)
+		}
+		return planner, executors, nil
 	}
 	executors := make([]AgentSpec, 0, len(executorIDs))
 	for index, id := range executorIDs {

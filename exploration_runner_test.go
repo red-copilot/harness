@@ -68,7 +68,7 @@ func (s *frontierSession) Prompt(ctx context.Context, message string) error {
 		if s.plannerGate != nil {
 			<-s.plannerGate
 		}
-		payload := `{"next_items":[{"question":"Inspect the HTTP root","target":"web","expected_evidence":"HTTP status and headers"}]}`
+		payload := `{"next_items":[{"question":"Inspect the HTTP root","target":"web","expected_evidence":"HTTP status and headers"},{"question":"Inspect the admin path","target":"web","expected_evidence":"admin response"}]}`
 		data, _ := json.Marshal(map[string]any{
 			"type": "turn_end",
 			"message": map[string]any{
@@ -152,8 +152,8 @@ func TestRunnerDispatchesFreshFrontierSessions(t *testing.T) {
 	roles := append([]string(nil), factory.roles...)
 	sessions := append([]*frontierSession(nil), factory.sessions...)
 	factory.mu.Unlock()
-	if len(roles) != 2 || roles[0] != "planner" || roles[1] != "executor-1" {
-		t.Fatalf("roles = %v, want planner + executor-1", roles)
+	if len(roles) != 3 || roles[0] != "planner" || roles[1] != "executor-1" || roles[2] != "executor-2" {
+		t.Fatalf("roles = %v, want planner + executor-1 + executor-2", roles)
 	}
 	for _, session := range sessions {
 		session.mu.Lock()
@@ -239,7 +239,7 @@ func TestRunnerStartsExecutorOnlyAfterPlannerProducesFrontier(t *testing.T) {
 	factory.mu.Lock()
 	rolesAfterPlan := append([]string(nil), factory.roles...)
 	factory.mu.Unlock()
-	if len(rolesAfterPlan) != 2 || rolesAfterPlan[1] != "executor-1" {
+	if len(rolesAfterPlan) != 3 || rolesAfterPlan[1] != "executor-1" || rolesAfterPlan[2] != "executor-2" {
 		t.Fatalf("executor was not created after plan: %v", rolesAfterPlan)
 	}
 }

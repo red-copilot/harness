@@ -98,6 +98,28 @@ func TestControllerRunsOneFrontierPerExecutorAndResetsContext(t *testing.T) {
 	}
 }
 
+func TestControllerDefaultsToTwoConcurrentFrontiers(t *testing.T) {
+	target := Target{ID: "web", Addresses: []string{"10.0.0.5:80"}}
+	planner := &sequencePlanner{plans: []PlanOutput{{NextItems: []ExplorerProposal{
+		{Question: "Inspect the HTTP root", Target: "10.0.0.5", ExpectedEvidence: "status and headers"},
+		{Question: "Inspect the admin path", Target: "10.0.0.5", ExpectedEvidence: "admin response"},
+	}}}}
+	report := func(item FrontierItem) (ExplorerReport, error) {
+		return ExplorerReport{ItemID: item.ID, Verdict: VerdictInconclusive}, nil
+	}
+	left := &recordingExplorer{id: "left", reportFn: report}
+	right := &recordingExplorer{id: "right", reportFn: report}
+	controller := NewController(ControllerConfig{
+		Rounds: 1, Objective: "find the flag", Targets: []Target{target},
+	}, planner, []Explorer{left, right}, nil)
+	if err := controller.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if left.investigations != 1 || right.investigations != 1 {
+		t.Fatalf("default workers did not dispatch two frontiers: left=%d right=%d", left.investigations, right.investigations)
+	}
+}
+
 func TestControllerFailsMismatchedReportWithoutMergingFacts(t *testing.T) {
 	planner := &sequencePlanner{plans: []PlanOutput{{NextItems: []ExplorerProposal{{
 		Question: "Inspect the login path", Target: "web", ExpectedEvidence: "login response",

@@ -16,7 +16,7 @@ agents:
       env_passthrough: [OPENAI_API_KEY]
 exploration:
   rounds: 6
-  max_workers: 1
+  max_workers: 2
 budget:
   wall_time_seconds: 300
 verifier:

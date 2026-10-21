@@ -117,4 +117,7 @@ agents:
 	if spec.Exploration.Rounds != 6 {
 		t.Fatalf("rounds = %d, want 6", spec.Exploration.Rounds)
 	}
+	if spec.Exploration.MaxWorkers != 2 {
+		t.Fatalf("max workers = %d, want 2", spec.Exploration.MaxWorkers)
+	}
 }

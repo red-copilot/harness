@@ -48,7 +48,7 @@ func NewController(cfg ControllerConfig, planner Planner, explorers []Explorer, 
 		cfg.Rounds = 6
 	}
 	if cfg.MaxWorkers <= 0 {
-		cfg.MaxWorkers = 1
+		cfg.MaxWorkers = 2
 	}
 	return &Controller{
 		cfg: cfg, planner: planner, explorers: append([]Explorer(nil), explorers...),

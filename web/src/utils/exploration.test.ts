@@ -168,6 +168,22 @@ describe('extractHypothesisView', () => {
       status: 'assigned',
       executorId: 'executor-1',
     })
-    expect(view.current).toBe('frontier-a')
+    expect(view.current).toEqual(['frontier-a'])
+  })
+
+  it('tracks two concurrently assigned frontiers', () => {
+    const view = extractHypothesisView([
+      event(1, 'exploration.item.assigned', '', {
+        round: 1,
+        item_id: 'frontier-a',
+        executor_id: 'executor-1',
+      }),
+      event(2, 'exploration.item.assigned', '', {
+        round: 1,
+        item_id: 'frontier-b',
+        executor_id: 'executor-2',
+      }),
+    ])
+    expect(view.current).toEqual(['frontier-a', 'frontier-b'])
   })
 })

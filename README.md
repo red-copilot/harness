@@ -98,14 +98,14 @@ Only the verifier or benchmark evaluator can produce an authoritative success ve
 ### Hypothesis Frontier Engine · 假设前沿引擎
 
 When `Exploration` is configured, the Harness expands one agent spec into a
-read-only Planner and a fresh-context Executor:
+read-only Planner and two fresh-context Executors:
 
 - The Planner sees only objective, authoritative progress, bounded facts,
   recent frontier outcomes and authorized targets.
 - Goal, targets, progress and the complete validated frontier batch are
   published before Executor sessions are created or assigned work.
 - The Controller validates and deduplicates frontiers, then assigns exactly one
-  frontier per Executor turn.
+  frontier per Executor turn, running two Executors concurrently by default.
 - The Executor writes `/workspace/report.json` as its structured output.
   Reports become untrusted facts and never become success verdicts.
 - Closed, refuted and failed frontier fingerprints are retained so later rounds
@@ -117,12 +117,12 @@ multi-agent runs can opt in with:
 ```yaml
 exploration:
   rounds: 6
-  max_workers: 1
+  max_workers: 2
 ```
 
 Planner and Executor IDs can be selected explicitly with `planner_agent_id` and
 `executor_agent_ids`; otherwise the first agent spec is expanded into
-`planner + executor-1`.
+`planner + executor-1 + executor-2`.
 
 ## CLI · 命令行
 

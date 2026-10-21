@@ -22,7 +22,7 @@
 - Reports with malformed JSON, mismatched item IDs, unauthorized targets, or missing evidence fail closed.
 - Known secrets are redacted before persistence and excluded from Planner/Executor summaries.
 - Docker containers receive no Docker socket and retain read-only root, dropped capabilities, and resource limits.
-- Default exploration concurrency is one Executor; more workers are a policy change, not an architectural change.
+- Default exploration concurrency is two Executors, each handling exactly one Frontier per turn.
 - Conventional Commits with a scope; after verification, commit task files and push the current branch.
 
 ## Review Focus
@@ -164,3 +164,29 @@
 - [x] **Step 4: Write failing frontend tests for restoring phase, goal, targets, open frontiers and current assignment before any report exists.**
 - [x] **Step 5: Implement the initialization view and run all Go/frontend verification commands.**
 - [x] **Step 6: Commit with `feat(exploration): initialize blackboard before executor dispatch` and push.**
+
+### Task 8: Default Two-Frontier Parallel Exploration
+
+**Files:**
+- Modify: `exploration_runner.go`
+- Modify: `exploration_controller.go`
+- Modify: `exploration_controller_test.go`
+- Modify: `exploration_runner_test.go`
+- Modify: `internal/cli/config.go`
+- Modify: `internal/cli/config_test.go`
+- Modify: `session_agent.go`
+- Modify: `examples/run.yaml`
+- Modify: `examples/tsec.yaml`
+- Modify: `web/src/utils/exploration.ts`
+- Modify: `web/src/utils/exploration.test.ts`
+- Modify: `web/src/components/ExplorationTimeline.tsx`
+
+**Interfaces:**
+- Consumes: `ExplorationSpec.MaxWorkers`, `Controller`, `HypothesisView.current`.
+- Produces: default `planner + executor-1 + executor-2`, two concurrently assigned frontiers, and multi-current highlighting in the UI.
+
+- [x] **Step 1: Write failing tests for two default workers, two default executors, and concurrent current frontiers.**
+- [x] **Step 2: Change default role expansion, Controller concurrency, CLI defaults and examples to two workers.**
+- [x] **Step 3: Track a set of active frontier IDs and highlight both concurrent assignments in the exploration graph.**
+- [x] **Step 4: Run all Go/frontend verification commands.**
+- [x] **Step 5: Commit with `feat(exploration): run two frontiers concurrently` and push.**
