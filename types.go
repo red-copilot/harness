@@ -394,3 +394,22 @@ type ExplorerClaim struct {
 	Supports []string `json:"supports,omitempty"`
 	Refutes  []string `json:"refutes,omitempty"`
 }
+
+// ExplorerProposal is one bounded next action proposed by a planner or
+// executor. The controller validates it before it becomes a FrontierItem.
+type ExplorerProposal struct {
+	Question         string   `json:"question"`
+	Target           string   `json:"target"`
+	ExpectedEvidence string   `json:"expected_evidence"`
+	Anchors          []string `json:"anchors,omitempty"`
+}
+
+// ExplorerReport is the structured result of one frontier execution.
+type ExplorerReport struct {
+	ItemID   string             `json:"item_id"`
+	Verdict  string             `json:"verdict"`
+	Claims   []ExplorerClaim    `json:"claims"`
+	Next     []ExplorerProposal `json:"next"`
+	Commands []string           `json:"commands,omitempty"`
+	Errors   []string           `json:"errors,omitempty"`
+}

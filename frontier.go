@@ -18,18 +18,32 @@ const (
 type FrontierStatus string
 
 const (
-	FrontierOpen FrontierStatus = "open"
-	FrontierDone FrontierStatus = "done"
+	FrontierOpen     FrontierStatus = "open"
+	FrontierAssigned FrontierStatus = "assigned"
+	FrontierDone     FrontierStatus = "done"
+	FrontierFailed   FrontierStatus = "failed"
 )
 
 // FrontierItem is a bounded exploration hint. It is never proof of progress.
 type FrontierItem struct {
-	ID        string         `json:"id"`
-	Kind      FrontierKind   `json:"kind"`
-	Text      string         `json:"text"`
-	Priority  int            `json:"priority"`
-	Status    FrontierStatus `json:"status"`
-	SourceSeq int64          `json:"source_seq,omitempty"`
+	ID               string         `json:"id"`
+	ParentID         string         `json:"parent_id,omitempty"`
+	Question         string         `json:"question"`
+	TargetHint       string         `json:"target_hint"`
+	ExpectedEvidence string         `json:"expected_evidence"`
+	Anchors          []string       `json:"anchors,omitempty"`
+	ReviewOf         []string       `json:"review_of,omitempty"`
+	Status           FrontierStatus `json:"status"`
+	AssignedTo       string         `json:"assigned_to,omitempty"`
+	Round            int            `json:"round"`
+	Fingerprint      string         `json:"fingerprint,omitempty"`
+
+	// Legacy fields retained for the deterministic projection API. The
+	// hypothesis frontier engine uses Question/TargetHint/ExpectedEvidence.
+	Kind      FrontierKind `json:"kind,omitempty"`
+	Text      string       `json:"text,omitempty"`
+	Priority  int          `json:"priority,omitempty"`
+	SourceSeq int64        `json:"source_seq,omitempty"`
 }
 
 // Frontier is a deterministic, read-only projection of the next exploration
