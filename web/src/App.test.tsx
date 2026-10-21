@@ -11,8 +11,9 @@ const overview = {
     active: 0,
     terminal: 0,
     queued: 0,
-    starting: 0,
+    provisioning: 0,
     running: 0,
+    finalizing: 0,
     verifying: 0,
     succeeded: 0,
     failed: 0,
@@ -24,7 +25,6 @@ const overview = {
   },
   usage: {},
   duration: { samples: 0, average_ms: 0, p50_ms: 0, p95_ms: 0 },
-  sweeps: { total: 0, active: 0, succeeded: 0, failed: 0 },
 }
 
 describe('App shell', () => {
@@ -33,7 +33,6 @@ describe('App shell', () => {
       http.get('*/healthz', () => HttpResponse.json({ status: 'ok' })),
       http.get('*/v1/overview', () => HttpResponse.json(overview)),
       http.get('*/v1/runs', () => HttpResponse.json([])),
-      http.get('*/v1/tsec/sweeps', () => HttpResponse.json([])),
     )
     renderWithProviders(<App />)
     expect(await screen.findByText('运行总览')).toBeInTheDocument()

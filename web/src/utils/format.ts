@@ -1,7 +1,7 @@
-import type { RunDescriptor, RunRecord, RunSpec, RunStatus, Usage } from '@/api/types'
+import type { RunDescriptor, RunRecord, RunStatus, Usage } from '@/api/types'
 
 /** agentIds flattens a run descriptor's planner and executors into ids. */
-export function agentIds(spec?: RunDescriptor | RunSpec | null): string[] {
+export function agentIds(spec?: RunDescriptor | null): string[] {
   if (!spec) return []
   return [spec.planner?.id, ...(spec.executors?.map((agent) => agent.id) ?? [])].filter(
     (id): id is string => Boolean(id),

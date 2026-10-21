@@ -87,7 +87,6 @@ function filterRuns(runs: RunRecord[], statuses: RunStatus[], search: string): R
     if (!needle) return true
     const haystack = [
       run.id,
-      run.sweep_id,
       run.error,
       run.spec?.task?.id,
       run.spec?.task?.objective,

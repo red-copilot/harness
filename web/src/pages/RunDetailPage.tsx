@@ -230,7 +230,6 @@ function RunOverview({ run, verdict }: { run: RunRecord; verdict: VerdictRecord 
             <StatusTag status={run.status} />
           </Descriptions.Item>
           <Descriptions.Item label={t('common.task')}>{run.spec?.task?.id ?? '—'}</Descriptions.Item>
-          <Descriptions.Item label={t('common.sweepId')}>{run.sweep_id || '—'}</Descriptions.Item>
           <Descriptions.Item label={t('common.agents')}>
             {agentIds(run.spec).join(', ') || '—'}
           </Descriptions.Item>

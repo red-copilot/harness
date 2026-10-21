@@ -1,7 +1,6 @@
 import ApiOutlined from '@ant-design/icons/ApiOutlined'
 import BarChartOutlined from '@ant-design/icons/BarChartOutlined'
 import BugOutlined from '@ant-design/icons/BugOutlined'
-import ExperimentOutlined from '@ant-design/icons/ExperimentOutlined'
 import MenuOutlined from '@ant-design/icons/MenuOutlined'
 import MoonOutlined from '@ant-design/icons/MoonOutlined'
 import ReloadOutlined from '@ant-design/icons/ReloadOutlined'
@@ -35,17 +34,12 @@ export function AppShell() {
     retry: false,
   })
 
-  const selectedKey = location.pathname.startsWith('/runs')
-    ? '/runs'
-    : location.pathname.startsWith('/sweeps')
-      ? '/sweeps'
-      : '/'
+  const selectedKey = location.pathname.startsWith('/runs') ? '/runs' : '/'
 
   const items = useMemo<MenuProps['items']>(
     () => [
       { key: '/', icon: <BarChartOutlined />, label: t('nav.overview') },
       { key: '/runs', icon: <BugOutlined />, label: t('nav.runs') },
-      { key: '/sweeps', icon: <ExperimentOutlined />, label: t('nav.sweeps') },
     ],
     [t],
   )

@@ -6,8 +6,6 @@ import { AppShell } from '@/components/AppShell'
 const OverviewPage = lazy(() => import('@/pages/OverviewPage'))
 const RunsPage = lazy(() => import('@/pages/RunsPage'))
 const RunDetailPage = lazy(() => import('@/pages/RunDetailPage'))
-const SweepsPage = lazy(() => import('@/pages/SweepsPage'))
-const SweepDetailPage = lazy(() => import('@/pages/SweepDetailPage'))
 const NotFoundPage = lazy(() => import('@/pages/NotFoundPage'))
 
 export default function App() {
@@ -24,8 +22,6 @@ export default function App() {
           <Route index element={<OverviewPage />} />
           <Route path="runs" element={<RunsPage />} />
           <Route path="runs/:runId" element={<RunDetailPage />} />
-          <Route path="sweeps" element={<SweepsPage />} />
-          <Route path="sweeps/:sweepId" element={<SweepDetailPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Route>
       </Routes>

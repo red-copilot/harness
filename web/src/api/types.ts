@@ -23,18 +23,28 @@ export interface Mount {
 export interface Task {
   id: string
   objective: string
-  inputs?: Mount[]
-  skills?: Mount[]
-  metadata?: Record<string, string>
 }
 
 export type IsolationMode = 'caller_managed'
+
+/** Per-Run execution detail. Never identity: the Target is its id. */
+export interface TargetRuntime {
+  container_name?: string
+  network?: string
+  compose_project?: string
+  compose_file?: string
+  compose_override?: string
+  challenge_code?: string
+  benchmark_base_url?: string
+  hint?: string
+  hint_used?: boolean
+}
 
 export interface Target {
   id: string
   addresses?: string[]
   isolation?: IsolationMode
-  metadata?: Record<string, string>
+  runtime?: TargetRuntime
 }
 
 export interface ResourceSpec {
@@ -84,11 +94,6 @@ export interface RunDescriptor {
   executors: AgentSpec[]
   policy?: ExplorationPolicy
   budget?: Budget
-}
-
-/** Read-only compatibility alias for records rendered by older builds. */
-export interface RunSpec extends Partial<RunDescriptor> {
-  agents?: AgentSpec[]
 }
 
 export interface Usage {
@@ -218,10 +223,9 @@ export interface RunResult {
 export interface RunRecord {
   id: string
   status: RunStatus
-  spec?: RunDescriptor | RunSpec | null
+  spec?: RunDescriptor | null
   result?: RunResult | null
   error?: string
-  sweep_id?: string
   metadata?: unknown
   created_at: string
   started_at?: string | null
@@ -258,25 +262,14 @@ export interface VerdictRecord {
   created_at: string
 }
 
-export interface SweepState {
-  id: string
-  status: RunStatus
-  run_ids?: string[]
-  results?: RunResult[]
-  error?: string
-  created_at: string
-  finished_at?: string | null
-}
-
 export interface RunOverview {
   total: number
   active: number
   terminal: number
   queued: number
-  provisioning?: number
-  starting?: number
+  provisioning: number
   running: number
-  finalizing?: number
+  finalizing: number
   verifying: number
   succeeded: number
   failed: number
@@ -294,20 +287,12 @@ export interface DurationOverview {
   p95_ms: number
 }
 
-export interface SweepOverview {
-  total: number
-  active: number
-  succeeded: number
-  failed: number
-}
-
 export interface Overview {
   generated_at: string
   window: number
   runs: RunOverview
   usage: Usage
   duration: DurationOverview
-  sweeps: SweepOverview
 }
 
 export interface HealthResponse { status: string }

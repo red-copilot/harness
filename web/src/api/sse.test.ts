@@ -20,7 +20,7 @@ describe('parseSseFrame', () => {
 describe('parseSseStream', () => {
   it('parses frames split across chunks', async () => {
     const encoder = new TextEncoder()
-    const chunks = ['id: 1\nevent: run.started\ndata: {"a"', ':1}\n\nid: 2\nevent: run.finished\ndata: {"b":2}\n\n']
+    const chunks = ['id: 1\nevent: run.started\ndata: {"a"', ':1}\n\nid: 2\nevent: run.finalized\ndata: {"b":2}\n\n']
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         for (const chunk of chunks) controller.enqueue(encoder.encode(chunk))
@@ -32,6 +32,6 @@ describe('parseSseStream', () => {
     expect(frames).toHaveLength(2)
     expect(frames[0].event).toBe('run.started')
     expect(frames[0].data).toBe('{"a":1}')
-    expect(frames[1].event).toBe('run.finished')
+    expect(frames[1].event).toBe('run.finalized')
   })
 })

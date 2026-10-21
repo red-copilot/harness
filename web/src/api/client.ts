@@ -5,7 +5,6 @@ import type {
   LogRecord,
   Overview,
   RunRecord,
-  SweepState,
   VerdictRecord,
 } from './types'
 
@@ -79,17 +78,6 @@ export function getLogs(
   if (query.tail) params.set('tail', 'true')
   const suffix = params.size > 0 ? `?${params.toString()}` : ''
   return request<LogRecord[]>(`/v1/runs/${encodeURIComponent(runId)}/logs${suffix}`, {
-    signal,
-    cache: 'no-store',
-  })
-}
-
-export function getSweeps(signal?: AbortSignal): Promise<SweepState[]> {
-  return request<SweepState[]>('/v1/tsec/sweeps', { signal, cache: 'no-store' })
-}
-
-export function getSweep(sweepId: string, signal?: AbortSignal): Promise<SweepState> {
-  return request<SweepState>(`/v1/tsec/sweeps/${encodeURIComponent(sweepId)}`, {
     signal,
     cache: 'no-store',
   })

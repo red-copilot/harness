@@ -9,19 +9,20 @@ const overview = {
     active: 1,
     terminal: 1,
     queued: 0,
-    starting: 0,
+    provisioning: 0,
     running: 1,
+    finalizing: 0,
     verifying: 0,
     succeeded: 1,
     failed: 0,
     cancelled: 0,
     timed_out: 0,
     interrupted: 0,
+    stagnated: 0,
     success_rate: 0.5,
   },
   usage: { input_tokens: 1200, output_tokens: 300, total_tokens: 1500, cost_usd: 0.02 },
   duration: { samples: 1, average_ms: 1500, p50_ms: 1500, p95_ms: 1500 },
-  sweeps: { total: 0, active: 0, succeeded: 0, failed: 0 },
 }
 
 const runs = [
@@ -30,13 +31,13 @@ const runs = [
     status: 'succeeded',
     created_at: '2026-10-21T09:00:00Z',
     finished_at: '2026-10-21T09:01:00Z',
-    spec: { task: { id: 'mobile-check', objective: 'Verify the responsive console' }, agents: [{ id: 'pi' }] },
+    spec: { task: { id: 'mobile-check', objective: 'Verify the responsive console' }, planner: { id: 'pi' }, executors: [] },
   },
   {
     id: 'run_running',
     status: 'running',
     created_at: '2026-10-21T09:03:00Z',
-    spec: { task: { id: 'live-check', objective: 'Inspect a live run' }, agents: [{ id: 'pi' }] },
+    spec: { task: { id: 'live-check', objective: 'Inspect a live run' }, planner: { id: 'pi' }, executors: [] },
   },
 ]
 
@@ -49,7 +50,6 @@ async function mockApi(page: Page) {
     const path = new URL(route.request().url()).pathname
     if (path === '/v1/overview') return route.fulfill({ json: overview })
     if (path === '/v1/runs') return route.fulfill({ json: runs })
-    if (path === '/v1/tsec/sweeps') return route.fulfill({ json: [] })
     if (path === '/v1/runs/run_mobile') return route.fulfill({ json: runs[0] })
     if (path === '/v1/runs/run_mobile/events') {
       return route.fulfill({ status: 200, contentType: 'text/event-stream', body: '' })

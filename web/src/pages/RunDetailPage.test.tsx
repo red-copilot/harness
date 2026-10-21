@@ -63,7 +63,7 @@ vi.mock('@/hooks/useRunEvents', () => ({
         seq: 4,
         run_id: 'run_1',
         source: 'harness',
-        type: 'run.finished',
+        type: 'run.finalized',
         time: '2026-10-20T12:00:00Z',
         data: { status: 'succeeded' },
       },
@@ -124,6 +124,6 @@ describe('RunDetailPage', () => {
     expect(await screen.findByText('State r2')).toBeInTheDocument()
     expect((await screen.findAllByText('Verify the port observation')).length).toBeGreaterThan(0)
     fireEvent.click(screen.getByText('事件 (4)'))
-    expect(await screen.findByText('run.finished')).toBeInTheDocument()
+    expect(await screen.findByText('run.finalized')).toBeInTheDocument()
   })
 })

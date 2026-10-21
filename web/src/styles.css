@@ -308,8 +308,8 @@ body {
   --status-color: #94a3b8;
 }
 
-.bar-starting,
-.status-starting {
+.bar-provisioning,
+.status-provisioning {
   --status-color: #38bdf8;
 }
 
@@ -368,7 +368,7 @@ body {
 }
 
 .status-running .status-dot,
-.status-starting .status-dot,
+.status-provisioning .status-dot,
 .status-verifying .status-dot {
   animation: pulse 1.8s ease-in-out infinite;
 }

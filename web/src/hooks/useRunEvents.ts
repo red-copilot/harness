@@ -69,7 +69,7 @@ export function useRunEvents(
             const merged = mergeBySeq(eventsRef.current, [event], MAX_EVENTS)
             eventsRef.current = merged
             setEvents(merged)
-            if (event.type === 'run.finished') {
+            if (event.type === 'run.finalized') {
               finishedRef.current = true
               setStreamState('closed')
               callbackRef.current?.()
