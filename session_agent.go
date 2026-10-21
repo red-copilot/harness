@@ -51,7 +51,7 @@ func RunTurn(ctx context.Context, session AgentSession, prompt string, sink Even
 				if text != "" {
 					outcome.AssistantText = text
 				}
-				outcome.ToolCalls = appendUnique(outcome.ToolCalls, tools...)
+				outcome.ToolCalls = append(outcome.ToolCalls, tools...)
 			case "agent_settled":
 				return outcome, nil
 			}
@@ -70,10 +70,12 @@ func (p *SessionPlanner) Plan(ctx context.Context, request PlanRequest) (PlanOut
 	if p == nil || p.Session == nil {
 		return PlanOutput{}, errors.New("planner session is required")
 	}
-	if resettable, ok := p.Session.(ResettableSession); ok {
-		if err := resettable.Reset(ctx); err != nil {
-			return PlanOutput{}, fmt.Errorf("reset planner session: %w", err)
-		}
+	resettable, ok := p.Session.(ResettableSession)
+	if !ok {
+		return PlanOutput{}, errors.New("planner session does not support fresh context reset")
+	}
+	if err := resettable.Reset(ctx); err != nil {
+		return PlanOutput{}, fmt.Errorf("reset planner session: %w", err)
 	}
 	outcome, err := RunTurn(ctx, p.Session, buildPlanPrompt(request), p.Sink)
 	if err != nil {
@@ -135,6 +137,13 @@ func (e *SessionExplorer) Investigate(ctx context.Context, item FrontierItem, br
 		_ = e.Session.Abort(context.Background())
 		return ExplorerReport{}, fmt.Errorf("executor used %d tool calls, limit is %d", len(outcome.ToolCalls), limit)
 	}
+	info, err := os.Stat(reportPath)
+	if err != nil {
+		return ExplorerReport{}, fmt.Errorf("stat explorer report: %w", err)
+	}
+	if info.Size() > MaxExplorerReportBytes {
+		return ExplorerReport{}, fmt.Errorf("explorer report is too large: %d bytes", info.Size())
+	}
 	data, err := os.ReadFile(reportPath)
 	if err != nil {
 		return ExplorerReport{}, fmt.Errorf("read explorer report: %w", err)
@@ -159,7 +168,7 @@ func parseTurnEvent(data json.RawMessage) (string, []string) {
 		return "", nil
 	}
 	var texts []string
-	var tools []string
+	var contentTools []string
 	for _, part := range payload.Message.Content {
 		switch part.Type {
 		case "text":
@@ -168,13 +177,16 @@ func parseTurnEvent(data json.RawMessage) (string, []string) {
 			}
 		case "toolCall":
 			if part.Name != "" {
-				tools = appendUnique(tools, part.Name)
+				contentTools = append(contentTools, part.Name)
 			}
 		}
 	}
-	for _, result := range payload.ToolResults {
-		if result.ToolName != "" {
-			tools = appendUnique(tools, result.ToolName)
+	tools := contentTools
+	if len(tools) == 0 {
+		for _, result := range payload.ToolResults {
+			if result.ToolName != "" {
+				tools = append(tools, result.ToolName)
+			}
 		}
 	}
 	return strings.Join(texts, "\n"), tools

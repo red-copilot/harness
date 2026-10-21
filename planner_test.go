@@ -103,3 +103,23 @@ func TestSeedItemsWithoutTargetsReturnsEmpty(t *testing.T) {
 		t.Fatalf("items = %v, want empty", items)
 	}
 }
+
+func TestPlannerFactDigestPrefersCorroboratedThenNewest(t *testing.T) {
+	facts := []Fact{
+		{ID: "observed-old", Trust: FactObserved},
+		{ID: "corroborated", Trust: FactCorroborated},
+		{ID: "observed-new", Trust: FactObserved},
+		{ID: "refuted", Trust: FactRefuted},
+		{ID: "contested", Trust: FactObserved, Contested: true},
+	}
+	digest := plannerFactDigest(facts, 3)
+	if len(digest) != 3 {
+		t.Fatalf("digest = %d, want 3", len(digest))
+	}
+	if digest[0].ID != "corroborated" {
+		t.Fatalf("digest order = %+v", digest)
+	}
+	if digest[1].ID != "contested" || digest[2].ID != "observed-new" {
+		t.Fatalf("digest should prefer contested and newest observations: %+v", digest)
+	}
+}

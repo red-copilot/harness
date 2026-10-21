@@ -46,10 +46,85 @@ export interface ExplorationCycle {
   frontier?: ExplorationFrontierSnapshot
 }
 
+export interface HypothesisFacts {
+  added: string[]
+  corroborated: string[]
+  contested: string[][]
+}
+
+export interface HypothesisAttempt {
+  seq: number
+  round?: number
+  itemId: string
+  executorId?: string
+  verdict?: string
+  status: 'assigned' | 'done' | 'failed'
+  facts?: HypothesisFacts
+  error?: string
+}
+
+export interface HypothesisProgress {
+  current: number
+  total: number
+}
+
+export interface HypothesisView {
+  attempts: HypothesisAttempt[]
+  progress?: HypothesisProgress
+}
+
 interface PendingCycle {
   turn?: EventRecord
   state?: ExplorationStateSnapshot
   frontier?: ExplorationFrontierSnapshot
+}
+
+export function extractHypothesisView(events: EventRecord[]): HypothesisView {
+  const attempts = new Map<string, HypothesisAttempt>()
+  let progress: HypothesisProgress | undefined
+
+  for (const event of [...events].sort((a, b) => a.seq - b.seq)) {
+    const record = asRecord(event.data)
+    if (!record) continue
+    if (event.type === 'backend.progress') {
+      if (typeof record.progress === 'number' && typeof record.total === 'number') {
+        progress = { current: record.progress, total: record.total }
+      }
+      continue
+    }
+    const itemId = typeof record.item_id === 'string' ? record.item_id : undefined
+    if (!itemId) continue
+    const attempt = attempts.get(itemId) ?? { seq: event.seq, itemId, status: 'assigned' }
+    if (typeof record.round === 'number') attempt.round = record.round
+    switch (event.type) {
+      case 'exploration.item.assigned':
+        if (typeof record.executor_id === 'string') attempt.executorId = record.executor_id
+        break
+      case 'exploration.report.received':
+        if (typeof record.verdict === 'string') attempt.verdict = record.verdict
+        break
+      case 'exploration.facts.merged':
+        attempt.status = 'done'
+        attempt.facts = {
+          added: stringArray(record.added),
+          corroborated: stringArray(record.corroborated),
+          contested: pairArray(record.contested),
+        }
+        break
+      case 'exploration.item.failed':
+        attempt.status = 'failed'
+        if (typeof record.error === 'string') attempt.error = record.error
+        break
+      default:
+        continue
+    }
+    attempts.set(itemId, attempt)
+  }
+
+  return {
+    attempts: [...attempts.values()].sort((a, b) => b.seq - a.seq),
+    progress,
+  }
 }
 
 export function extractExplorationCycles(events: EventRecord[]): ExplorationCycle[] {
@@ -151,6 +226,16 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : []
+}
+
+function stringArray(value: unknown): string[] {
+  return asArray(value).filter((item): item is string => typeof item === 'string')
+}
+
+function pairArray(value: unknown): string[][] {
+  return asArray(value)
+    .map((item) => stringArray(item))
+    .filter((item) => item.length === 2)
 }
 
 function isDefined<T>(value: T | undefined): value is T {

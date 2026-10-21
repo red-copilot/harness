@@ -28,15 +28,15 @@ Go Library / CLI / HTTP
           ▼
      Run Controller
           │
-     ┌────┴─────┐
-     ▼          ▼
-Agent Runtime  SQLite Store
-     │          │
-     ▼          ▼
-Isolated Agent  Events / Runs
+     ┌────┴───────────────┐
+     ▼                    ▼
+Planner / Executors    SQLite Store
+     │                    │
+     ▼                    ▼
+Frontier Engine       Events / Facts / Facts Ledger
      │
      ▼
-Target Environment
+Isolated Agent + Target Environment
      │
      ▼
 Verifier / Benchmark Evaluator
@@ -86,6 +86,7 @@ result, err := runner.Run(ctx, harness.RunSpec{
         Pi: &harness.PiSpec{Provider: "openai", Model: "gpt-5", Thinking: "high"},
         EnvFrom: []string{"OPENAI_API_KEY"},
     }},
+    Exploration: &harness.ExplorationSpec{Rounds: 6},
     Verifier: verify.Command{Path: "./verify.sh"},
 })
 ```
@@ -93,6 +94,33 @@ result, err := runner.Run(ctx, harness.RunSpec{
 Only the verifier or benchmark evaluator can produce an authoritative success verdict. Agent messages, tool exit codes, and self-reported completion are observations—not proof.
 
 <sub>只有验证器或基准评测器能够给出权威的成功结论。智能体消息、工具退出码和自述完成状态都只是观测，不是证明。</sub>
+
+### Hypothesis Frontier Engine · 假设前沿引擎
+
+When `Exploration` is configured, the Harness expands one agent spec into a
+read-only Planner and a fresh-context Executor:
+
+- The Planner sees only objective, authoritative progress, bounded facts,
+  recent frontier outcomes and authorized targets.
+- The Controller validates and deduplicates frontiers, then assigns exactly one
+  frontier per Executor turn.
+- The Executor writes `/workspace/report.json` as its structured output.
+  Reports become untrusted facts and never become success verdicts.
+- Closed, refuted and failed frontier fingerprints are retained so later rounds
+  cannot silently repeat the same action.
+
+The CLI enables this path by default for single-agent YAML/JSON runs. Custom
+multi-agent runs can opt in with:
+
+```yaml
+exploration:
+  rounds: 6
+  max_workers: 1
+```
+
+Planner and Executor IDs can be selected explicitly with `planner_agent_id` and
+`executor_agent_ids`; otherwise the first agent spec is expanded into
+`planner + executor-1`.
 
 ## CLI · 命令行
 

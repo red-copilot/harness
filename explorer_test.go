@@ -147,3 +147,18 @@ func TestAuthorizeTargetRejectsUnrelatedHost(t *testing.T) {
 		}
 	}
 }
+
+func TestDigestFactsPrefersCorroboratedThenNewestObserved(t *testing.T) {
+	item := testItem()
+	digest := DigestFacts(item, []Fact{
+		{ID: "a-old", Claim: "old", Trust: FactObserved, Targets: []string{"10.0.0.5"}},
+		{ID: "corroborated", Claim: "strong", Trust: FactCorroborated, Targets: []string{"10.0.0.5"}},
+		{ID: "z-new", Claim: "new", Trust: FactObserved, Targets: []string{"10.0.0.5"}},
+	})
+	if len(digest) != 3 {
+		t.Fatalf("digest = %d, want 3", len(digest))
+	}
+	if digest[0].ID != "corroborated" || digest[1].ID != "z-new" || digest[2].ID != "a-old" {
+		t.Fatalf("digest order = %+v", digest)
+	}
+}

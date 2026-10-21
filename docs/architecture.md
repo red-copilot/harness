@@ -14,24 +14,50 @@ The SDK is a Go modular monolith:
 ## Run flow
 
 1. The runner persists a queued run and starts one target provision operation.
-2. Each agent gets an isolated workspace and a process-scoped `AgentSession`.
-3. Pi runs as a long-lived JSONL RPC subprocess. The runner reads stdout continuously and records raw events and stderr in SQLite.
-4. Each Pi `turn_end` is reduced into the session's exploration state. The controller then projects a bounded frontier and steers its focus before the next model call.
-5. `agent_settled` ends a Pi run. `agent_end` is only an intermediate observation.
-6. A backend completion or a caller-provided verifier produces the only authoritative verdict.
-7. Target, session processes and labeled Docker resources are closed in all outcomes.
+2. When exploration is enabled, one ordinary `AgentSpec` expands into a
+   read-only Planner and one fresh-context Executor. Custom multi-session runs
+   without `Exploration` retain the direct session path.
+3. The backend is observed before planning starts. Its authoritative progress,
+   such as `2/6` flags, is injected into every Planner snapshot.
+4. The Planner proposes bounded frontiers from `Goal + Facts + Frontiers`; it
+   never dispatches work or establishes success.
+5. The deterministic Controller validates authorization, deduplicates exact
+   frontier fingerprints, leases one frontier to each Executor, validates the
+   structured report, and merges facts through `FactLedger`.
+6. Each Executor resets Pi with `new_session`, receives one frontier and a
+   bounded fact digest, then returns `report.json`. `agent_settled` ends a Pi
+   turn; `agent_end` is only an intermediate observation.
+7. A backend completion or a caller-provided verifier produces the only
+   authoritative verdict.
+8. Target, session processes and labeled Docker resources are closed in all
+   outcomes.
 
 ## Exploration control
 
-State and Frontier are deterministic projections over the canonical event log:
+The exploration state is a run-scoped blackboard:
 
-- `ExplorationState` records action attempts, bounded untrusted observations and open exploration items.
-- `ReduceExploration` applies one `turn_end` event, rejects sequence regression and is idempotent for a replayed event.
-- `ProjectExplorationFrontier` filters and orders open candidates/questions; it does not persist a second mutable frontier.
-- The runner records `exploration.state.updated` and `exploration.frontier.updated`, then sends one bounded focus through Pi steering before the next LLM call.
+- `Fact` records a bounded claim with evidence, targets and one of
+  `observed`, `corroborated` or `refuted`.
+- `FrontierItem` records one falsifiable question, authorized target, expected
+  evidence and a stable fingerprint. Open, assigned, done and failed are the
+  only lifecycle states.
+- `SessionPlanner` resets its context for each plan and sees only the objective,
+  authoritative progress, up to eight relevant facts, recent frontier outcomes
+  and the authorized targets.
+- `SessionExplorer` resets its context before every frontier and writes one
+  structured report. Malformed reports, mismatched item IDs and missing evidence
+  fail closed and do not mutate the fact ledger.
+- The Controller rejects duplicate fingerprints across open and closed
+  frontiers. A blocked or inconclusive result therefore cannot silently loop on
+  the same action.
+- The Runner records `exploration.items.planned`, `item.assigned`,
+  `report.received`, `facts.merged`, `item.failed`, `round.started`,
+  `round.completed` and `backend.progress` events as the audit trail.
 
-Tool output is always marked as an untrusted observation. Neither State nor
-Frontier can establish task success.
+Tool output is always an untrusted observation. Neither the Planner, Executor,
+Fact ledger nor Frontier can establish task success. The legacy per-session
+`ExplorationState` projection remains available for direct-session runs, but the
+CLI's single-agent configuration uses the hypothesis frontier path by default.
 
 ## Trust boundary
 

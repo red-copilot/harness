@@ -10,6 +10,9 @@ agents:
       tools: [read, bash, edit, write]
       env_passthrough: [OPENCODE_API_KEY]
     env_from: [BENCHMARK_BASE_URL, BENCHMARK_TOKEN]
+exploration:
+  rounds: 6
+  max_workers: 1
 budget:
   wall_time_seconds: 1800
 tsec:

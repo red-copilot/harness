@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -173,4 +174,37 @@ func corroboratedAnchors(ledger *FactLedger, anchors []string) []string {
 
 func normalizeFrontierText(value string) string {
 	return strings.ToLower(strings.Join(strings.Fields(value), " "))
+}
+
+func plannerFactDigest(facts []Fact, limit int) []Fact {
+	type indexedFact struct {
+		index int
+		fact  Fact
+	}
+	filtered := make([]indexedFact, 0, len(facts))
+	for index, fact := range facts {
+		if fact.Trust == FactRefuted {
+			continue
+		}
+		filtered = append(filtered, indexedFact{index: index, fact: copyFact(fact)})
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		left, right := filtered[i], filtered[j]
+		leftRank, rightRank := trustRank(left.fact.Trust), trustRank(right.fact.Trust)
+		if leftRank != rightRank {
+			return leftRank > rightRank
+		}
+		if left.fact.Contested != right.fact.Contested {
+			return left.fact.Contested
+		}
+		return left.index > right.index
+	})
+	if limit > 0 && len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+	out := make([]Fact, 0, len(filtered))
+	for _, item := range filtered {
+		out = append(out, item.fact)
+	}
+	return out
 }

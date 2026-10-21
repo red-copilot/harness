@@ -49,11 +49,11 @@
 - Consumes: `FactLedger`, `Fact`, `ExplorerClaim`.
 - Produces: `FrontierItem`, `ExplorerReport`, `ExplorerProposal`, `PlanRequest`, `PlanOutput`, `Planner`, `ValidatePlan`, `SeedItems`, `AuthorizeTarget`, `DigestFacts`, `BuildExplorerBrief`, `FrontierFingerprint`.
 
-- [ ] **Step 1: Run the existing Explorer report tests and confirm they fail on the missing frontier/report contract.**
-- [ ] **Step 2: Add failing Planner tests for malformed output, unauthorized targets, duplicate fingerprints, anchor filtering, and deterministic seed frontiers.**
-- [ ] **Step 3: Implement the new fields and pure validation/planning helpers without changing Runner behavior.**
-- [ ] **Step 4: Run `go test ./... -run "TestParseExplorerReport|TestBuildExplorerBrief|TestDigestFacts|TestAuthorizeTarget|TestPlanner|TestValidatePlan|TestSeedItems"`; expect PASS.**
-- [ ] **Step 5: Commit `explorer.go`, `planner.go`, `frontier.go`, `types.go`, and tests with `feat(exploration): add frontier planning contracts`.**
+- [x] **Step 1: Run the existing Explorer report tests and confirm they fail on the missing frontier/report contract.**
+- [x] **Step 2: Add failing Planner tests for malformed output, unauthorized targets, duplicate fingerprints, anchor filtering, and deterministic seed frontiers.**
+- [x] **Step 3: Implement the new fields and pure validation/planning helpers without changing Runner behavior.**
+- [x] **Step 4: Run `go test ./... -run "TestParseExplorerReport|TestBuildExplorerBrief|TestDigestFacts|TestAuthorizeTarget|TestPlanner|TestValidatePlan|TestSeedItems"`; expect PASS.**
+- [x] **Step 5: Commit `explorer.go`, `planner.go`, `frontier.go`, `types.go`, and tests with `feat(exploration): add frontier planning contracts`.**
 
 ### Task 2: Deterministic Frontier Controller
 
@@ -65,10 +65,10 @@
 - Consumes: `Planner`, `Explorer`, `FactLedger`, `ParseExplorerReport`, `ValidatePlan`, `seedFrontierItems`.
 - Produces: `Controller`, `NewController`, `Controller.Run`, `Controller.Facts`, `Controller.Items`, `ControllerEvent`.
 
-- [ ] **Step 1: Write failing tests proving one frontier per Executor, fresh reset per attempt, exact fingerprint deduplication, mismatched report failure, bad Planner degradation, no success from reports, and bounded rounds.**
-- [ ] **Step 2: Implement the sequential/parallel-neutral round loop with code-owned validation and merging.**
-- [ ] **Step 3: Run `go test ./... -run TestController`; expect PASS.**
-- [ ] **Step 4: Commit with `feat(exploration): add hypothesis frontier controller`.**
+- [x] **Step 1: Write failing tests proving one frontier per Executor, fresh reset per attempt, exact fingerprint deduplication, mismatched report failure, bad Planner degradation, no success from reports, and bounded rounds.**
+- [x] **Step 2: Implement the sequential/parallel-neutral round loop with code-owned validation and merging.**
+- [x] **Step 3: Run `go test ./... -run TestController`; expect PASS.**
+- [x] **Step 4: Commit with `feat(exploration): add hypothesis frontier controller`.**
 
 ### Task 3: Fresh-Context Pi Adapters
 
@@ -82,10 +82,10 @@
 - Consumes: `AgentSession`, `FrontierItem`, `ExplorerReport`, `PlanRequest`.
 - Produces: `ResettableSession`, `RunTurn`, `SessionPlanner`, `SessionExplorer`, and Pi `Reset(context.Context) error`.
 
-- [ ] **Step 1: Write failing tests for Pi `new_session`, assistant-text extraction, report file parsing, and mismatched report IDs.**
-- [ ] **Step 2: Implement reset, structured turn collection, and Planner/Executor adapters.**
-- [ ] **Step 3: Run `go test ./pi ./... -run "TestReset|TestRunTurn|TestSession"`; expect PASS.**
-- [ ] **Step 4: Commit with `feat(pi): add fresh-context exploration adapters`.**
+- [x] **Step 1: Write failing tests for Pi `new_session`, assistant-text extraction, report file parsing, and mismatched report IDs.**
+- [x] **Step 2: Implement reset, structured turn collection, and Planner/Executor adapters.**
+- [x] **Step 3: Run `go test ./pi ./... -run "TestReset|TestRunTurn|TestSession"`; expect PASS.**
+- [x] **Step 4: Commit with `feat(pi): add fresh-context exploration adapters`.**
 
 ### Task 4: Runner and CLI Integration
 
@@ -101,11 +101,11 @@
 - Consumes: `Controller`, `SessionPlanner`, `SessionExplorer`, `ExplorationSpec`.
 - Produces: `RunSpec.Exploration`, role expansion from one AgentSpec, exploration event persistence, and backend-progress injection into Planner snapshots.
 
-- [ ] **Step 1: Write failing Runner tests for role expansion, one-frontier dispatch, event persistence, backend completion preemption, and cancellation.**
-- [ ] **Step 2: Add an exploration execution path while preserving the existing custom multi-session path.**
-- [ ] **Step 3: Make CLI configs enable exploration by default for single-agent runs and reject invalid role references.**
-- [ ] **Step 4: Run `go test ./...`; expect PASS.**
-- [ ] **Step 5: Commit with `feat(runner): dispatch stateless hypothesis frontiers`.**
+- [x] **Step 1: Write failing Runner tests for role expansion, one-frontier dispatch, event persistence, backend completion preemption, and cancellation.**
+- [x] **Step 2: Add an exploration execution path while preserving the existing custom multi-session path.**
+- [x] **Step 3: Make CLI configs enable exploration by default for single-agent runs and reject invalid role references.**
+- [x] **Step 4: Run `go test ./...`; expect PASS.**
+- [x] **Step 5: Commit with `feat(runner): dispatch stateless hypothesis frontiers`.**
 
 ### Task 5: Authoritative Multi-Flag Progress
 
@@ -119,10 +119,10 @@
 - Consumes: `Completion`.
 - Produces: generic `Completion.Progress`, `Completion.Total`, periodic backend progress events, and Planner-visible progress snapshots.
 
-- [ ] **Step 1: Write failing TSec and Runner tests for `2/6` progress without completion.**
-- [ ] **Step 2: Populate progress from TSec observations and cache the latest observation for Planner snapshots.**
-- [ ] **Step 3: Run `go test ./... -run "TestBackend|TestRunner.*Progress"`; expect PASS.**
-- [ ] **Step 4: Commit with `feat(tsec): expose authoritative flag progress`.**
+- [x] **Step 1: Write failing TSec and Runner tests for `2/6` progress without completion.**
+- [x] **Step 2: Populate progress from TSec observations and cache the latest observation for Planner snapshots.**
+- [x] **Step 3: Run `go test ./... -run "TestBackend|TestRunner.*Progress"`; expect PASS.**
+- [x] **Step 4: Commit with `feat(tsec): expose authoritative flag progress`.**
 
 ### Task 6: Observability and Documentation
 
@@ -137,7 +137,7 @@
 - Consumes: `exploration.*` events emitted by Runner.
 - Produces: readable frontier/attempt/fact timeline and documented configuration/defaults.
 
-- [ ] **Step 1: Write failing frontend tests for the new exploration event mapping.**
-- [ ] **Step 2: Implement the minimal timeline mapping and documentation updates.**
-- [ ] **Step 3: Run `npm --prefix web run test -- --run`, `npm --prefix web run typecheck`, `go test ./...`, `go test -race ./...`, `go vet ./...`, and `go build ./cmd/harness`.**
-- [ ] **Step 4: Commit with `docs(exploration): document hypothesis frontier engine` and push.**
+- [x] **Step 1: Write failing frontend tests for the new exploration event mapping.**
+- [x] **Step 2: Implement the minimal timeline mapping and documentation updates.**
+- [x] **Step 3: Run `npm --prefix web run test`, `npm --prefix web run typecheck`, `npm --prefix web run lint`, `npm --prefix web run build`, `go test ./...`, `go test -race ./...`, `go vet ./...`, and `go build ./cmd/harness`.**
+- [x] **Step 4: Commit with `docs(exploration): document hypothesis frontier engine` and push.**

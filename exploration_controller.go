@@ -104,7 +104,7 @@ func (c *Controller) Items() []FrontierItem {
 func (c *Controller) plan(ctx context.Context, round int) {
 	request := PlanRequest{
 		Round: round, Objective: c.cfg.Objective, Targets: append([]Target(nil), c.cfg.Targets...),
-		Facts: c.ledger.Facts(), OpenItems: c.itemsAtStatus(FrontierOpen),
+		Facts: plannerFactDigest(c.ledger.Facts(), MaxDigestFacts), OpenItems: c.itemsAtStatus(FrontierOpen),
 		RecentItems: c.Items(), Reports: append([]ExplorerReport(nil), c.reports...),
 	}
 	if c.cfg.Progress != nil {

@@ -10,10 +10,11 @@ import (
 )
 
 const (
-	MaxDigestFacts      = 8
-	MaxDigestClaimBytes = 200
-	MaxProposals        = 3
-	ReportFileName      = "report.json"
+	MaxDigestFacts         = 8
+	MaxDigestClaimBytes    = 200
+	MaxProposals           = 3
+	MaxExplorerReportBytes = 1 << 20
+	ReportFileName         = "report.json"
 )
 
 const (
@@ -115,29 +116,40 @@ Rules:
 
 // DigestFacts selects the smallest relevant fact set for a frontier.
 func DigestFacts(item FrontierItem, facts []Fact) []Fact {
-	selected := make([]Fact, 0)
-	for _, fact := range facts {
+	type indexedFact struct {
+		index int
+		fact  Fact
+	}
+	selected := make([]indexedFact, 0)
+	for index, fact := range facts {
 		if fact.Trust == FactRefuted {
 			continue
 		}
 		if factRelatedToItem(fact, item) {
 			copy := copyFact(fact)
 			copy.Claim = truncateBytes(copy.Claim, MaxDigestClaimBytes)
-			selected = append(selected, copy)
+			selected = append(selected, indexedFact{index: index, fact: copy})
 		}
 	}
 	sort.SliceStable(selected, func(i, j int) bool {
-		left := trustRank(selected[i].Trust)
-		right := trustRank(selected[j].Trust)
+		left := trustRank(selected[i].fact.Trust)
+		right := trustRank(selected[j].fact.Trust)
 		if left != right {
 			return left > right
 		}
-		return selected[i].ID < selected[j].ID
+		if selected[i].fact.Contested != selected[j].fact.Contested {
+			return selected[i].fact.Contested
+		}
+		return selected[i].index > selected[j].index
 	})
 	if len(selected) > MaxDigestFacts {
 		selected = selected[:MaxDigestFacts]
 	}
-	return selected
+	out := make([]Fact, 0, len(selected))
+	for _, item := range selected {
+		out = append(out, item.fact)
+	}
+	return out
 }
 
 // AuthorizeTarget accepts a target ID, an exact address, or a host derived

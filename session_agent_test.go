@@ -39,6 +39,7 @@ func (s *scriptedAgentSession) Wait(context.Context) (AgentResult, error) {
 }
 func (s *scriptedAgentSession) Abort(context.Context) error { return nil }
 func (s *scriptedAgentSession) Close(context.Context) error { return nil }
+func (s *scriptedAgentSession) Reset(context.Context) error { return nil }
 
 func TestRunTurnReturnsAssistantTextAndPersistsEvents(t *testing.T) {
 	session := newScriptedAgentSession()
@@ -139,6 +140,17 @@ func TestSessionPlannerParsesAssistantJSON(t *testing.T) {
 	}
 }
 
+type nonResettableSession struct {
+	AgentSession
+}
+
+func TestSessionPlannerRequiresResettableSession(t *testing.T) {
+	planner := &SessionPlanner{Session: nonResettableSession{AgentSession: newScriptedAgentSession()}}
+	if _, err := planner.Plan(context.Background(), PlanRequest{}); err == nil || !strings.Contains(err.Error(), "reset") {
+		t.Fatalf("err = %v, want fresh-context reset error", err)
+	}
+}
+
 func TestRunTurnHonorsCancellation(t *testing.T) {
 	session := newScriptedAgentSession()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -150,5 +162,44 @@ func TestRunTurnHonorsCancellation(t *testing.T) {
 	}
 	if time.Since(started) > time.Second {
 		t.Fatal("RunTurn did not honor cancellation promptly")
+	}
+}
+
+func TestRunTurnCountsRepeatedToolCalls(t *testing.T) {
+	session := newScriptedAgentSession()
+	session.events <- AgentEvent{Type: "turn_end", Data: json.RawMessage(`{
+		"type":"turn_end",
+		"message":{"role":"assistant","content":[
+			{"type":"toolCall","name":"bash"},
+			{"type":"toolCall","name":"bash"},
+			{"type":"toolCall","name":"bash"}
+		]}
+	}`)}
+	session.events <- AgentEvent{Type: "agent_settled", Data: json.RawMessage(`{"type":"agent_settled"}`)}
+	outcome, err := RunTurn(context.Background(), session, "execute", nil)
+	if err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	if len(outcome.ToolCalls) != 3 {
+		t.Fatalf("tool calls = %d, want 3", len(outcome.ToolCalls))
+	}
+}
+
+func TestSessionExplorerRejectsOversizedReport(t *testing.T) {
+	workspace := t.TempDir()
+	item := FrontierItem{ID: "frontier-1"}
+	session := newScriptedAgentSession()
+	session.onPrompt = func(string) error {
+		path := filepath.Join(workspace, ReportFileName)
+		if err := os.WriteFile(path, make([]byte, MaxExplorerReportBytes+1), 0o600); err != nil {
+			return err
+		}
+		session.events <- AgentEvent{Type: "agent_settled", Data: json.RawMessage(`{"type":"agent_settled"}`)}
+		return nil
+	}
+	explorer := &SessionExplorer{Session: session, IDValue: "executor", WorkspaceDir: workspace}
+	_, err := explorer.Investigate(context.Background(), item, "brief")
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("err = %v, want oversized report error", err)
 	}
 }

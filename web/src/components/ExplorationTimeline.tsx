@@ -4,12 +4,22 @@ import type { EventRecord } from '@/api/types'
 import { EmptyState } from '@/components/EmptyState'
 import { TimeText } from '@/components/TimeText'
 import { useI18n } from '@/i18n/I18nContext'
-import { extractExplorationCycles } from '@/utils/exploration'
-import type { ExplorationCycle, ExplorationObservation, FrontierItem } from '@/utils/exploration'
+import { extractExplorationCycles, extractHypothesisView } from '@/utils/exploration'
+import type {
+  ExplorationCycle,
+  ExplorationObservation,
+  FrontierItem,
+  HypothesisAttempt,
+  HypothesisView,
+} from '@/utils/exploration'
 
 export function ExplorationTimeline({ events }: { events: EventRecord[] }) {
   const { t } = useI18n()
   const cycles = useMemo(() => extractExplorationCycles(events), [events])
+  const hypothesis = useMemo(() => extractHypothesisView(events), [events])
+  if (hypothesis.attempts.length > 0 || hypothesis.progress) {
+    return <HypothesisTimeline view={hypothesis} />
+  }
   if (cycles.length === 0) {
     return <EmptyState description={t('run.exploration.empty')} />
   }
@@ -45,6 +55,78 @@ export function ExplorationTimeline({ events }: { events: EventRecord[] }) {
         ) : null}
       </Card>
     </div>
+  )
+}
+
+function HypothesisTimeline({ view }: { view: HypothesisView }) {
+  const { t } = useI18n()
+  const failed = view.attempts.filter((attempt) => attempt.status === 'failed').length
+  const facts = view.attempts.reduce((total, attempt) => total + (attempt.facts?.added.length ?? 0), 0)
+  return (
+    <div className="page-stack">
+      <Row gutter={[16, 16]}>
+        <Metric
+          title={t('run.hypothesis.progress')}
+          value={view.progress ? view.progress.current : 0}
+        />
+        <Metric title={t('run.hypothesis.attempts')} value={view.attempts.length} />
+        <Metric title={t('run.hypothesis.facts')} value={facts} />
+        <Metric title={t('run.hypothesis.failed')} value={failed} />
+      </Row>
+      <Card title={t('run.hypothesis.title')}>
+        <Typography.Paragraph type="secondary" className="exploration-note">
+          {view.progress
+            ? t('run.hypothesis.progressNote', {
+                current: view.progress.current,
+                total: view.progress.total,
+              })
+            : t('run.hypothesis.note')}
+        </Typography.Paragraph>
+        <div className="exploration-cycles">
+          {view.attempts.slice(0, 20).map((attempt) => (
+            <HypothesisAttemptCard key={attempt.itemId} attempt={attempt} />
+          ))}
+        </div>
+      </Card>
+    </div>
+  )
+}
+
+function HypothesisAttemptCard({ attempt }: { attempt: HypothesisAttempt }) {
+  const { t } = useI18n()
+  const tone = attempt.status === 'failed' ? 'error' : attempt.status === 'done' ? 'success' : 'processing'
+  const statusKey =
+    attempt.status === 'failed'
+      ? 'run.hypothesis.status.failed'
+      : attempt.status === 'done'
+        ? 'run.hypothesis.status.done'
+        : 'run.hypothesis.status.assigned'
+  return (
+    <article className="exploration-cycle">
+      <div className="exploration-cycle-head">
+        <Space wrap size="small">
+          <Tag color={tone}>{t(statusKey)}</Tag>
+          {attempt.round ? <Tag>{t('run.hypothesis.round', { round: attempt.round })}</Tag> : null}
+          <Typography.Text code>{attempt.itemId}</Typography.Text>
+          {attempt.executorId ? <Typography.Text>{attempt.executorId}</Typography.Text> : null}
+        </Space>
+      </div>
+      <div className="exploration-cycle-grid">
+        <div>
+          <Typography.Text strong>{t('run.hypothesis.verdict')}</Typography.Text>
+          <Typography.Paragraph>{attempt.verdict || '—'}</Typography.Paragraph>
+        </div>
+        <div>
+          <Typography.Text strong>{t('run.hypothesis.facts')}</Typography.Text>
+          <Typography.Paragraph>
+            {attempt.facts
+              ? `+${attempt.facts.added.length} · corroborated ${attempt.facts.corroborated.length} · contested ${attempt.facts.contested.length}`
+              : '—'}
+          </Typography.Paragraph>
+          {attempt.error ? <Typography.Text type="danger">{attempt.error}</Typography.Text> : null}
+        </div>
+      </div>
+    </article>
   )
 }
 
