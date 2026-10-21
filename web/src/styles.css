@@ -830,3 +830,306 @@ body {
 .exploration-note {
   margin: 0 0 16px !important;
 }
+
+/* Dynamic left-to-right exploration board. Nodes are keyed by id so only newly
+   discovered frontiers and facts animate in. */
+.exploration-graph {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.exploration-graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.exploration-graph-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.exploration-graph-legend-line {
+  width: 22px;
+  height: 0;
+  border-top: 2px solid var(--muted);
+}
+
+.exploration-graph-legend-root .exploration-graph-legend-line {
+  border-top-color: #3b82f6;
+}
+
+.exploration-graph-legend-derived .exploration-graph-legend-line {
+  border-top-color: #f59e0b;
+}
+
+.exploration-graph-legend-planned .exploration-graph-legend-line {
+  border-top-style: dashed;
+  border-top-color: #a855f7;
+}
+
+.exploration-graph-legend-fact .exploration-graph-legend-line {
+  border-top-color: #10b981;
+}
+
+.exploration-graph-hint {
+  font-size: 12px;
+}
+
+.exploration-graph-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.exploration-graph-board {
+  position: relative;
+  min-width: 100%;
+  background-color: var(--surface-2);
+  background-image:
+    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--muted) 26%, transparent) 1px, transparent 0),
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 5%, transparent), transparent 55%);
+  background-size: 22px 22px, 100% 100%;
+}
+
+.exploration-graph-edges {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.exploration-graph-edge {
+  fill: none;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-dasharray: 1000;
+  animation: exploration-edge-draw 0.7s ease-out both;
+}
+
+.exploration-graph-edge-root {
+  stroke: color-mix(in srgb, #3b82f6 75%, var(--muted));
+}
+
+.exploration-graph-edge-derived {
+  stroke: color-mix(in srgb, #f59e0b 80%, var(--muted));
+}
+
+.exploration-graph-edge-planned {
+  stroke: color-mix(in srgb, #a855f7 70%, var(--muted));
+  stroke-dasharray: 6 6;
+  animation: exploration-edge-fade 0.7s ease-out both;
+}
+
+.exploration-graph-edge-fact {
+  stroke: color-mix(in srgb, #10b981 80%, var(--muted));
+}
+
+.exploration-graph-node {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  animation: exploration-node-in 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+
+.exploration-graph-node:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  transform: translateY(-1px);
+}
+
+.exploration-graph-node:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.exploration-graph-node-origin {
+  border-top: 3px solid #3b82f6;
+}
+
+.exploration-graph-node-frontier {
+  border-top: 3px solid #f59e0b;
+}
+
+.exploration-graph-node-fact {
+  border-top: 3px solid #10b981;
+  background: color-mix(in srgb, #10b981 5%, var(--surface));
+}
+
+.exploration-graph-node-active {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent), var(--shadow);
+  animation: exploration-node-in 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both,
+    exploration-node-pulse 2.2s ease-in-out infinite;
+}
+
+.exploration-graph-node-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent), var(--shadow);
+}
+
+.exploration-graph-node-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.exploration-graph-node-kind {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.exploration-graph-node-title {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  font-size: 13px;
+}
+
+.exploration-graph-node-code {
+  font-size: 11px;
+}
+
+.exploration-graph-node-live {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.exploration-graph-waiting {
+  position: absolute;
+  left: 28px;
+  bottom: 22px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.exploration-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.exploration-detail-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 10px;
+  align-items: start;
+  font-size: 13px;
+}
+
+.exploration-detail-label {
+  color: var(--muted);
+}
+
+.exploration-detail-value {
+  word-break: break-word;
+}
+
+.exploration-activity,
+.exploration-detail-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
+.exploration-activity-detail {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.exploration-detail-facts p {
+  margin: 4px 0 0;
+}
+
+@keyframes exploration-node-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.94);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes exploration-node-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent), var(--shadow);
+  }
+
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 12%, transparent), var(--shadow);
+  }
+}
+
+@keyframes exploration-edge-draw {
+  from {
+    stroke-dashoffset: 1000;
+    opacity: 0.2;
+  }
+
+  to {
+    stroke-dashoffset: 0;
+    opacity: 0.85;
+  }
+}
+
+@keyframes exploration-edge-fade {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 0.85;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .exploration-graph-node,
+  .exploration-graph-node-active,
+  .exploration-graph-edge,
+  .exploration-graph-edge-planned {
+    animation: none;
+  }
+}
+
+.exploration-graph-node-brief {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  font-size: 12px;
+}

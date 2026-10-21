@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -410,6 +411,26 @@ func applyTSec(spec *harness.RunSpec, client *tsec.Client, code string, useHint 
 	backend := tsec.NewBackend(client, code)
 	backend.UseHint = useHint
 	spec.Backend = backend
+	if spec.Task.Metadata == nil {
+		spec.Task.Metadata = map[string]string{}
+	}
+	spec.Task.Metadata["challenge_code"] = code
+	// The Planner owns the problem statement, so it must see the platform
+	// description rather than only a generic objective.
+	if challenges, err := client.ListChallenges(context.Background()); err == nil {
+		for _, challenge := range challenges {
+			if challenge.UniqueCode != code {
+				continue
+			}
+			for key, value := range tsecTaskMetadata(challenge) {
+				spec.Task.Metadata[key] = value
+			}
+			if spec.Task.Objective == "" {
+				spec.Task.Objective = tsecObjective(challenge)
+			}
+			break
+		}
+	}
 	if spec.Task.Objective == "" {
 		spec.Task.Objective = "Authorized TSec challenge " + code + ". Find and submit every remaining flag."
 	}
@@ -638,6 +659,28 @@ func appendUnique(values []string, value string) []string {
 		}
 	}
 	return append(values, value)
+}
+
+// tsecTaskMetadata is the bounded problem statement handed to the Planner.
+func tsecTaskMetadata(challenge tsec.Challenge) map[string]string {
+	metadata := map[string]string{
+		"challenge_code":     challenge.UniqueCode,
+		"flag_count":         strconv.Itoa(challenge.FlagCount),
+		"correct_flag_count": strconv.Itoa(challenge.CorrectFlagCount),
+	}
+	if challenge.Description != "" {
+		metadata["challenge_description"] = challenge.Description
+	}
+	if challenge.Difficulty != "" {
+		metadata["challenge_difficulty"] = challenge.Difficulty
+	}
+	if challenge.ContainerStatus != "" {
+		metadata["challenge_status"] = challenge.ContainerStatus
+	}
+	if len(challenge.ContainerAddr) > 0 {
+		metadata["challenge_addresses"] = strings.Join(challenge.ContainerAddr, ",")
+	}
+	return metadata
 }
 
 func tsecObjective(challenge tsec.Challenge) string {

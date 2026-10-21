@@ -19,6 +19,7 @@ type frontierFactory struct {
 	roles          []string
 	sessions       []*frontierSession
 	blockExecutors bool
+	plannerPayload string
 	plannerStarted chan struct{}
 	plannerGate    <-chan struct{}
 }
@@ -27,6 +28,7 @@ func (f *frontierFactory) NewSession(_ context.Context, req harness.SessionReque
 	session := &frontierSession{
 		role: req.SessionID, workspace: req.WorkspaceDir,
 		events: make(chan harness.AgentEvent, 8), blockPrompt: f.blockExecutors && req.SessionID != "planner",
+		plannerPayload: f.plannerPayload,
 		plannerStarted: f.plannerStarted, plannerGate: f.plannerGate,
 	}
 	f.mu.Lock()
@@ -45,6 +47,7 @@ type frontierSession struct {
 	closed           bool
 	closeOnce        sync.Once
 	blockPrompt      bool
+	plannerPayload   string
 	prompts          []string
 	plannerStarted   chan struct{}
 	plannerGate      <-chan struct{}
@@ -68,7 +71,10 @@ func (s *frontierSession) Prompt(ctx context.Context, message string) error {
 		if s.plannerGate != nil {
 			<-s.plannerGate
 		}
-		payload := `{"next_items":[{"question":"Inspect the HTTP root","target":"web","expected_evidence":"HTTP status and headers"},{"question":"Inspect the admin path","target":"web","expected_evidence":"admin response"}]}`
+		payload := s.plannerPayload
+		if payload == "" {
+			payload = `{"next_items":[{"question":"Is the HTTP root served?","target":"web","probe_key":"http.get","params":["/"],"expected_evidence":"HTTP status and headers","failure_evidence":"connection failure"},{"question":"Is an admin page present?","target":"web","probe_key":"http.get","params":["/admin"],"expected_evidence":"admin response","failure_evidence":"HTTP 404"}]}`
+		}
 		data, _ := json.Marshal(map[string]any{
 			"type": "turn_end",
 			"message": map[string]any{
@@ -152,8 +158,8 @@ func TestRunnerDispatchesFreshFrontierSessions(t *testing.T) {
 	roles := append([]string(nil), factory.roles...)
 	sessions := append([]*frontierSession(nil), factory.sessions...)
 	factory.mu.Unlock()
-	if len(roles) != 3 || roles[0] != "planner" || roles[1] != "executor-1" || roles[2] != "executor-2" {
-		t.Fatalf("roles = %v, want planner + executor-1 + executor-2", roles)
+	if len(roles) != 4 || roles[0] != "planner" || roles[1] != "executor-1" || roles[2] != "executor-2" || roles[3] != "executor-3" {
+		t.Fatalf("roles = %v, want planner + three executors", roles)
 	}
 	for _, session := range sessions {
 		session.mu.Lock()
@@ -239,8 +245,48 @@ func TestRunnerStartsExecutorOnlyAfterPlannerProducesFrontier(t *testing.T) {
 	factory.mu.Lock()
 	rolesAfterPlan := append([]string(nil), factory.roles...)
 	factory.mu.Unlock()
-	if len(rolesAfterPlan) != 3 || rolesAfterPlan[1] != "executor-1" || rolesAfterPlan[2] != "executor-2" {
+	if len(rolesAfterPlan) != 4 || rolesAfterPlan[1] != "executor-1" ||
+		rolesAfterPlan[2] != "executor-2" || rolesAfterPlan[3] != "executor-3" {
 		t.Fatalf("executor was not created after plan: %v", rolesAfterPlan)
+	}
+}
+
+func TestRunnerStartsOneExecutorPerReadyFrontier(t *testing.T) {
+	store := newMemoryStore()
+	factory := &frontierFactory{plannerPayload: `{"next_items":[]}`}
+	runner, err := harness.NewRunner(harness.Config{
+		Store: store, DefaultFactory: factory, WorkspaceRoot: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	result, err := runner.Run(context.Background(), harness.RunSpec{
+		Task:   harness.Task{ID: "frontier", Objective: "find the flag"},
+		Target: harness.Target{ID: "web", Addresses: []string{"10.0.0.5:80"}},
+		Agents: []harness.AgentSpec{{ID: "base"}},
+		Exploration: &harness.ExplorationSpec{
+			Rounds:     1,
+			MaxWorkers: 3,
+		},
+		Verifier: fakeVerifier{verdict: harness.Verdict{Success: true, Message: "verified"}},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	factory.mu.Lock()
+	roles := append([]string(nil), factory.roles...)
+	factory.mu.Unlock()
+	if len(roles) != 2 || roles[0] != "planner" || roles[1] != "executor-1" {
+		t.Fatalf("roles = %v, want planner plus exactly one executor", roles)
+	}
+	idle := 0
+	for _, session := range result.Sessions {
+		if session.Status == harness.StatusCancelled && strings.Contains(session.Error, "no ready frontier") {
+			idle++
+		}
+	}
+	if idle != 2 {
+		t.Fatalf("idle executors = %d, want executor-2 and executor-3 reported as unused", idle)
 	}
 }
 

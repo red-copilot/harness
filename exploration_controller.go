@@ -23,12 +23,17 @@ type ControllerEvent struct {
 
 // ControllerConfig defines one run-scoped blackboard.
 type ControllerConfig struct {
-	Rounds           int
-	Objective        string
-	Targets          []Target
-	MaxWorkers       int
-	Progress         func() Completion
-	AcquireExplorers func(context.Context) ([]Explorer, error)
+	Rounds                  int
+	Objective               string
+	Metadata                map[string]string
+	Targets                 []Target
+	MaxWorkers              int
+	MaxToolsPerFrontier     int
+	FrontierDurationSeconds int
+	Progress                func() Completion
+	// AcquireExplorers lazily starts exactly as many fresh-context Executors as
+	// the current batch has ready frontiers, bounded by MaxWorkers.
+	AcquireExplorers func(context.Context, int) ([]Explorer, error)
 }
 
 // Controller is the deterministic state machine. It never establishes success.
@@ -48,7 +53,19 @@ func NewController(cfg ControllerConfig, planner Planner, explorers []Explorer, 
 		cfg.Rounds = 6
 	}
 	if cfg.MaxWorkers <= 0 {
-		cfg.MaxWorkers = 2
+		cfg.MaxWorkers = DefaultExplorationWorkers
+	}
+	if cfg.MaxToolsPerFrontier <= 0 {
+		cfg.MaxToolsPerFrontier = DefaultFrontierToolLimit
+	}
+	if cfg.MaxToolsPerFrontier > MaxFrontierToolLimit {
+		cfg.MaxToolsPerFrontier = MaxFrontierToolLimit
+	}
+	if cfg.FrontierDurationSeconds <= 0 {
+		cfg.FrontierDurationSeconds = DefaultFrontierDurationSeconds
+	}
+	if cfg.FrontierDurationSeconds > MaxFrontierDurationSeconds {
+		cfg.FrontierDurationSeconds = MaxFrontierDurationSeconds
 	}
 	return &Controller{
 		cfg: cfg, planner: planner, explorers: append([]Explorer(nil), explorers...),
@@ -68,29 +85,33 @@ func (c *Controller) Run(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if len(c.openIndexes()) == 0 {
+		// The blackboard is seeded from the task brief at initialization, so
+		// round 0 still asks the Planner for sharper experiments.
+		if round == 0 || len(c.openIndexes()) == 0 {
 			c.plan(ctx, round)
 		}
 		indexes := c.openIndexes()
 		if len(indexes) == 0 {
 			return nil
 		}
-		if len(c.explorers) == 0 {
-			explorers, err := c.cfg.AcquireExplorers(ctx)
+		workers := c.cfg.MaxWorkers
+		if workers > len(indexes) {
+			workers = len(indexes)
+		}
+		// One Executor per ready frontier: the batch size drives how many
+		// sessions are started, never the other way round.
+		if workers > len(c.explorers) && c.cfg.AcquireExplorers != nil {
+			explorers, err := c.cfg.AcquireExplorers(ctx, workers)
 			if err != nil {
 				return fmt.Errorf("acquire explorers: %w", err)
 			}
-			if len(explorers) == 0 {
-				return errors.New("no executors available after initialization")
-			}
 			c.explorers = append([]Explorer(nil), explorers...)
 		}
-		workers := c.cfg.MaxWorkers
 		if workers > len(c.explorers) {
 			workers = len(c.explorers)
 		}
-		if workers > len(indexes) {
-			workers = len(indexes)
+		if workers == 0 {
+			return errors.New("no executors available after initialization")
 		}
 		batch := make([]FrontierItem, 0, workers)
 		for _, index := range indexes[:workers] {
@@ -123,7 +144,8 @@ func (c *Controller) Items() []FrontierItem {
 func (c *Controller) plan(ctx context.Context, round int) {
 	c.emitEvent("phase.changed", map[string]any{"phase": "planning", "round": round + 1})
 	request := PlanRequest{
-		Round: round, Objective: c.cfg.Objective, Targets: append([]Target(nil), c.cfg.Targets...),
+		Round: round, Objective: c.cfg.Objective, Metadata: c.cfg.Metadata,
+		Targets: append([]Target(nil), c.cfg.Targets...),
 		Facts: plannerFactDigest(c.ledger.Facts(), MaxDigestFacts), OpenItems: c.itemsAtStatus(FrontierOpen),
 		RecentItems: c.Items(), Reports: append([]ExplorerReport(nil), c.reports...),
 	}
@@ -155,7 +177,7 @@ func (c *Controller) plan(ctx context.Context, round int) {
 func (c *Controller) addSeeds(round int) {
 	validation := PlanValidation{}
 	seen := c.fingerprints()
-	for _, item := range SeedItems(c.cfg.Targets, c.cfg.Objective, round+1) {
+	for _, item := range SeedItems(c.cfg.Targets, c.cfg.Objective, c.cfg.Metadata, round+1) {
 		if _, ok := seen[item.Fingerprint]; ok {
 			validation.Dropped = append(validation.Dropped, DroppedItem{
 				Proposal: ExplorerProposal{
@@ -175,6 +197,12 @@ func (c *Controller) addValidated(validation PlanValidation, round int, parentID
 	created := make([]FrontierItem, 0, len(validation.Accepted))
 	for _, item := range validation.Accepted {
 		item.Round = round + 1
+		if item.MaxTools <= 0 {
+			item.MaxTools = c.cfg.MaxToolsPerFrontier
+		}
+		if item.MaxDurationSeconds <= 0 {
+			item.MaxDurationSeconds = c.cfg.FrontierDurationSeconds
+		}
 		if item.Fingerprint == "" {
 			item.Fingerprint = FrontierFingerprint(item)
 		}
@@ -284,6 +312,7 @@ func (c *Controller) runRound(ctx context.Context, round int, indexes []int) err
 		c.emitEvent("facts.merged", map[string]any{
 			"round": round + 1, "item_id": item.ID, "added": merged.Added,
 			"corroborated": merged.Corroborated, "contested": merged.Contested,
+			"facts": c.ledger.FactsByID(merged.Added, merged.Corroborated),
 		})
 		if len(outcome.report.Next) > 0 {
 			validation, _ := ValidatePlan(PlanOutput{NextItems: outcome.report.Next}, c.ledger, c.items, c.cfg.Targets)
@@ -341,22 +370,47 @@ func (c *Controller) emitEvent(eventType string, data map[string]any) {
 	}
 }
 
+// seed registers the brief-derived frontiers so the board has content from the
+// first event onwards and every authorized target gets one identification probe.
+func (c *Controller) seed() []FrontierItem {
+	seen := c.fingerprints()
+	created := make([]FrontierItem, 0, len(c.cfg.Targets))
+	for _, item := range SeedItems(c.cfg.Targets, c.cfg.Objective, c.cfg.Metadata, 1) {
+		if _, ok := seen[item.Fingerprint]; ok {
+			continue
+		}
+		seen[item.Fingerprint] = struct{}{}
+		c.items = append(c.items, item)
+		created = append(created, copyFrontierItem(item))
+	}
+	return created
+}
+
 func (c *Controller) emitInitialized() {
 	progress := Completion{}
 	if c.cfg.Progress != nil {
 		progress = c.cfg.Progress()
 	}
+	seeds := c.seed()
 	c.emitEvent("initialized", map[string]any{
 		"phase": "initialized", "objective": c.cfg.Objective,
+		"brief":    c.cfg.Metadata,
 		"targets":  append([]Target(nil), c.cfg.Targets...),
-		"progress": progress, "facts": []Fact{}, "frontiers": []FrontierItem{},
-		"policy": map[string]any{"rounds": c.cfg.Rounds, "max_workers": c.cfg.MaxWorkers},
+		"progress": progress, "facts": []Fact{}, "frontiers": seeds,
+		"policy": map[string]any{
+			"rounds": c.cfg.Rounds, "max_workers": c.cfg.MaxWorkers,
+			"max_tools_per_frontier":    c.cfg.MaxToolsPerFrontier,
+			"frontier_duration_seconds": c.cfg.FrontierDurationSeconds,
+			"planner_tool_limit":        DefaultPlannerToolLimit,
+			"planner_timeout_seconds":   int(DefaultPlannerTimeout.Seconds()),
+		},
 	})
 }
 
 func validExplorerVerdict(verdict string) bool {
 	switch verdict {
-	case VerdictFound, VerdictNotFound, VerdictInconclusive:
+	case VerdictSupported, VerdictRefuted, VerdictBlocked, VerdictInconclusive,
+		VerdictFound, VerdictNotFound:
 		return true
 	default:
 		return false
@@ -364,6 +418,7 @@ func validExplorerVerdict(verdict string) bool {
 }
 
 func copyFrontierItem(item FrontierItem) FrontierItem {
+	item.Params = append([]string(nil), item.Params...)
 	item.Anchors = append([]string(nil), item.Anchors...)
 	item.ReviewOf = append([]string(nil), item.ReviewOf...)
 	return item

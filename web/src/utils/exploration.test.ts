@@ -127,7 +127,12 @@ describe('extractHypothesisView', () => {
           id: 'frontier-a',
           question: 'Inspect the HTTP root',
           target_hint: 'web',
+          probe_key: 'http.get',
+          params: ['/'],
           expected_evidence: 'status and headers',
+          failure_evidence: 'HTTP 404',
+          max_tools: 5,
+          max_duration_seconds: 90,
           status: 'open',
           round: 1,
           fingerprint: 'abc',
@@ -164,11 +169,89 @@ describe('extractHypothesisView', () => {
       id: 'frontier-a',
       question: 'Inspect the HTTP root',
       targetHint: 'web',
+      probeKey: 'http.get',
+      params: ['/'],
       expectedEvidence: 'status and headers',
+      failureEvidence: 'HTTP 404',
+      maxTools: 5,
+      maxDurationSeconds: 90,
       status: 'assigned',
       executorId: 'executor-1',
     })
     expect(view.current).toEqual(['frontier-a'])
+  })
+
+  it('keeps published fact content and executor activity', () => {
+    const view = extractHypothesisView([
+      event(1, 'exploration.frontiers.created', '', {
+        round: 1,
+        items: [{
+          id: 'frontier-a',
+          question: '根路径是否返回 200？',
+          target_hint: 'web',
+          probe_key: 'http.get',
+          params: ['/'],
+          expected_evidence: '200',
+          failure_evidence: '404',
+          status: 'open',
+          round: 1,
+        }],
+      }),
+      event(2, 'exploration.item.assigned', '', {
+        round: 1,
+        item_id: 'frontier-a',
+        executor_id: 'executor-1',
+      }),
+      event(3, 'tool_execution_start', 'executor-1', {
+        toolName: 'bash',
+        args: { command: 'curl -i http://10.0.0.5/' },
+      }),
+      event(4, 'tool_execution_end', 'executor-1', { toolName: 'bash', isError: false }),
+      event(5, 'exploration.facts.merged', '', {
+        round: 1,
+        item_id: 'frontier-a',
+        added: ['f-1-1'],
+        corroborated: [],
+        contested: [],
+        facts: [{
+          id: 'f-1-1',
+          claim: '根路径返回 HTTP 200',
+          evidence: 'curl 输出 200 OK',
+          trust: 'observed',
+          contested: false,
+          targets: ['web'],
+        }],
+      }),
+    ])
+
+    expect(view.facts).toHaveLength(1)
+    expect(view.facts[0]).toMatchObject({
+      id: 'f-1-1',
+      claim: '根路径返回 HTTP 200',
+      evidence: 'curl 输出 200 OK',
+      trust: 'observed',
+      sourceItemId: 'frontier-a',
+      round: 1,
+    })
+    expect(view.activity['frontier-a'].executorId).toBe('executor-1')
+    expect(view.activity['frontier-a'].tools).toEqual([
+      { seq: 3, tool: 'bash', detail: 'curl -i http://10.0.0.5/', error: false, running: false },
+    ])
+  })
+
+  it('falls back to fact ids for runs that only published identifiers', () => {
+    const view = extractHypothesisView([
+      event(1, 'exploration.facts.merged', '', {
+        round: 2,
+        item_id: 'frontier-a',
+        added: ['f-2-1'],
+        corroborated: ['f-1-1'],
+        contested: [],
+      }),
+    ])
+    expect(view.facts.map((fact) => fact.id)).toEqual(['f-2-1', 'f-1-1'])
+    expect(view.facts[0]).toMatchObject({ claim: '', trust: 'observed', round: 2 })
+    expect(view.facts[1]).toMatchObject({ claim: '', trust: 'corroborated' })
   })
 
   it('tracks two concurrently assigned frontiers', () => {

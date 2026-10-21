@@ -95,21 +95,50 @@ Only the verifier or benchmark evaluator can produce an authoritative success ve
 
 <sub>只有验证器或基准评测器能够给出权威的成功结论。智能体消息、工具退出码和自述完成状态都只是观测，不是证明。</sub>
 
-### Hypothesis Frontier Engine · 假设前沿引擎
+### Bounded Hypothesis Frontier Engine · 有界假设前沿引擎
 
 When `Exploration` is configured, the Harness expands one agent spec into a
 read-only Planner and two fresh-context Executors:
 
-- The Planner sees only objective, authoritative progress, bounded facts,
-  recent frontier outcomes and authorized targets.
+- The Planner owns the problem statement: it sees the task brief (objective,
+  task metadata such as the challenge description, difficulty and flag counts,
+  authorized targets with their metadata), authoritative progress, bounded
+  facts, recent frontier outcomes with probe identity, and bounded report
+  summaries. The Executor never plans; it receives one frontier.
+- The Executor brief is minimal by construction: one objective, its one
+  authorized target, one frontier contract and the facts relevant to that
+  target. It cannot widen its own scope.
+- Initialization is derived from the task brief: the `initialized` event
+  publishes the objective, the task brief and one deterministic
+  `service.banner` seed frontier per authorized target (bounded by the worker
+  count). The board therefore has content before the first model call, and
+  every authorized target gets one identification probe even if the Planner
+  stalls.
 - Goal, targets, progress and the complete validated frontier batch are
   published before Executor sessions are created or assigned work.
-- The Controller validates and deduplicates frontiers, then assigns exactly one
-  frontier per Executor turn, running two Executors concurrently by default.
+- A Frontier is one closed experiment: one hypothesis, one `probe_key`, literal
+  parameters, expected evidence, failure evidence and a hard budget.
+- The Controller rejects missing evidence, open-ended probes, wordlists, CIDRs,
+  port ranges and combined target labels before dispatch.
+- The Controller deduplicates by `target + probe_key + params`, then assigns
+  exactly one frontier per Executor. Executor sessions start lazily: the run
+  opens one fresh-context Executor per ready frontier, bounded by
+  `max_workers` (default 3). A round with one frontier starts one Executor, not
+  three.
 - The Executor writes `/workspace/report.json` as its structured output.
-  Reports become untrusted facts and never become success verdicts.
+  Reports use `supported`, `refuted`, `inconclusive` or `blocked`; they become
+  untrusted facts and never become success verdicts.
+- `facts.merged` publishes fact content (claim, evidence, trust, targets), so the
+  console can render what was actually learned instead of bare ids.
 - Closed, refuted and failed frontier fingerprints are retained so later rounds
   cannot silently repeat the same action.
+
+Defaults are enforced by code while tools are running: 8 tool calls and 90
+seconds per Frontier, 30 seconds per tool call. A timeout or budget overrun
+aborts the Executor and fails the Frontier closed.
+
+Planning is also bounded: 4 read-only tool calls and 120 seconds per plan. A
+planner timeout degrades to a deterministic, single-service seed experiment.
 
 The CLI enables this path by default for single-agent YAML/JSON runs. Custom
 multi-agent runs can opt in with:
@@ -117,7 +146,7 @@ multi-agent runs can opt in with:
 ```yaml
 exploration:
   rounds: 6
-  max_workers: 2
+  max_workers: 3
 ```
 
 Planner and Executor IDs can be selected explicitly with `planner_agent_id` and
@@ -180,8 +209,12 @@ Keep the listener bound to loopback unless you configure an external security bo
 - `POST /v1/tsec/sweeps` starts a batch of TSec challenge runs.
 
 The embedded read-only observability console is served at `/` by
-`harness serve`. Its exploration view renders the blackboard left-to-right as
-`start → candidate frontiers → executor results → facts → authoritative progress`.
+`harness serve`. Its exploration view is a live node-link board that grows left
+to right from a single start node: the start fans out into frontier hypotheses,
+each frontier connects to the facts it merged, and derived frontiers link back
+to their parent or anchor. Nodes animate in as rounds advance, and clicking any
+node opens its full contract (hypothesis, probe, parameters, expected and
+failure evidence, hard budget) plus the executor's live tool activity.
 
 ## TSec · 竞赛适配
 

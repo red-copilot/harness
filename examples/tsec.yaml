@@ -12,7 +12,7 @@ agents:
     env_from: [BENCHMARK_BASE_URL, BENCHMARK_TOKEN]
 exploration:
   rounds: 6
-  max_workers: 2
+  max_workers: 3
 budget:
   wall_time_seconds: 1800
 tsec:

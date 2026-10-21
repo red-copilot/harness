@@ -24,19 +24,35 @@ const (
 	FrontierFailed   FrontierStatus = "failed"
 )
 
+const (
+	// DefaultExplorationWorkers is the number of fresh-context Executors that
+	// verify independent frontiers concurrently.
+	DefaultExplorationWorkers = 3
+
+	DefaultFrontierToolLimit       = 8
+	DefaultFrontierDurationSeconds = 90
+	MaxFrontierToolLimit           = 10
+	MaxFrontierDurationSeconds     = 300
+)
+
 // FrontierItem is a bounded exploration hint. It is never proof of progress.
 type FrontierItem struct {
-	ID               string         `json:"id"`
-	ParentID         string         `json:"parent_id,omitempty"`
-	Question         string         `json:"question"`
-	TargetHint       string         `json:"target_hint"`
-	ExpectedEvidence string         `json:"expected_evidence"`
-	Anchors          []string       `json:"anchors,omitempty"`
-	ReviewOf         []string       `json:"review_of,omitempty"`
-	Status           FrontierStatus `json:"status"`
-	AssignedTo       string         `json:"assigned_to,omitempty"`
-	Round            int            `json:"round"`
-	Fingerprint      string         `json:"fingerprint,omitempty"`
+	ID                 string         `json:"id"`
+	ParentID           string         `json:"parent_id,omitempty"`
+	Question           string         `json:"question"`
+	TargetHint         string         `json:"target_hint"`
+	ProbeKey           string         `json:"probe_key"`
+	Params             []string       `json:"params"`
+	ExpectedEvidence   string         `json:"expected_evidence"`
+	FailureEvidence    string         `json:"failure_evidence"`
+	MaxTools           int            `json:"max_tools"`
+	MaxDurationSeconds int            `json:"max_duration_seconds"`
+	Anchors            []string       `json:"anchors,omitempty"`
+	ReviewOf           []string       `json:"review_of,omitempty"`
+	Status             FrontierStatus `json:"status"`
+	AssignedTo         string         `json:"assigned_to,omitempty"`
+	Round              int            `json:"round"`
+	Fingerprint        string         `json:"fingerprint,omitempty"`
 
 	// Legacy fields retained for the deterministic projection API. The
 	// hypothesis frontier engine uses Question/TargetHint/ExpectedEvidence.

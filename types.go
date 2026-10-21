@@ -419,7 +419,10 @@ type ExplorerClaim struct {
 type ExplorerProposal struct {
 	Question         string   `json:"question"`
 	Target           string   `json:"target"`
+	ProbeKey         string   `json:"probe_key"`
+	Params           []string `json:"params"`
 	ExpectedEvidence string   `json:"expected_evidence"`
+	FailureEvidence  string   `json:"failure_evidence"`
 	Anchors          []string `json:"anchors,omitempty"`
 }
 

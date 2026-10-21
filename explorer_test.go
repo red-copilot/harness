@@ -9,7 +9,10 @@ import (
 func testItem() FrontierItem {
 	return FrontierItem{
 		ID: "i-1", Question: "which HTTP paths are exposed?", TargetHint: "10.0.0.5:80",
-		ExpectedEvidence: "HTTP status codes for discovered paths", Status: FrontierOpen, Round: 1,
+		ProbeKey: "http.get", Params: []string{"/"},
+		ExpectedEvidence: "HTTP status codes for the requested path", FailureEvidence: "HTTP 404",
+		MaxTools: DefaultFrontierToolLimit, MaxDurationSeconds: DefaultFrontierDurationSeconds,
+		Status: FrontierOpen, Round: 1,
 	}
 }
 
@@ -27,6 +30,32 @@ func TestParseExplorerReportRejectsInvalidVerdict(t *testing.T) {
 	data, _ := json.Marshal(ExplorerReport{ItemID: "i-1", Verdict: "maybe"})
 	if _, err := ParseExplorerReport(data, testItem()); err == nil || !strings.Contains(err.Error(), "verdict") {
 		t.Fatalf("err = %v, want invalid verdict", err)
+	}
+}
+
+func TestParseExplorerReportAcceptsClosedExperimentVerdicts(t *testing.T) {
+	for _, verdict := range []string{VerdictSupported, VerdictRefuted, VerdictBlocked, VerdictInconclusive} {
+		t.Run(verdict, func(t *testing.T) {
+			report := ExplorerReport{ItemID: "i-1", Verdict: verdict}
+			if verdict == VerdictSupported || verdict == VerdictRefuted {
+				report.Claims = []ExplorerClaim{{Claim: "observed result", Evidence: "bounded probe output"}}
+			}
+			data, _ := json.Marshal(report)
+			if _, err := ParseExplorerReport(data, testItem()); err != nil {
+				t.Fatalf("verdict %q rejected: %v", verdict, err)
+			}
+		})
+	}
+}
+
+func TestParseExplorerReportRequiresEvidenceForSupportedOrRefuted(t *testing.T) {
+	for _, verdict := range []string{VerdictSupported, VerdictRefuted} {
+		t.Run(verdict, func(t *testing.T) {
+			data, _ := json.Marshal(ExplorerReport{ItemID: "i-1", Verdict: verdict})
+			if _, err := ParseExplorerReport(data, testItem()); err == nil || !strings.Contains(err.Error(), "claim") {
+				t.Fatalf("err = %v, want claim evidence error", err)
+			}
+		})
 	}
 }
 
@@ -75,19 +104,65 @@ func TestParseExplorerReportCapsProposalsAtThree(t *testing.T) {
 	}
 }
 
+func TestParseExplorerReportDropsMalformedNextProposals(t *testing.T) {
+	data := []byte(`{
+		"item_id":"i-1",
+		"verdict":"supported",
+		"claims":[{"claim":"telnet reachable","evidence":"IAC banner returned"}],
+		"next":[
+			"finish telnet negotiation",
+			{"question":"Does the negotiated banner include a login prompt?","target":"10.0.0.5","probe_key":"service.banner","params":["10.0.0.5:23"],"expected_evidence":"login prompt","failure_evidence":"no prompt"}
+		]
+	}`)
+	report, err := ParseExplorerReport(data, testItem())
+	if err != nil {
+		t.Fatalf("ParseExplorerReport: %v", err)
+	}
+	if len(report.Claims) != 1 {
+		t.Fatalf("claims = %+v, want the valid claim retained", report.Claims)
+	}
+	if len(report.Next) != 1 || report.Next[0].Question == "" {
+		t.Fatalf("next = %+v, want only the valid proposal", report.Next)
+	}
+}
+
 func TestBuildExplorerBriefContainsExactlyOneItem(t *testing.T) {
 	facts := []Fact{
 		{ID: "f-1", Claim: "port 80 open", Evidence: "nmap", Trust: FactCorroborated, Targets: []string{"10.0.0.5"}},
 		{ID: "f-2", Claim: "unrelated", Evidence: "x", Trust: FactObserved, Targets: []string{"other"}},
 	}
-	brief := BuildExplorerBrief("find the flag", []Target{{ID: "web", Addresses: []string{"10.0.0.5:80"}}}, testItem(), facts)
-	for _, want := range []string{"Task objective: find the flag", "which HTTP paths are exposed?", "report.json", "corroborated", "10.0.0.5"} {
+	item := testItem()
+	item.ProbeKey = "http.get"
+	item.Params = []string{"/"}
+	item.FailureEvidence = "HTTP 404"
+	brief := BuildExplorerBrief("find the flag", []Target{{ID: "web", Addresses: []string{"10.0.0.5:80"}}}, item, facts)
+	for _, want := range []string{
+		"Task objective: find the flag", "which HTTP paths are exposed?", "http.get", "HTTP 404",
+		"report.json", "corroborated", "10.0.0.5", "8 tool", "90s",
+		"one matching tool reference", "only when a concrete candidate flag exists",
+		`"next":[{"question"`, "简体中文", "xxd -r -p",
+	} {
 		if !strings.Contains(brief, want) {
 			t.Fatalf("brief missing %q:\n%s", want, brief)
 		}
 	}
 	if strings.Contains(brief, "unrelated") {
 		t.Fatalf("brief leaked unrelated fact:\n%s", brief)
+	}
+}
+
+func TestBuildExplorerBriefShowsOnlyTheAssignedTarget(t *testing.T) {
+	brief := BuildExplorerBrief(
+		"find the flag",
+		[]Target{
+			{ID: "web", Addresses: []string{"10.0.0.5:80"}},
+			{ID: "files", Addresses: []string{"10.0.0.6:21"}},
+		},
+		testItem(),
+		nil,
+	)
+	if strings.Contains(brief, "10.0.0.6") || strings.Contains(brief, "files") {
+		t.Fatalf("brief exposed an unassigned target:\n%s", brief)
 	}
 }
 

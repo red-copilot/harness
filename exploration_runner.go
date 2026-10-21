@@ -45,8 +45,12 @@ func resolveExplorationAgents(spec RunSpec) (AgentSpec, []AgentSpec, error) {
 
 	executorIDs := spec.Exploration.ExecutorAgentIDs
 	if len(executorIDs) == 0 {
-		executors := make([]AgentSpec, 0, 2)
-		for index := 1; index <= 2; index++ {
+		workers := spec.Exploration.MaxWorkers
+		if workers <= 0 {
+			workers = DefaultExplorationWorkers
+		}
+		executors := make([]AgentSpec, 0, workers)
+		for index := 1; index <= workers; index++ {
 			executor := cloneAgentSpec(base)
 			executor.ID = fmt.Sprintf("executor-%d", index)
 			executors = append(executors, executor)
@@ -126,13 +130,15 @@ func (r *Runner) runExplorationSessions(
 
 	explorers := make([]Explorer, 0, len(executorSpecs))
 	failedResults := make([]SessionResult, 0)
-	executorsAcquired := false
-	acquireExplorers := func(acquireCtx context.Context) ([]Explorer, error) {
-		if executorsAcquired {
-			return explorers, nil
+	// Executor sessions start lazily: one per ready frontier, up to the pool cap.
+	nextExecutorSpec := 0
+	acquireExplorers := func(acquireCtx context.Context, need int) ([]Explorer, error) {
+		if need > len(executorSpecs) {
+			need = len(executorSpecs)
 		}
-		executorsAcquired = true
-		for _, executorSpec := range executorSpecs {
+		for len(explorers) < need && nextExecutorSpec < len(executorSpecs) {
+			executorSpec := executorSpecs[nextExecutorSpec]
+			nextExecutorSpec++
 			handle, startErr := r.startExplorationSession(acquireCtx, run, redactor, spec, executorSpec, target, runRoot, taskDir, skillsDir)
 			if startErr != nil {
 				failedResults = append(failedResults, SessionResult{
@@ -147,18 +153,19 @@ func (r *Runner) runExplorationSessions(
 			handles = append(handles, handle)
 			explorers = append(explorers, &SessionExplorer{
 				Session: handle.session, IDValue: handle.id, WorkspaceDir: sessionWorkspace(runRoot, handle.id),
-				ToolLimit: 40, Sink: r.sessionEventSink(run, redactor, handle, spec.Budget),
+				Sink: r.sessionEventSink(run, redactor, handle, spec.Budget),
 			})
 		}
 		if len(explorers) == 0 {
 			return nil, fmt.Errorf("no explorer sessions could be started")
 		}
-		return explorers, nil
+		return append([]Explorer(nil), explorers...), nil
 	}
 
 	controllerCfg := ControllerConfig{
 		Rounds: spec.Exploration.Rounds, Objective: spec.Task.Objective,
-		Targets: taskTargets(spec.Task, target), MaxWorkers: spec.Exploration.MaxWorkers,
+		Metadata: spec.Task.Metadata,
+		Targets:  taskTargets(spec.Task, target), MaxWorkers: spec.Exploration.MaxWorkers,
 		Progress: progress.Snapshot, AcquireExplorers: acquireExplorers,
 	}
 	controller := NewController(controllerCfg, planner, nil, func(event ControllerEvent) {
@@ -180,13 +187,14 @@ func (r *Runner) runExplorationSessions(
 	for _, handle := range handles {
 		results = append(results, r.finishExplorationSession(ctx, run, redactor, handle, controllerErr))
 	}
-	if !executorsAcquired {
-		for _, executorSpec := range executorSpecs {
-			results = append(results, SessionResult{
-				ID: executorSpec.ID, Status: StatusCancelled,
-				Error: "executor not started: no ready frontier",
-			})
+	for index, executorSpec := range executorSpecs {
+		if index < nextExecutorSpec {
+			continue
 		}
+		results = append(results, SessionResult{
+			ID: executorSpec.ID, Status: StatusCancelled,
+			Error: "executor not started: no ready frontier",
+		})
 	}
 	results = append(results, failedResults...)
 	return results

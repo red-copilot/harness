@@ -45,6 +45,27 @@ func (l *FactLedger) Facts() []Fact {
 	return out
 }
 
+// FactsByID returns copies of the named facts, skipping unknown ids and
+// duplicates. It is the bounded projection used for UI/audit events.
+func (l *FactLedger) FactsByID(ids ...[]string) []Fact {
+	out := make([]Fact, 0, 8)
+	seen := map[string]struct{}{}
+	for _, group := range ids {
+		for _, id := range group {
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			fact, ok := l.Get(id)
+			if !ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			out = append(out, fact)
+		}
+	}
+	return out
+}
+
 // Get returns a copy of one fact.
 func (l *FactLedger) Get(id string) (Fact, bool) {
 	fact, ok := l.byID[id]

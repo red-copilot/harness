@@ -1,8 +1,8 @@
 import { Card, Col, Row, Space, Statistic, Tag, Typography } from 'antd'
 import { useMemo } from 'react'
-import type { ReactNode } from 'react'
 import type { EventRecord } from '@/api/types'
 import { EmptyState } from '@/components/EmptyState'
+import { ExplorationGraph } from '@/components/ExplorationGraph'
 import { TimeText } from '@/components/TimeText'
 import { useI18n } from '@/i18n/I18nContext'
 import { extractExplorationCycles, extractHypothesisView } from '@/utils/exploration'
@@ -84,7 +84,10 @@ function HypothesisTimeline({ view }: { view: HypothesisView }) {
               })
             : t('run.hypothesis.note')}
         </Typography.Paragraph>
-        <HypothesisExplorationGraph view={view} />
+        <Typography.Paragraph type="secondary" className="exploration-note">
+          {t('run.graph.legend')}
+        </Typography.Paragraph>
+        <ExplorationGraph view={view} />
         <div className="exploration-cycles">
           <Typography.Title level={5}>{t('run.hypothesis.executionDetails')}</Typography.Title>
           {view.attempts.slice(0, 20).map((attempt) => (
@@ -94,144 +97,6 @@ function HypothesisTimeline({ view }: { view: HypothesisView }) {
       </Card>
     </div>
   )
-}
-
-function HypothesisExplorationGraph({ view }: { view: HypothesisView }) {
-  const { t } = useI18n()
-  const factIDs = [...new Set(view.attempts.flatMap((attempt) => [
-    ...(attempt.facts?.added ?? []),
-    ...(attempt.facts?.corroborated ?? []),
-  ]))]
-
-  return (
-    <div className="exploration-flow-scroll" data-testid="hypothesis-exploration-graph">
-      <div className="exploration-flow">
-        <FlowStage title={t('run.hypothesis.graphStart')} count={1} tone="start">
-          <FlowNode tone="start">
-            <Typography.Text strong>{view.objective || '—'}</Typography.Text>
-            <div className="exploration-flow-meta">
-              <Tag color="processing">{view.phase || 'initialized'}</Tag>
-              <Tag>{view.progress ? `${view.progress.current}/${view.progress.total}` : '0/0'}</Tag>
-            </div>
-            <Space wrap size={[4, 4]}>
-              {(view.targets ?? []).map((target) => (
-                <Tag key={target.id}>{target.id} · {target.addresses.join(', ')}</Tag>
-              ))}
-            </Space>
-          </FlowNode>
-        </FlowStage>
-
-        <FlowArrow />
-
-        <FlowStage title={t('run.hypothesis.graphFrontiers')} count={view.frontiers.length} tone="frontier">
-          {view.frontiers.length ? view.frontiers.slice(0, 20).map((frontier) => (
-            <FlowNode key={frontier.id} tone="frontier" active={view.current.includes(frontier.id)}>
-              <Space wrap size={[4, 4]}>
-                <Tag color={frontier.status === 'failed' ? 'error' : frontier.status === 'done' ? 'success' : view.current.includes(frontier.id) ? 'processing' : 'default'}>
-                  {frontier.status}
-                </Tag>
-                {frontier.round ? <Tag>{t('run.hypothesis.round', { round: frontier.round })}</Tag> : null}
-                {view.current.includes(frontier.id) ? <Tag color="processing">{t('run.hypothesis.current')}</Tag> : null}
-              </Space>
-              <Typography.Text strong>{frontier.question}</Typography.Text>
-              <Typography.Text type="secondary" ellipsis={{ tooltip: frontier.targetHint }}>
-                {frontier.targetHint || '—'}
-              </Typography.Text>
-              <Typography.Text type="secondary" ellipsis={{ tooltip: frontier.expectedEvidence }}>
-                {frontier.expectedEvidence || '—'}
-              </Typography.Text>
-            </FlowNode>
-          )) : (
-            <FlowPlaceholder text={t('run.hypothesis.waitingForPlan')} />
-          )}
-        </FlowStage>
-
-        <FlowArrow />
-
-        <FlowStage title={t('run.hypothesis.graphResults')} count={view.attempts.length} tone="result">
-          {view.attempts.length ? view.attempts.slice(0, 20).map((attempt) => (
-            <FlowNode key={attempt.itemId} tone="result" active={view.current.includes(attempt.itemId)}>
-              <Space wrap size={[4, 4]}>
-                <Tag color={attempt.status === 'failed' ? 'error' : attempt.status === 'done' ? 'success' : 'processing'}>
-                  {attempt.verdict || attempt.status}
-                </Tag>
-                {attempt.executorId ? <Tag>{attempt.executorId}</Tag> : null}
-              </Space>
-              <Typography.Text code>{attempt.itemId}</Typography.Text>
-            </FlowNode>
-          )) : <FlowPlaceholder text={t('run.hypothesis.waitingForResult')} />}
-        </FlowStage>
-
-        <FlowArrow />
-
-        <FlowStage title={t('run.hypothesis.graphFacts')} count={factIDs.length} tone="fact">
-          {factIDs.length ? factIDs.map((factID) => (
-            <FlowNode key={factID} tone="fact">
-              <Typography.Text code>{factID}</Typography.Text>
-            </FlowNode>
-          )) : <FlowPlaceholder text={t('run.hypothesis.waitingForFacts')} />}
-        </FlowStage>
-
-        <FlowArrow />
-
-        <FlowStage title={t('run.hypothesis.graphAuthority')} count={view.progress?.current ?? 0} tone="authority">
-          <FlowNode tone="authority">
-            <Typography.Text type="secondary">{t('run.hypothesis.progress')}</Typography.Text>
-            <Typography.Title level={3}>
-              {view.progress ? `${view.progress.current}/${view.progress.total}` : '0/0'}
-            </Typography.Title>
-            <Typography.Text type="secondary">{t('run.hypothesis.authorityNote')}</Typography.Text>
-          </FlowNode>
-        </FlowStage>
-      </div>
-    </div>
-  )
-}
-
-function FlowStage({
-  title,
-  count,
-  tone,
-  children,
-}: {
-  title: string
-  count: number
-  tone: string
-  children: ReactNode
-}) {
-  return (
-    <section className={`exploration-flow-stage exploration-flow-stage-${tone}`}>
-      <div className="exploration-flow-stage-head">
-        <Typography.Text strong>{title}</Typography.Text>
-        <Tag>{count}</Tag>
-      </div>
-      <div className="exploration-flow-stage-body">{children}</div>
-    </section>
-  )
-}
-
-function FlowNode({
-  tone,
-  active = false,
-  children,
-}: {
-  tone: string
-  active?: boolean
-  children: ReactNode
-}) {
-  return (
-    <div className={`exploration-flow-node exploration-flow-node-${tone}${active ? ' exploration-flow-node-active' : ''}`}>
-      {children}
-    </div>
-  )
-}
-
-function FlowPlaceholder({ text }: { text: string }) {
-  return <div className="exploration-flow-placeholder">{text}</div>
-}
-
-function FlowArrow() {
-  return <div className="exploration-flow-arrow" aria-hidden="true">→</div>
 }
 
 function HypothesisAttemptCard({ attempt }: { attempt: HypothesisAttempt }) {
