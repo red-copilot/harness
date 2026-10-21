@@ -412,6 +412,10 @@ func (s *session) readStdout() {
 	for {
 		line, err := s.stdout.ReadBytes('\n')
 		if len(line) > 0 {
+			if line[len(line)-1] != '\n' {
+				s.emitEvent(harness.AgentEvent{Type: "rpc.malformed", Data: mustRaw(map[string]string{"error": "strict LF framing required", "line": string(line)})})
+				return
+			}
 			s.handleStdoutLine(line)
 		}
 		if err != nil {
