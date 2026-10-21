@@ -44,6 +44,14 @@ func (s *spyStore) SaveVerdict(_ context.Context, record VerdictRecord) error {
 	s.verdicts = append(s.verdicts, record)
 	return nil
 }
+func (s *spyStore) Finalize(_ context.Context, record FinalizationRecord) (Event, error) {
+	s.runs = append(s.runs, record.Run)
+	if record.Verdict != nil {
+		s.verdicts = append(s.verdicts, *record.Verdict)
+	}
+	s.events = append(s.events, record.Event)
+	return record.Event, nil
+}
 func (s *spyStore) SaveBranch(_ context.Context, branch Branch) error {
 	s.branches = append(s.branches, branch)
 	return nil
@@ -107,6 +115,13 @@ func TestRedactingStoreRedactsEveryWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := store.UpdateKnowledge(ctx, Knowledge{RunID: "run-1", Statement: secret}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Finalize(ctx, FinalizationRecord{
+		Run:     RunRecord{ID: "run-1", Error: secret},
+		Verdict: &VerdictRecord{RunID: "run-1", Message: secret, Evidence: json.RawMessage(`{"note":"` + secret + `"}`)},
+		Event:   Event{RunID: "run-1", Data: json.RawMessage(`{"error":"` + secret + `"}`)},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if payload := spy.payload(); strings.Contains(payload, secret) {

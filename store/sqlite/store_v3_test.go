@@ -3,6 +3,7 @@ package sqlite_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -131,11 +132,18 @@ func TestKnowledgeVersionsAreAppendOnly(t *testing.T) {
 		t.Fatalf("latest = %+v", items)
 	}
 	var versions int
-	if err := store.DB().QueryRow(`SELECT COUNT(*) FROM knowledge_versions WHERE run_id='run' AND knowledge_id='k1'`).Scan(&versions); err != nil {
+	if err := store.DB().QueryRow(`SELECT COUNT(*) FROM knowledge WHERE run_id='run' AND id='k1'`).Scan(&versions); err != nil {
 		t.Fatal(err)
 	}
 	if versions != 2 {
 		t.Fatalf("versions = %d, want 2", versions)
+	}
+	// A published version is immutable: rewriting it must fail rather than
+	// silently replace audit history.
+	item.Version = 1
+	item.Statement = "rewritten"
+	if err := store.UpdateKnowledge(ctx, item); err == nil {
+		t.Fatal("rewriting a published knowledge version was accepted")
 	}
 }
 
@@ -212,4 +220,101 @@ func TestArtifactOpenRejectsUnknownAndTraversalID(t *testing.T) {
 		}
 	}
 	_ = os.Remove(filepath.Join(t.TempDir(), "unused"))
+}
+
+// TestOpenRejectsNewerSchemaVersion: a database written by a newer build must
+// not be silently downgraded and reinterpreted by an older one.
+func TestOpenRejectsNewerSchemaVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "harness.db")
+	store, err := sqlite.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().Exec(`UPDATE schema_meta SET version=99`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.Open(path); err == nil || !strings.Contains(err.Error(), "newer") {
+		t.Fatalf("Open err = %v, want newer-schema rejection", err)
+	}
+}
+
+// TestFinalizeCommitsTerminalStateTogether: the terminal Run record, its
+// verdict and run.finalized are one canonical write, so an audit reader can
+// never observe one without the others.
+func TestFinalizeCommitsTerminalStateTogether(t *testing.T) {
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "harness.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	if err := store.CreateRun(ctx, harness.RunRecord{ID: "run-1", Status: harness.StatusRunning, CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	event, err := store.Finalize(ctx, harness.FinalizationRecord{
+		Run:     harness.RunRecord{ID: "run-1", Status: harness.StatusSucceeded, Result: []byte(`{"status":"succeeded"}`), FinishedAt: &now},
+		Verdict: &harness.VerdictRecord{RunID: "run-1", Success: true, Score: 0.9, Message: "verified", CreatedAt: now},
+		Event:   harness.Event{RunID: "run-1", Source: "harness", Type: "run.finalized", Time: now},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Seq == 0 {
+		t.Fatal("finalize did not assign an event sequence")
+	}
+	record, err := store.GetRun(ctx, "run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Status != harness.StatusSucceeded || record.FinishedAt == nil || string(record.Result) != `{"status":"succeeded"}` {
+		t.Fatalf("run record = %+v", record)
+	}
+	verdict, err := store.GetVerdict(ctx, "run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !verdict.Success || verdict.Message != "verified" {
+		t.Fatalf("verdict = %+v", verdict)
+	}
+	events, err := store.ListEvents(ctx, "run-1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Type != "run.finalized" {
+		t.Fatalf("events = %+v", events)
+	}
+}
+
+// TestFinalizeRollsBackOnMissingRun: a failed terminal write must not leave
+// the verdict behind as a partial audit record.
+func TestFinalizeRollsBackOnMissingRun(t *testing.T) {
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "harness.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	_, err = store.Finalize(ctx, harness.FinalizationRecord{
+		Run:     harness.RunRecord{ID: "missing", Status: harness.StatusSucceeded, FinishedAt: &now},
+		Verdict: &harness.VerdictRecord{RunID: "missing", Success: true, Message: "verified", CreatedAt: now},
+		Event:   harness.Event{RunID: "missing", Source: "harness", Type: "run.finalized", Time: now},
+	})
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("Finalize err = %v, want not found", err)
+	}
+	if _, err := store.GetVerdict(ctx, "missing"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("partial verdict survived rollback: %v", err)
+	}
+	events, err := store.ListEvents(ctx, "missing", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("partial events survived rollback: %+v", events)
+	}
 }

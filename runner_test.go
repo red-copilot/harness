@@ -227,6 +227,14 @@ func (s *failingEventStore) AppendEvent(ctx context.Context, event harness.Event
 	return s.memoryStore.AppendEvent(ctx, event)
 }
 
+// The finalization event rides in the same transaction as the terminal record.
+func (s *failingEventStore) Finalize(ctx context.Context, record harness.FinalizationRecord) (harness.Event, error) {
+	if record.Event.Type == s.failType {
+		return harness.Event{}, errors.New("event store unavailable")
+	}
+	return s.memoryStore.Finalize(ctx, record)
+}
+
 func TestConfigWiresProcessStarter(t *testing.T) {
 	store := newMemoryStore()
 	if _, err := harness.NewRunner(harness.Config{Store: store, WorkspaceRoot: t.TempDir(), SkipRecovery: true}); err == nil || !strings.Contains(err.Error(), "starter") {

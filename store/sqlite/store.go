@@ -65,9 +65,29 @@ func (s *Store) configure() error {
 func (s *Store) migrate() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	statements := []string{
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin migration: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, stmt := range []string{
 		`CREATE TABLE IF NOT EXISTS schema_meta (version INTEGER NOT NULL)`,
 		`INSERT INTO schema_meta(version) SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM schema_meta)`,
+	} {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("prepare schema metadata: %w", err)
+		}
+	}
+	var version int
+	if err := tx.QueryRowContext(ctx, `SELECT version FROM schema_meta LIMIT 1`).Scan(&version); err != nil {
+		return fmt.Errorf("read schema version: %w", err)
+	}
+	// A newer database belongs to a newer build. Migrating it down would
+	// silently reinterpret its records, so refuse instead.
+	if version > schemaVersion {
+		return fmt.Errorf("database schema version %d is newer than supported version %d", version, schemaVersion)
+	}
+	for _, stmt := range []string{
 		`CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, spec BLOB, result BLOB, error TEXT NOT NULL DEFAULT '', sweep_id TEXT NOT NULL DEFAULT '', metadata BLOB, created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT)`,
 		`CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, session_id TEXT NOT NULL DEFAULT '', source TEXT NOT NULL, type TEXT NOT NULL, time TEXT NOT NULL, data BLOB, raw BLOB, schema_version INTEGER NOT NULL DEFAULT 1)`,
 		`CREATE INDEX IF NOT EXISTS events_run_seq ON events(run_id, seq)`,
@@ -82,21 +102,59 @@ func (s *Store) migrate() error {
 		`CREATE TABLE IF NOT EXISTS artifacts (run_id TEXT NOT NULL, id TEXT NOT NULL, attempt_id TEXT NOT NULL, session_id TEXT NOT NULL, name TEXT NOT NULL, media_type TEXT NOT NULL, size INTEGER NOT NULL, sha256 TEXT NOT NULL, redacted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, PRIMARY KEY(run_id, id, attempt_id, name))`,
 		`CREATE TABLE IF NOT EXISTS knowledge (run_id TEXT NOT NULL, id TEXT NOT NULL, task_id TEXT NOT NULL, version INTEGER NOT NULL, payload BLOB NOT NULL, PRIMARY KEY(run_id, id, version))`,
 		`CREATE TABLE IF NOT EXISTS knowledge_sources (run_id TEXT NOT NULL, knowledge_id TEXT NOT NULL, version INTEGER NOT NULL, source BLOB NOT NULL, PRIMARY KEY(run_id, knowledge_id, version, source))`,
-		`CREATE TABLE IF NOT EXISTS knowledge_versions (run_id TEXT NOT NULL, knowledge_id TEXT NOT NULL, version INTEGER NOT NULL, payload BLOB NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(run_id, knowledge_id, version))`,
-	}
-	for _, stmt := range statements {
-		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+	} {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("migrate v3: %w", err)
 		}
 	}
-	// Additive upgrades for databases created by pre-v3 binaries.
-	_, _ = s.db.ExecContext(ctx, `ALTER TABLE events ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1`)
-	_, _ = s.db.ExecContext(ctx, `ALTER TABLE exploration_branches ADD COLUMN payload BLOB`)
-	_, _ = s.db.ExecContext(ctx, `ALTER TABLE exploration_attempts ADD COLUMN payload BLOB`)
-	_, _ = s.db.ExecContext(ctx, `ALTER TABLE exploration_observations ADD COLUMN payload BLOB`)
-	_, err := s.db.ExecContext(ctx, `UPDATE schema_meta SET version=?`, schemaVersion)
-	if err != nil {
+	// Additive upgrades for databases created by pre-v3 binaries. A column is
+	// added only when it is missing, so a genuine failure is reported instead of
+	// being swallowed as "duplicate column".
+	for _, column := range []struct{ table, name, ddl string }{
+		{"events", "schema_version", `ALTER TABLE events ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1`},
+		{"exploration_branches", "payload", `ALTER TABLE exploration_branches ADD COLUMN payload BLOB`},
+		{"exploration_attempts", "payload", `ALTER TABLE exploration_attempts ADD COLUMN payload BLOB`},
+		{"exploration_observations", "payload", `ALTER TABLE exploration_observations ADD COLUMN payload BLOB`},
+	} {
+		if err := ensureColumn(ctx, tx, column.table, column.name, column.ddl); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE schema_meta SET version=?`, schemaVersion); err != nil {
 		return fmt.Errorf("update schema version: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration: %w", err)
+	}
+	return nil
+}
+
+func ensureColumn(ctx context.Context, tx *sql.Tx, table, column, ddl string) error {
+	rows, err := tx.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return fmt.Errorf("inspect table %s: %w", table, err)
+	}
+	defer rows.Close()
+	present := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return fmt.Errorf("inspect table %s: %w", table, err)
+		}
+		if name == column {
+			present = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("inspect table %s: %w", table, err)
+	}
+	if present {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, ddl); err != nil {
+		return fmt.Errorf("migrate column %s.%s: %w", table, column, err)
 	}
 	return nil
 }
@@ -225,6 +283,50 @@ func (s *Store) SaveVerdict(ctx context.Context, record harness.VerdictRecord) e
 	_, err := s.db.ExecContext(ctx, `INSERT INTO verdicts(run_id,success,score,message,evidence,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET success=excluded.success,score=excluded.score,message=excluded.message,evidence=excluded.evidence,created_at=excluded.created_at`, record.RunID, record.Success, record.Score, record.Message, nullableJSON(record.Evidence), formatTime(record.CreatedAt))
 	return err
 }
+
+// Finalize commits the terminal Run record, its verdict and the run.finalized
+// event in one transaction, so the audit can never retain a terminal Run
+// without its verdict or its finalization event.
+func (s *Store) Finalize(ctx context.Context, record harness.FinalizationRecord) (harness.Event, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return harness.Event{}, fmt.Errorf("finalize run: %w", err)
+	}
+	defer tx.Rollback()
+	if record.Verdict != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO verdicts(run_id,success,score,message,evidence,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET success=excluded.success,score=excluded.score,message=excluded.message,evidence=excluded.evidence,created_at=excluded.created_at`, record.Verdict.RunID, record.Verdict.Success, record.Verdict.Score, record.Verdict.Message, nullableJSON(record.Verdict.Evidence), formatTime(record.Verdict.CreatedAt)); err != nil {
+			return harness.Event{}, fmt.Errorf("finalize verdict: %w", err)
+		}
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE runs SET status=?, spec=?, result=?, error=?, metadata=?, started_at=?, finished_at=? WHERE id=?`, record.Run.Status, nullableJSON(record.Run.Spec), nullableJSON(record.Run.Result), record.Run.Error, nullableJSON(record.Run.Metadata), formatTimePtr(record.Run.StartedAt), formatTimePtr(record.Run.FinishedAt), record.Run.ID)
+	if err != nil {
+		return harness.Event{}, fmt.Errorf("finalize run: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return harness.Event{}, fmt.Errorf("finalize run: %w", err)
+	}
+	if rows == 0 {
+		return harness.Event{}, fmt.Errorf("run %q not found", record.Run.ID)
+	}
+	event := record.Event
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = 1
+	}
+	inserted, err := tx.ExecContext(ctx, `INSERT INTO events(run_id,session_id,source,type,time,data,raw,schema_version) VALUES(?,?,?,?,?,?,?,?)`, event.RunID, event.SessionID, event.Source, event.Type, formatTime(event.Time), nullableJSON(event.Data), nullableJSON(event.Raw), event.SchemaVersion)
+	if err != nil {
+		return harness.Event{}, fmt.Errorf("finalize event: %w", err)
+	}
+	event.Seq, err = inserted.LastInsertId()
+	if err != nil {
+		return harness.Event{}, fmt.Errorf("finalize event: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return harness.Event{}, fmt.Errorf("commit finalization: %w", err)
+	}
+	return event, nil
+}
+
 func (s *Store) GetVerdict(ctx context.Context, runID string) (harness.VerdictRecord, error) {
 	var record harness.VerdictRecord
 	var evidence []byte
@@ -297,13 +399,14 @@ func (s *Store) UpdateKnowledge(ctx context.Context, knowledge harness.Knowledge
 func (s *Store) saveKnowledgeVersion(ctx context.Context, knowledge harness.Knowledge) error {
 	payload, _ := json.Marshal(knowledge)
 	sources, _ := json.Marshal(knowledge.Sources)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO knowledge(run_id,id,task_id,version,payload) VALUES(?,?,?,?,?) ON CONFLICT(run_id,id,version) DO UPDATE SET payload=excluded.payload`, knowledge.RunID, knowledge.ID, knowledge.TaskID, knowledge.Version, payload)
+	// Knowledge versions are immutable audit records: a version is written once
+	// and any later change must arrive as a higher version.
+	result, err := s.db.ExecContext(ctx, `INSERT INTO knowledge(run_id,id,task_id,version,payload) VALUES(?,?,?,?,?) ON CONFLICT(run_id,id,version) DO NOTHING`, knowledge.RunID, knowledge.ID, knowledge.TaskID, knowledge.Version, payload)
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO knowledge_versions(run_id,knowledge_id,version,payload,created_at) VALUES(?,?,?,?,?) ON CONFLICT(run_id,knowledge_id,version) DO NOTHING`, knowledge.RunID, knowledge.ID, knowledge.Version, payload, formatTime(time.Now().UTC()))
-	if err != nil {
-		return err
+	if rows, err := result.RowsAffected(); err == nil && rows == 0 {
+		return fmt.Errorf("knowledge %s version %d is immutable", knowledge.ID, knowledge.Version)
 	}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO knowledge_sources(run_id,knowledge_id,version,source) VALUES(?,?,?,?) ON CONFLICT(run_id,knowledge_id,version,source) DO NOTHING`, knowledge.RunID, knowledge.ID, knowledge.Version, sources)
 	return err

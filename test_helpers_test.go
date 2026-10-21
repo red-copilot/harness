@@ -55,6 +55,23 @@ func (s *memoryStore) UpdateRun(_ context.Context, record harness.RunRecord) err
 	s.statusLog = append(s.statusLog, record.Status)
 	return nil
 }
+func (s *memoryStore) Finalize(_ context.Context, record harness.FinalizationRecord) (harness.Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runs[record.Run.ID] = record.Run
+	s.statusLog = append(s.statusLog, record.Run.Status)
+	if record.Verdict != nil {
+		s.verdicts[record.Verdict.RunID] = *record.Verdict
+	}
+	event := record.Event
+	event.Seq = int64(len(s.events) + 1)
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = 1
+	}
+	s.events = append(s.events, event)
+	return event, nil
+}
+
 func (s *memoryStore) GetRun(_ context.Context, id string) (harness.RunRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

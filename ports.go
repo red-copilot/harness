@@ -94,6 +94,15 @@ type KnowledgeStore interface {
 	QueryKnowledge(context.Context, KnowledgeQuery) ([]Knowledge, error)
 }
 
+// FinalizationRecord is the terminal audit write. The Run record, its verdict
+// and the run.finalized event are committed together so the audit can never
+// show a terminal Run without its verdict, or the reverse.
+type FinalizationRecord struct {
+	Run     RunRecord
+	Verdict *VerdictRecord
+	Event   Event
+}
+
 // Store is the canonical persistence port. It composes the four planes so a
 // consumer can depend on the narrowest one it actually needs.
 type Store interface {
@@ -101,6 +110,9 @@ type Store interface {
 	AuditStore
 	ExplorationStore
 	KnowledgeStore
+	// Finalize commits the terminal record atomically and returns the stored
+	// event with its assigned sequence.
+	Finalize(context.Context, FinalizationRecord) (Event, error)
 	Close() error
 }
 

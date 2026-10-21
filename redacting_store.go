@@ -112,6 +112,26 @@ func (s *redactingStore) GetVerdict(ctx context.Context, runID string) (VerdictR
 	return s.inner.GetVerdict(ctx, runID)
 }
 
+func (s *redactingStore) Finalize(ctx context.Context, record FinalizationRecord) (Event, error) {
+	record.Run = s.redactRun(record.Run)
+	if record.Verdict != nil {
+		redactor := s.redactor(record.Verdict.RunID)
+		verdict := *record.Verdict
+		verdict.Message = redactor.Redact(verdict.Message)
+		verdict.Evidence = redactJSONPreserve(redactor, verdict.Evidence)
+		record.Verdict = &verdict
+	}
+	redactor := s.redactor(record.Event.RunID)
+	shared := len(record.Event.Raw) > 0 && string(record.Event.Raw) == string(record.Event.Data)
+	record.Event.Data = redactJSONPreserve(redactor, record.Event.Data)
+	if shared {
+		record.Event.Raw = record.Event.Data
+	} else if len(record.Event.Raw) > 0 {
+		record.Event.Raw = redactJSONPreserve(redactor, record.Event.Raw)
+	}
+	return s.inner.Finalize(ctx, record)
+}
+
 func (s *redactingStore) SaveBranch(ctx context.Context, branch Branch) error {
 	return s.inner.SaveBranch(ctx, redactBranch(s.redactor(branch.RunID), branch))
 }

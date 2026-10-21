@@ -203,13 +203,6 @@ func (r *Run) finishExecution(status Status, err error, verdict *Verdict, state 
 	if verdict != nil {
 		verdict.Message = redactor.Redact(verdict.Message)
 		verdict.Evidence = redactJSONPreserve(redactor, verdict.Evidence)
-		if saveErr := r.runner.store.SaveVerdict(context.Background(), VerdictRecord{RunID: r.ID, Success: verdict.Success, Score: verdict.Score, Message: verdict.Message, Evidence: verdict.Evidence, CreatedAt: now}); saveErr != nil {
-			status = StatusFailed
-			result.Status = StatusFailed
-			err = saveErr
-			errorText = redactError(redactor, saveErr)
-			result.Error = errorText
-		}
 	}
 	r.mu.RLock()
 	controlErr := r.err
@@ -224,39 +217,48 @@ func (r *Run) finishExecution(status Status, err error, verdict *Verdict, state 
 		}
 	}
 	result = redactResult(redactor, result)
-	resultJSON := mustJSON(result)
 	record, getErr := r.runner.store.GetRun(context.Background(), r.ID)
-	if getErr == nil {
-		record.Status = status
-		record.Result = resultJSON
-		record.Error = errorText
-		record.FinishedAt = &now
-		if updateErr := r.runner.store.UpdateRun(context.Background(), record); updateErr != nil {
-			status = StatusFailed
-			result.Status = StatusFailed
-			result.Error = redactError(redactor, updateErr)
-			err = updateErr
-		}
-	} else if status == StatusSucceeded {
+	if getErr != nil {
 		status = StatusFailed
 		result.Status = StatusFailed
 		result.Error = redactError(redactor, getErr)
 		err = getErr
+		record = RunRecord{ID: r.ID}
 	}
-	if emitErr := r.runner.emitEvent(r, redactor, Event{RunID: r.ID, Source: "harness", Type: "run.finalized", Time: now, Data: mustJSON(map[string]string{"status": string(status), "error": result.Error})}); emitErr != nil {
+	record.Status = status
+	record.Result = mustJSON(result)
+	record.Error = result.Error
+	record.FinishedAt = &now
+	var verdictRecord *VerdictRecord
+	if verdict != nil {
+		verdictRecord = &VerdictRecord{RunID: r.ID, Success: verdict.Success, Score: verdict.Score, Message: verdict.Message, Evidence: verdict.Evidence, CreatedAt: now}
+	}
+	// The Run record, its verdict and run.finalized are one canonical write.
+	// A partial audit would show a finished Run with no verdict (or the
+	// reverse), so the store commits them atomically or not at all.
+	stored, finalizeErr := r.runner.store.Finalize(context.Background(), FinalizationRecord{Run: record, Verdict: verdictRecord, Event: Event{RunID: r.ID, Source: "harness", Type: "run.finalized", Time: now, Data: mustJSON(map[string]string{"status": string(status), "error": result.Error})}})
+	if finalizeErr != nil {
 		status = StatusFailed
 		result.Status = StatusFailed
-		result.Error = redactError(redactor, emitErr)
-		err = emitErr
-		if record, getErr := r.runner.store.GetRun(context.Background(), r.ID); getErr == nil {
-			record.Status = status
-			record.Error = result.Error
-			record.Result = mustJSON(result)
-			_ = r.runner.store.UpdateRun(context.Background(), record)
-		}
+		result.Error = redactError(redactor, finalizeErr)
+		err = finalizeErr
+		record.Status = status
+		record.Result = mustJSON(result)
+		record.Error = result.Error
+		// Best effort only: the transactional write already failed, and the
+		// failed outcome must still be visible if the store can take it.
+		_ = r.runner.store.UpdateRun(context.Background(), record)
 	}
+	// Deliver the stored finalization event and close the stream under one
+	// lock, so no later writer can interleave an event after it.
 	r.eventMu.Lock()
 	if !r.eventsClosed {
+		if finalizeErr == nil {
+			select {
+			case r.events <- stored:
+			default:
+			}
+		}
 		r.eventsClosed = true
 		close(r.events)
 	}

@@ -228,7 +228,9 @@ func TestStorePortIsComposedOfPlanes(t *testing.T) {
 	storePort := reflect.TypeOf((*harness.Store)(nil)).Elem()
 	for i := 0; i < storePort.NumMethod(); i++ {
 		method := storePort.Method(i).Name
-		if method == "Close" {
+		// Close and Finalize are the composite port's own lifecycle and
+		// atomicity guarantees, not a single plane's records.
+		if method == "Close" || method == "Finalize" {
 			continue
 		}
 		if _, ok := owner[method]; !ok {

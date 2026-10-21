@@ -57,8 +57,13 @@ func TestStoreWriteFailureStopsRun(t *testing.T) {
 
 type failingVerdictStore struct{ *memoryStore }
 
-func (s *failingVerdictStore) SaveVerdict(context.Context, harness.VerdictRecord) error {
-	return errors.New("verdict store unavailable")
+// Finalize is the single terminal write, so a failing verdict persistence is
+// simulated by failing the transaction that carries the verdict.
+func (s *failingVerdictStore) Finalize(ctx context.Context, record harness.FinalizationRecord) (harness.Event, error) {
+	if record.Verdict != nil {
+		return harness.Event{}, errors.New("verdict store unavailable")
+	}
+	return s.memoryStore.Finalize(ctx, record)
 }
 
 func TestVerdictPersistenceFailureFailsRun(t *testing.T) {
