@@ -8,16 +8,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os/exec"
-	"path/filepath"
 	"time"
 
 	"github.com/red-copilot/harness"
-	"github.com/red-copilot/harness/pi"
 	"github.com/red-copilot/harness/sandbox/docker"
 	"github.com/red-copilot/harness/server"
 	"github.com/red-copilot/harness/store/sqlite"
-	"github.com/red-copilot/harness/verify"
 	"github.com/red-copilot/harness/webui"
 )
 
@@ -274,23 +270,3 @@ func printJSONLine(w io.Writer, value any) error {
 	_, err = fmt.Fprintln(w, string(data))
 	return err
 }
-
-func imageCommand(args []string, stdout, stderr io.Writer) error {
-	fs := flag.NewFlagSet("image build", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	contextDir := fs.String("context", "images/pi-kali", "context")
-	tag := fs.String("tag", pi.DefaultImage, "tag")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	cmd := exec.Command("docker", "build", "-t", *tag, *contextDir)
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-	return cmd.Run()
-}
-func migrateCommand(taskPath, agentPath, outPath string) error {
-	return errors.New("legacy migration requires docs/migration-v1.md mappings")
-}
-
-var _ = filepath.Clean
-var _ = verify.Command{}

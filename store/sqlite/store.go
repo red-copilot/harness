@@ -4,12 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -21,7 +18,6 @@ const schemaVersion = 3
 
 type Store struct {
 	db           *sql.DB
-	path         string
 	artifactRoot string
 }
 
@@ -43,7 +39,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 	db.SetMaxOpenConns(1)
-	store := &Store{db: db, path: path, artifactRoot: filepath.Join(filepath.Dir(path), "artifacts", "sha256")}
+	store := &Store{db: db, artifactRoot: filepath.Join(filepath.Dir(path), "artifacts", "sha256")}
 	if err := store.configure(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -345,17 +341,7 @@ func (s *Store) SaveSweep(ctx context.Context, record harness.SweepRecord) error
 	return err
 }
 func (s *Store) GetSweep(ctx context.Context, id string) (harness.SweepRecord, error) {
-	var r harness.SweepRecord
-	var status, created string
-	var spec, result []byte
-	var finished sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT id,status,spec,result,error,created_at,finished_at FROM sweeps WHERE id=?`, id).Scan(&r.ID, &status, &spec, &result, &r.Error, &created, &finished)
-	r.Status = harness.Status(status)
-	r.Spec = spec
-	r.Result = result
-	r.CreatedAt = parseTime(created)
-	r.FinishedAt = parseTimePtr(finished)
-	return r, err
+	return scanSweep(s.db.QueryRowContext(ctx, `SELECT id,status,spec,result,error,created_at,finished_at FROM sweeps WHERE id=?`, id))
 }
 func (s *Store) ListSweeps(ctx context.Context, limit int) ([]harness.SweepRecord, error) {
 	if limit <= 0 {
@@ -368,21 +354,29 @@ func (s *Store) ListSweeps(ctx context.Context, limit int) ([]harness.SweepRecor
 	defer rows.Close()
 	var out []harness.SweepRecord
 	for rows.Next() {
-		var r harness.SweepRecord
-		var status, created string
-		var spec, result []byte
-		var finished sql.NullString
-		if err := rows.Scan(&r.ID, &status, &spec, &result, &r.Error, &created, &finished); err != nil {
+		record, err := scanSweep(rows)
+		if err != nil {
 			return nil, err
 		}
-		r.Status = harness.Status(status)
-		r.Spec = spec
-		r.Result = result
-		r.CreatedAt = parseTime(created)
-		r.FinishedAt = parseTimePtr(finished)
-		out = append(out, r)
+		out = append(out, record)
 	}
 	return out, rows.Err()
+}
+
+func scanSweep(scanner interface{ Scan(...any) error }) (harness.SweepRecord, error) {
+	var record harness.SweepRecord
+	var status, created string
+	var spec, result []byte
+	var finished sql.NullString
+	if err := scanner.Scan(&record.ID, &status, &spec, &result, &record.Error, &created, &finished); err != nil {
+		return record, err
+	}
+	record.Status = harness.Status(status)
+	record.Spec = spec
+	record.Result = result
+	record.CreatedAt = parseTime(created)
+	record.FinishedAt = parseTimePtr(finished)
+	return record, nil
 }
 func (s *Store) MarkInterrupted(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE runs SET status=?, finished_at=? WHERE status NOT IN (?,?,?,?,?,?)`, harness.StatusInterrupted, formatTime(time.Now().UTC()), harness.StatusSucceeded, harness.StatusFailed, harness.StatusCancelled, harness.StatusTimedOut, harness.StatusInterrupted, harness.StatusStagnated)
@@ -410,12 +404,7 @@ func queryPayload[T any](ctx context.Context, db *sql.DB, query string, args ...
 	}
 	return out, rows.Err()
 }
-func scopedID(runID, id string) string {
-	if strings.Contains(id, runID+":") {
-		return runID + "\x00" + id
-	}
-	return runID + "\x00" + id
-}
+func scopedID(runID, id string) string { return runID + "\x00" + id }
 func nullableJSON(value json.RawMessage) any {
 	if len(value) == 0 {
 		return nil
@@ -442,10 +431,5 @@ func parseTimePtr(value sql.NullString) *time.Time {
 	tm := parseTime(value.String)
 	return &tm
 }
-func sortedKnowledge(items []harness.Knowledge) []harness.Knowledge {
-	sort.SliceStable(items, func(i, j int) bool { return items[i].ID < items[j].ID })
-	return items
-}
 
 var _ harness.Store = (*Store)(nil)
-var _ = errors.Is

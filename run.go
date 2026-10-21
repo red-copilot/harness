@@ -36,14 +36,13 @@ type Run struct {
 	result        Result
 	err           error
 	usage         Usage
-	backendDone   chan Completion
 	backendResult *Completion
 	progressValue Completion
 	stagnatedFlag bool
 }
 
 func newRun(runner *Runner, id string, ctx context.Context, cancel context.CancelFunc) *Run {
-	return &Run{ID: id, runner: runner, ctx: ctx, cancel: cancel, events: make(chan Event, 256), done: make(chan struct{}), sessions: map[string]AgentSession{}, backendDone: make(chan Completion, 1)}
+	return &Run{ID: id, runner: runner, ctx: ctx, cancel: cancel, events: make(chan Event, 256), done: make(chan struct{}), sessions: map[string]AgentSession{}}
 }
 
 func (r *Run) Events() <-chan Event  { return r.events }
@@ -78,12 +77,7 @@ func (r *Run) addSession(id string, session AgentSession) {
 	r.mu.Unlock()
 }
 func (r *Run) removeSession(id string) { r.mu.Lock(); delete(r.sessions, id); r.mu.Unlock() }
-func (r *Run) setTarget(target Target) {
-	r.mu.Lock()
-	r.progressValue.Metadata = target.Metadata
-	r.mu.Unlock()
-}
-func (r *Run) sessionWorkspace(runID, sessionID string) string {
+func (r *Run) sessionWorkspace(sessionID string) string {
 	return r.root + "/" + sessionID
 }
 func (r *Run) redactor() *Redactor {
@@ -142,9 +136,13 @@ func (r *Run) stagnated() bool { r.mu.RLock(); defer r.mu.RUnlock(); return r.st
 func (r *Run) sessionResults() []SessionResult {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	return r.collectSessions(StatusRunning)
+}
+
+func (r *Run) collectSessions(status Status) []SessionResult {
 	out := make([]SessionResult, 0, len(r.sessions))
 	for id, session := range r.sessions {
-		out = append(out, SessionResult{ID: id, Status: StatusRunning, Usage: session.Usage()})
+		out = append(out, SessionResult{ID: id, Status: status, Usage: session.Usage()})
 	}
 	return out
 }
@@ -160,7 +158,7 @@ func (r *Run) finishExecution(status Status, err error, verdict *Verdict, state 
 		result = Result{RunID: r.ID, Status: status, Verdict: verdict}
 	}
 	r.mu.RLock()
-	result.Sessions = append([]SessionResult(nil), r.sessionResultsUnlocked()...)
+	result.Sessions = append([]SessionResult(nil), r.collectSessions(StatusSucceeded)...)
 	result.Usage = r.usage
 	result.StartedAt = r.startedAt
 	r.mu.RUnlock()
@@ -174,7 +172,7 @@ func (r *Run) finishExecution(status Status, err error, verdict *Verdict, state 
 		_ = r.runner.store.SaveVerdict(context.Background(), VerdictRecord{RunID: r.ID, Success: verdict.Success, Score: verdict.Score, Message: verdict.Message, Evidence: verdict.Evidence, CreatedAt: now})
 	}
 	result = redactResult(redactor, result)
-	resultJSON, _ := jsonMarshal(result)
+	resultJSON := mustJSON(result)
 	record, getErr := r.runner.store.GetRun(context.Background(), r.ID)
 	if getErr == nil {
 		record.Status = status
@@ -184,13 +182,13 @@ func (r *Run) finishExecution(status Status, err error, verdict *Verdict, state 
 		if updateErr := r.runner.store.UpdateRun(context.Background(), record); updateErr != nil {
 			status = StatusFailed
 			result.Status = StatusFailed
-			result.Error = redactor.Redact(updateErr.Error())
+			result.Error = redactError(redactor, updateErr)
 			err = updateErr
 		}
 	} else if status == StatusSucceeded {
 		status = StatusFailed
 		result.Status = StatusFailed
-		result.Error = redactor.Redact(getErr.Error())
+		result.Error = redactError(redactor, getErr)
 		err = getErr
 	}
 	_ = r.runner.emitEvent(r, redactor, Event{RunID: r.ID, Source: "harness", Type: "run.finalized", Time: now, Data: mustJSON(map[string]string{"status": string(status), "error": result.Error})})
@@ -205,12 +203,4 @@ func (r *Run) finishExecution(status Status, err error, verdict *Verdict, state 
 	r.err = err
 	close(r.done)
 	r.mu.Unlock()
-}
-
-func (r *Run) sessionResultsUnlocked() []SessionResult {
-	out := make([]SessionResult, 0, len(r.sessions))
-	for id, session := range r.sessions {
-		out = append(out, SessionResult{ID: id, Status: StatusSucceeded, Usage: session.Usage()})
-	}
-	return out
 }

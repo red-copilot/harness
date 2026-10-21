@@ -102,13 +102,6 @@ func redactorForSpec(spec RunSpec) *Redactor {
 			values = append(values, value)
 		}
 		names = append(names, agent.EnvFrom...)
-		for key, value := range agent.Env {
-			for _, secretName := range spec.SecretEnv {
-				if key == secretName {
-					values = append(values, value)
-				}
-			}
-		}
 	}
 	for _, name := range names {
 		if value, ok := os.LookupEnv(name); ok {

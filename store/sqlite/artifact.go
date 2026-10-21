@@ -2,7 +2,6 @@ package sqlite
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -35,8 +34,7 @@ func (s *Store) Put(ctx context.Context, input harness.ArtifactInput) (harness.A
 	if int64(len(data)) != input.Size {
 		return harness.Artifact{}, fmt.Errorf("artifact size mismatch: declared %d, actual %d", input.Size, len(data))
 	}
-	sum := sha256.Sum256(data)
-	id := hex.EncodeToString(sum[:])
+	id := harness.ArtifactContentID(data)
 	if !safeArtifactID(id) {
 		return harness.Artifact{}, errors.New("unsafe artifact id")
 	}

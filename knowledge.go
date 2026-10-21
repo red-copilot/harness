@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -78,8 +79,7 @@ func PromoteKnowledge(req KnowledgePromotionRequest) (Knowledge, []KnowledgeEven
 		if existing == nil {
 			return Knowledge{}, nil, fmt.Errorf("knowledge refute target %q is unknown", refute)
 		}
-		candidate.Contradicts = uniqueSorted(append(candidate.Contradicts, existing.ID))
-		candidate.Trust = KnowledgeContested
+		candidate.Contradicts = append(candidate.Contradicts, existing.ID)
 		events = append(events, KnowledgeEvent{Type: "knowledge.refuted", Data: map[string]any{"knowledge_id": candidate.ID, "refutes": existing.ID}})
 	}
 	if len(candidate.Contradicts) > 0 {
@@ -87,7 +87,6 @@ func PromoteKnowledge(req KnowledgePromotionRequest) (Knowledge, []KnowledgeEven
 		candidate.Trust = KnowledgeContested
 		events = append(events, KnowledgeEvent{Type: "knowledge.review_required", Data: map[string]any{"review_of": candidate.Contradicts}})
 	}
-	candidate.Contradicts = uniqueSorted(candidate.Contradicts)
 	events = append(events, KnowledgeEvent{Type: "knowledge.promoted", Data: candidate})
 	return candidate, events, nil
 }
@@ -101,7 +100,7 @@ func ResolveReview(reviewOf []string, proposal []KnowledgeProposal) (winnerID, l
 	for _, item := range proposal {
 		if len(item.Supports) == 1 && len(item.Refutes) == 1 {
 			support, refute := item.Supports[0], item.Refutes[0]
-			if support != refute && containsString(pair, support) && containsString(pair, refute) {
+			if support != refute && slices.Contains(pair, support) && slices.Contains(pair, refute) {
 				return support, refute, nil
 			}
 		}
@@ -142,17 +141,22 @@ func FilterKnowledge(items []Knowledge, query KnowledgeQuery) []Knowledge {
 		}
 		out = append(out, item)
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		ri, rj := knowledgeTrustRank(out[i].Trust), knowledgeTrustRank(out[j].Trust)
+	sortKnowledgeByTrust(out)
+	return out
+}
+
+// sortKnowledgeByTrust orders knowledge by trust, recency and stable ID.
+func sortKnowledgeByTrust(items []Knowledge) {
+	sort.SliceStable(items, func(i, j int) bool {
+		ri, rj := knowledgeTrustRank(items[i].Trust), knowledgeTrustRank(items[j].Trust)
 		if ri != rj {
 			return ri < rj
 		}
-		if !out[i].ValidFrom.Equal(out[j].ValidFrom) {
-			return out[i].ValidFrom.After(out[j].ValidFrom)
+		if !items[i].ValidFrom.Equal(items[j].ValidFrom) {
+			return items[i].ValidFrom.After(items[j].ValidFrom)
 		}
-		return out[i].ID < out[j].ID
+		return items[i].ID < items[j].ID
 	})
-	return out
 }
 
 func targetFingerprint(target Target) string {
@@ -199,26 +203,12 @@ func appendUniqueSource(values []KnowledgeSource, additions ...KnowledgeSource) 
 	return out
 }
 func uniqueSorted(values []string) []string {
-	seen := map[string]struct{}{}
 	out := make([]string, 0, len(values))
 	for _, value := range values {
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	sort.Strings(out)
-	return out
-}
-func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
+		if value != "" {
+			out = append(out, value)
 		}
 	}
-	return false
+	slices.Sort(out)
+	return slices.Compact(out)
 }

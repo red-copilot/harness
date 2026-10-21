@@ -1,15 +1,15 @@
 import { Drawer, Empty, Space, Tag, Typography } from 'antd'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '@/i18n/I18nContext'
-import {
-  buildExplorationGraph,
-  edgePath,
-  factOf,
-  frontierOf,
-  ORIGIN_NODE_ID,
-} from '@/utils/explorationGraph'
+import { buildExplorationGraph, edgePath, ORIGIN_NODE_ID } from '@/utils/explorationGraph'
 import type { GraphNode } from '@/utils/explorationGraph'
-import type { HypothesisView } from '@/utils/exploration'
+import {
+  hypothesisStatusColor,
+  hypothesisStatusKey,
+  type HypothesisFact,
+  type HypothesisFrontier,
+  type HypothesisView,
+} from '@/utils/exploration'
 
 const EDGE_TONES = ['root', 'derived', 'planned', 'fact'] as const
 
@@ -24,6 +24,8 @@ export function ExplorationGraph({ view }: { view: HypothesisView }) {
     if (element) element.scrollLeft = element.scrollWidth
   }, [nodeCount])
   const byId = useMemo(() => new Map(graph.nodes.map((node) => [node.id, node])), [graph.nodes])
+  const factsById = useMemo(() => new Map(view.facts.map((fact) => [fact.id, fact])), [view])
+  const frontiersById = useMemo(() => new Map(view.frontiers.map((frontier) => [frontier.id, frontier])), [view])
   const selectedNode = selected ? byId.get(selected) : undefined
 
   return (
@@ -73,7 +75,7 @@ export function ExplorationGraph({ view }: { view: HypothesisView }) {
               style={{ left: node.x, top: node.y, width: node.width, minHeight: node.height }}
               onClick={() => setSelected(node.id)}
             >
-              <GraphNodeBody node={node} view={view} />
+              <GraphNodeBody node={node} view={view} facts={factsById} frontiers={frontiersById} />
             </button>
           ))}
           {graph.nodes.length === 1 ? (
@@ -87,7 +89,7 @@ export function ExplorationGraph({ view }: { view: HypothesisView }) {
         size="large"
         title={t('run.graph.detailTitle')}
       >
-        {selectedNode ? <GraphNodeDetail node={selectedNode} view={view} /> : <Empty />}
+        {selectedNode ? <GraphNodeDetail node={selectedNode} view={view} facts={factsById} frontiers={frontiersById} /> : <Empty />}
       </Drawer>
     </section>
   )
@@ -116,7 +118,17 @@ function nodeClassName(node: GraphNode, selected: boolean): string {
   return classes.join(' ')
 }
 
-function GraphNodeBody({ node, view }: { node: GraphNode; view: HypothesisView }) {
+function GraphNodeBody({
+  node,
+  view,
+  facts,
+  frontiers,
+}: {
+  node: GraphNode
+  view: HypothesisView
+  facts: Map<string, HypothesisFact>
+  frontiers: Map<string, HypothesisFrontier>
+}) {
   const { t } = useI18n()
   if (node.kind === 'origin') {
     return (
@@ -142,7 +154,7 @@ function GraphNodeBody({ node, view }: { node: GraphNode; view: HypothesisView }
     )
   }
   if (node.kind === 'fact') {
-    const fact = factOf(view, node.factId ?? '')
+    const fact = facts.get(node.factId ?? '')
     return (
       <>
         <span className="exploration-graph-node-head">
@@ -160,14 +172,14 @@ function GraphNodeBody({ node, view }: { node: GraphNode; view: HypothesisView }
       </>
     )
   }
-  const frontier = frontierOf(view, node.frontierId ?? '')
+  const frontier = frontiers.get(node.frontierId ?? '')
   const tools = view.activity[node.frontierId ?? '']?.tools ?? []
   const running = tools.filter((tool) => tool.running).at(-1) ?? tools.at(-1)
   return (
     <>
       <span className="exploration-graph-node-head">
         <span className="exploration-graph-node-kind">{t('run.graph.frontier')}</span>
-        <Tag color={statusColor(frontier?.status)}>{statusLabel(t, frontier?.status)}</Tag>
+        <Tag color={hypothesisStatusColor(frontier?.status)}>{statusLabel(t, frontier?.status)}</Tag>
       </span>
       <Typography.Text strong className="exploration-graph-node-title">
         {frontier?.question || frontier?.id || node.frontierId}
@@ -195,7 +207,17 @@ function GraphNodeBody({ node, view }: { node: GraphNode; view: HypothesisView }
   )
 }
 
-function GraphNodeDetail({ node, view }: { node: GraphNode; view: HypothesisView }) {
+function GraphNodeDetail({
+  node,
+  view,
+  facts,
+  frontiers,
+}: {
+  node: GraphNode
+  view: HypothesisView
+  facts: Map<string, HypothesisFact>
+  frontiers: Map<string, HypothesisFrontier>
+}) {
   const { t } = useI18n()
   if (node.kind === 'origin') {
     return (
@@ -228,7 +250,7 @@ function GraphNodeDetail({ node, view }: { node: GraphNode; view: HypothesisView
     )
   }
   if (node.kind === 'fact') {
-    const fact = factOf(view, node.factId ?? '')
+    const fact = facts.get(node.factId ?? '')
     const trust = fact?.contested ? 'contested' : fact?.trust ?? 'observed'
     return (
       <div className="exploration-detail">
@@ -247,7 +269,7 @@ function GraphNodeDetail({ node, view }: { node: GraphNode; view: HypothesisView
       </div>
     )
   }
-  const frontier = frontierOf(view, node.frontierId ?? '')
+  const frontier = frontiers.get(node.frontierId ?? '')
   const tools = view.activity[node.frontierId ?? '']?.tools ?? []
   const attempt = view.attempts.find((item) => item.itemId === node.frontierId)
   const produced = view.facts.filter((fact) => fact.sourceItemId === node.frontierId)
@@ -326,18 +348,9 @@ function DetailRow({ label, value, code = false }: { label: string; value: strin
   )
 }
 
-function statusColor(status?: string): string | undefined {
-  if (status === 'failed') return 'error'
-  if (status === 'done') return 'success'
-  if (status === 'assigned') return 'processing'
-  return undefined
-}
-
 function statusLabel(t: ReturnType<typeof useI18n>['t'], status?: string): string {
-  if (status === 'failed') return t('run.hypothesis.status.failed')
-  if (status === 'done') return t('run.hypothesis.status.done')
-  if (status === 'assigned') return t('run.hypothesis.status.assigned')
-  return status ?? 'open'
+  const key = hypothesisStatusKey(status)
+  return key ? t(`run.hypothesis.status.${key}`) : (status ?? 'open')
 }
 
 function trustColor(trust?: string): string | undefined {

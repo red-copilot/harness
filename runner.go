@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -80,25 +81,26 @@ func (r *Runner) Start(ctx context.Context, spec RunSpec) (*Run, error) {
 	now := time.Now().UTC()
 	runCtx, cancel := context.WithCancel(context.Background())
 	run := newRun(r, runID, runCtx, cancel)
-	run.redaction = redactorForSpec(spec)
+	redactor := redactorForSpec(spec)
+	run.redaction = redactor
 	run.startedAt = &now
 	descriptor := RunDescriptor{SchemaVersion: 1, Task: spec.Task, Target: spec.Target, Planner: spec.Planner, Executors: spec.Executors, Policy: NormalizeExplorationPolicy(spec.Policy), Budget: spec.Budget}
 	specJSON, _ := json.Marshal(descriptor)
-	specJSON = redactJSONPreserve(redactorForSpec(spec), specJSON)
+	specJSON = redactJSONPreserve(redactor, specJSON)
 	if err := r.store.CreateRun(ctx, RunRecord{ID: runID, Status: StatusQueued, Spec: specJSON, CreatedAt: now}); err != nil {
 		return nil, fmt.Errorf("create run: %w", err)
 	}
 	r.mu.Lock()
 	r.runs[runID] = run
 	r.mu.Unlock()
-	if err := r.emitEvent(run, redactorForSpec(spec), Event{RunID: runID, Source: "harness", Type: "run.created", Time: now, Data: mustJSON(map[string]string{"task_id": spec.Task.ID, "target_id": spec.Target.ID})}); err != nil {
+	if err := r.emitEvent(run, redactor, Event{RunID: runID, Source: "harness", Type: "run.created", Time: now, Data: mustJSON(map[string]string{"task_id": spec.Task.ID, "target_id": spec.Target.ID})}); err != nil {
 		cancel()
 		r.mu.Lock()
 		delete(r.runs, runID)
 		r.mu.Unlock()
 		return nil, err
 	}
-	go r.execute(run, spec, redactorForSpec(spec), descriptor)
+	go r.execute(run, spec, redactor)
 	return run, nil
 }
 
@@ -111,7 +113,7 @@ func (r *Runner) Run(ctx context.Context, spec RunSpec) (Result, error) {
 	return run.Wait(ctx)
 }
 
-func (r *Runner) execute(run *Run, spec RunSpec, redactor *Redactor, descriptor RunDescriptor) {
+func (r *Runner) execute(run *Run, spec RunSpec, redactor *Redactor) {
 	var state *explorationState
 	var terminalStatus = StatusFailed
 	var finalErr error
@@ -161,7 +163,6 @@ func (r *Runner) execute(run *Run, spec RunSpec, redactor *Redactor, descriptor 
 		}
 		target = provisioned
 	}
-	run.setTarget(target)
 	if err := r.emitEvent(run, redactor, Event{RunID: run.ID, Source: "harness", Type: "run.provisioned", Time: time.Now().UTC(), Data: mustJSON(target)}); err != nil {
 		finalErr = err
 		run.finishExecution(terminalStatus, finalErr, verdict, state)
@@ -189,7 +190,7 @@ func (r *Runner) execute(run *Run, spec RunSpec, redactor *Redactor, descriptor 
 	} else if run.ctx.Err() != nil {
 		if run.stagnated() {
 			terminalStatus = StatusStagnated
-		} else if deadlineExceeded(run.ctx) {
+		} else if errors.Is(run.ctx.Err(), context.DeadlineExceeded) {
 			terminalStatus = StatusTimedOut
 		} else {
 			terminalStatus = StatusCancelled
@@ -295,8 +296,13 @@ func (r *Runner) emitEvent(run *Run, redactor *Redactor, event Event) error {
 		event.Time = time.Now().UTC()
 	}
 	if redactor != nil {
+		shared := bytes.Equal(event.Raw, event.Data)
 		event.Data = redactJSONPreserve(redactor, event.Data)
-		event.Raw = redactJSONPreserve(redactor, event.Raw)
+		if shared {
+			event.Raw = event.Data
+		} else {
+			event.Raw = redactJSONPreserve(redactor, event.Raw)
+		}
 	}
 	run.eventMu.Lock()
 	defer run.eventMu.Unlock()
@@ -313,10 +319,6 @@ func (r *Runner) emitEvent(run *Run, redactor *Redactor, event Event) error {
 	default:
 	}
 	return nil
-}
-
-func (r *Runner) appendEventChecked(run *Run, redactor *Redactor, event Event) error {
-	return r.emitEvent(run, redactor, event)
 }
 
 func (r *Runner) appendLog(run *Run, redactor *Redactor, record LogRecord) error {
@@ -426,10 +428,6 @@ func isTerminal(status Status) bool {
 		return true
 	}
 	return false
-}
-
-func deadlineExceeded(ctx context.Context) bool {
-	return errors.Is(ctx.Err(), context.DeadlineExceeded)
 }
 
 func randomID() (string, error) {

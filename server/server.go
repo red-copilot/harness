@@ -1,12 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,11 +23,11 @@ func (r *RunRequest) UnmarshalJSON(data []byte) error {
 		Descriptor json.RawMessage `json:"descriptor"`
 	}
 	if err := json.Unmarshal(data, &envelope); err == nil && len(envelope.Descriptor) > 0 {
-		decoder := json.NewDecoder(strings.NewReader(string(envelope.Descriptor)))
+		decoder := json.NewDecoder(bytes.NewReader(envelope.Descriptor))
 		decoder.DisallowUnknownFields()
 		return decoder.Decode(&r.Descriptor)
 	}
-	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	return decoder.Decode(&r.Descriptor)
 }
@@ -126,49 +125,13 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 	case "verdict":
 		s.verdict(w, r, runID)
 	case "branches":
-		if r.Method != http.MethodGet {
-			methodNotAllowed(w, http.MethodGet)
-			return
-		}
-		items, err := s.store.ListBranches(r.Context(), runID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, items)
+		listRunItems(w, r, runID, s.store.ListBranches)
 	case "attempts":
-		if r.Method != http.MethodGet {
-			methodNotAllowed(w, http.MethodGet)
-			return
-		}
-		items, err := s.store.ListAttempts(r.Context(), runID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, items)
+		listRunItems(w, r, runID, s.store.ListAttempts)
 	case "observations":
-		if r.Method != http.MethodGet {
-			methodNotAllowed(w, http.MethodGet)
-			return
-		}
-		items, err := s.store.ListObservations(r.Context(), runID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, items)
+		listRunItems(w, r, runID, s.store.ListObservations)
 	case "artifacts":
-		if r.Method != http.MethodGet {
-			methodNotAllowed(w, http.MethodGet)
-			return
-		}
-		items, err := s.store.ListArtifacts(r.Context(), runID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, items)
+		listRunItems(w, r, runID, s.store.ListArtifacts)
 	case "cancel":
 		if r.Method != http.MethodPost {
 			methodNotAllowed(w, http.MethodPost)
@@ -257,16 +220,20 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, runID stri
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
+	writeEvents := func(events []harness.Event) {
+		for _, event := range events {
+			data, _ := json.Marshal(event)
+			fmt.Fprintf(w, "id: %d\ndata: %s\n\n", event.Seq, data)
+			flusher.Flush()
+			after = event.Seq
+		}
+	}
 	events, err := s.store.ListEvents(r.Context(), runID, after)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	for _, event := range events {
-		data, _ := json.Marshal(event)
-		fmt.Fprintf(w, "id: %d\ndata: %s\n\n", event.Seq, data)
-		flusher.Flush()
-	}
+	writeEvents(events)
 	live := s.lookupLive(runID)
 	if live == nil {
 		return
@@ -274,30 +241,20 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, runID stri
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		cursor := after
 		select {
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
 		}
-		events, err := s.store.ListEvents(r.Context(), runID, cursor)
+		events, err := s.store.ListEvents(r.Context(), runID, after)
 		if err != nil {
 			return
 		}
-		for _, event := range events {
-			data, _ := json.Marshal(event)
-			fmt.Fprintf(w, "id: %d\ndata: %s\n\n", event.Seq, data)
-			flusher.Flush()
-			after = event.Seq
-		}
+		writeEvents(events)
 		select {
 		case <-live.Done():
 			remaining, _ := s.store.ListEvents(r.Context(), runID, after)
-			for _, event := range remaining {
-				data, _ := json.Marshal(event)
-				fmt.Fprintf(w, "id: %d\ndata: %s\n\n", event.Seq, data)
-				flusher.Flush()
-			}
+			writeEvents(remaining)
 			return
 		default:
 		}
@@ -342,6 +299,19 @@ func (s *Server) lookupLive(runID string) *harness.Run {
 	}
 	return run
 }
+func listRunItems[T any](w http.ResponseWriter, r *http.Request, runID string, list func(context.Context, string) ([]T, error)) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	items, err := list(r.Context(), runID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -354,6 +324,3 @@ func methodNotAllowed(w http.ResponseWriter, allowed ...string) {
 	w.Header().Set("Allow", strings.Join(allowed, ", "))
 	writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 }
-
-var _ = errors.Is
-var _ = sort.Strings

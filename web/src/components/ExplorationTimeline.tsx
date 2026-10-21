@@ -6,7 +6,12 @@ import { EmptyState } from '@/components/EmptyState'
 import { ExplorationGraph } from '@/components/ExplorationGraph'
 import { TimeText } from '@/components/TimeText'
 import { useI18n } from '@/i18n/I18nContext'
-import { extractExplorationCycles, extractHypothesisView } from '@/utils/exploration'
+import {
+  extractExplorationCycles,
+  extractHypothesisView,
+  hypothesisStatusColor,
+  hypothesisStatusKey,
+} from '@/utils/exploration'
 import { extractBranchView } from '@/utils/explorationTree'
 import type {
   ExplorationCycle,
@@ -15,18 +20,31 @@ import type {
   HypothesisAttempt,
   HypothesisView,
 } from '@/utils/exploration'
+import type { BranchView } from '@/utils/explorationTree'
+
+type Projection =
+  | { kind: 'branches'; view: BranchView }
+  | { kind: 'hypothesis'; view: HypothesisView }
+  | { kind: 'cycles'; cycles: ExplorationCycle[] }
 
 export function ExplorationTimeline({ events }: { events: EventRecord[] }) {
   const { t } = useI18n()
-  const cycles = useMemo(() => extractExplorationCycles(events), [events])
-  const hypothesis = useMemo(() => extractHypothesisView(events), [events])
-  const branches = useMemo(() => extractBranchView(events), [events])
-  if (branches.branches.length > 0) {
-    return <BranchTreeTimeline view={branches} />
+  const projection = useMemo<Projection>(() => {
+    const branches = extractBranchView(events)
+    if (branches.branches.length > 0) return { kind: 'branches', view: branches }
+    const hypothesis = extractHypothesisView(events)
+    if (hypothesis.attempts.length > 0 || hypothesis.progress) {
+      return { kind: 'hypothesis', view: hypothesis }
+    }
+    return { kind: 'cycles', cycles: extractExplorationCycles(events) }
+  }, [events])
+  if (projection.kind === 'branches') {
+    return <BranchTreeTimeline view={projection.view} />
   }
-  if (hypothesis.attempts.length > 0 || hypothesis.progress) {
-    return <HypothesisTimeline view={hypothesis} />
+  if (projection.kind === 'hypothesis') {
+    return <HypothesisTimeline view={projection.view} />
   }
+  const cycles = projection.cycles
   if (cycles.length === 0) {
     return <EmptyState description={t('run.exploration.empty')} />
   }
@@ -107,18 +125,13 @@ function HypothesisTimeline({ view }: { view: HypothesisView }) {
 
 function HypothesisAttemptCard({ attempt }: { attempt: HypothesisAttempt }) {
   const { t } = useI18n()
-  const tone = attempt.status === 'failed' ? 'error' : attempt.status === 'done' ? 'success' : 'processing'
-  const statusKey =
-    attempt.status === 'failed'
-      ? 'run.hypothesis.status.failed'
-      : attempt.status === 'done'
-        ? 'run.hypothesis.status.done'
-        : 'run.hypothesis.status.assigned'
+  const tone = hypothesisStatusColor(attempt.status, 'processing')
+  const statusKey = hypothesisStatusKey(attempt.status) ?? 'assigned'
   return (
     <article className="exploration-cycle">
       <div className="exploration-cycle-head">
         <Space wrap size="small">
-          <Tag color={tone}>{t(statusKey)}</Tag>
+          <Tag color={tone}>{t(`run.hypothesis.status.${statusKey}`)}</Tag>
           {attempt.round ? <Tag>{t('run.hypothesis.round', { round: attempt.round })}</Tag> : null}
           <Typography.Text code>{attempt.itemId}</Typography.Text>
           {attempt.executorId ? <Typography.Text>{attempt.executorId}</Typography.Text> : null}

@@ -1,4 +1,6 @@
 import type { EventRecord } from '@/api/types'
+import { stringArray } from './exploration'
+import { sortedBySeq } from './merge'
 
 export interface BranchNode {
   id: string
@@ -79,7 +81,7 @@ export function extractBranchView(events: EventRecord[]): BranchView {
   const artifacts = new Map<string, BranchArtifact>()
   let progress: BranchProgress | undefined
 
-  for (const event of [...events].sort((a, b) => a.seq - b.seq)) {
+  for (const event of sortedBySeq(events)) {
     const record = asRecord(event.data)
     if (!record) continue
     switch (event.type) {
@@ -158,7 +160,7 @@ function parseBranch(record: Record<string, unknown>, seq: number): BranchNode |
     status: typeof record.status === 'string' ? record.status : 'open',
     scope: typeof record.scope === 'string' ? record.scope : undefined,
     priority: typeof record.priority === 'number' ? record.priority : undefined,
-    reviewOf: Array.isArray(record.review_of) ? record.review_of.filter((value): value is string => typeof value === 'string') : undefined,
+    reviewOf: Array.isArray(record.review_of) ? stringArray(record.review_of) : undefined,
     seq,
   }
 }
@@ -207,7 +209,7 @@ function parseKnowledge(record: Record<string, unknown>, seq: number): BranchKno
     trust: record.trust,
     reuse: record.reuse,
     version: typeof record.version === 'number' ? record.version : undefined,
-    contradicts: Array.isArray(record.contradicts) ? record.contradicts.filter((value): value is string => typeof value === 'string') : undefined,
+    contradicts: Array.isArray(record.contradicts) ? stringArray(record.contradicts) : undefined,
     seq,
   }
 }

@@ -1,4 +1,5 @@
 import type { EventRecord } from '@/api/types'
+import { sortedBySeq } from './merge'
 
 export interface ExplorationAttempt {
   event_seq?: number
@@ -151,7 +152,7 @@ export function extractHypothesisView(events: EventRecord[]): HypothesisView {
   let brief: Record<string, string> = {}
   const current = new Set<string>()
 
-  for (const event of [...events].sort((a, b) => a.seq - b.seq)) {
+  for (const event of sortedBySeq(events)) {
     const record = asRecord(event.data)
     if (!record) continue
     if (event.type === 'tool_execution_start' || event.type === 'tool_execution_end') {
@@ -299,6 +300,25 @@ export function extractHypothesisView(events: EventRecord[]): HypothesisView {
   }
 }
 
+export type HypothesisStatusKey = 'failed' | 'done' | 'assigned'
+
+export function hypothesisStatusColor(status?: string, fallback?: string): string | undefined {
+  switch (status) {
+    case 'failed':
+      return 'error'
+    case 'done':
+      return 'success'
+    case 'assigned':
+      return 'processing'
+    default:
+      return fallback
+  }
+}
+
+export function hypothesisStatusKey(status?: string): HypothesisStatusKey | undefined {
+  return status === 'failed' || status === 'done' || status === 'assigned' ? status : undefined
+}
+
 // asHypothesisFacts reads the fact content published with a facts.merged event.
 // Older runs only published fact ids, so ids without content are kept as
 // placeholders instead of being dropped.
@@ -328,11 +348,12 @@ function asHypothesisFacts(
       })
       .filter(isDefined)
   }
-  return [...stringArray(record.added), ...stringArray(record.corroborated)].map((id) => ({
+  const corroborated = new Set(stringArray(record.corroborated))
+  return [...stringArray(record.added), ...corroborated].map((id) => ({
     id,
     claim: '',
     evidence: '',
-    trust: stringArray(record.corroborated).includes(id) ? 'corroborated' : 'observed',
+    trust: corroborated.has(id) ? 'corroborated' : 'observed',
     contested: false,
     targets: [],
     sourceItemId: itemId,
@@ -381,7 +402,7 @@ export function extractExplorationCycles(events: EventRecord[]): ExplorationCycl
   const pending = new Map<string, PendingCycle>()
   const cycles: ExplorationCycle[] = []
 
-  for (const event of [...events].sort((a, b) => a.seq - b.seq)) {
+  for (const event of sortedBySeq(events)) {
     const key = event.session_id || '__run__'
     const current = pending.get(key) ?? {}
     if (event.type === 'turn_end') {
@@ -488,7 +509,7 @@ function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : []
 }
 
-function stringArray(value: unknown): string[] {
+export function stringArray(value: unknown): string[] {
   return asArray(value).filter((item): item is string => typeof item === 'string')
 }
 

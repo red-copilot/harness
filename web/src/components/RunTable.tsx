@@ -3,7 +3,7 @@ import type { ColumnsType } from 'antd/es/table'
 import { useNavigate } from 'react-router-dom'
 import type { RunRecord } from '@/api/types'
 import { useI18n } from '@/i18n/I18nContext'
-import { formatCost, formatRunDuration, formatTokens } from '@/utils/format'
+import { agentIds, formatCost, formatRunDuration, formatTokens } from '@/utils/format'
 import { StatusTag } from './StatusTag'
 import { TimeText } from './TimeText'
 
@@ -56,7 +56,7 @@ export function RunTable({
       title: t('common.agents'),
       key: 'agents',
       width: 130,
-      render: (_, run) => [run.spec?.planner, ...(run.spec?.executors ?? [])].map((agent) => agent?.id).filter(Boolean).join(', ') || '—',
+      render: (_, run) => agentIds(run.spec).join(', ') || '—',
     },
     {
       title: t('common.duration'),

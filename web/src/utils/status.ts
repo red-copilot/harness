@@ -22,9 +22,6 @@ export function statusColor(status: RunStatus): string {
     case 'timed_out':
     case 'stagnated':
       return 'error'
-    case 'cancelled':
-    case 'interrupted':
-      return 'default'
     default:
       return 'default'
   }

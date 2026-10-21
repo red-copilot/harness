@@ -53,6 +53,7 @@ import { useRunLogs } from '@/hooks/useRunLogs'
 import { useNow } from '@/hooks/useNow'
 import { useI18n } from '@/i18n/I18nContext'
 import {
+  agentIds,
   formatCost,
   formatDuration,
   formatRunDuration,
@@ -231,7 +232,7 @@ function RunOverview({ run, verdict }: { run: RunRecord; verdict: VerdictRecord 
           <Descriptions.Item label={t('common.task')}>{run.spec?.task?.id ?? '—'}</Descriptions.Item>
           <Descriptions.Item label={t('common.sweepId')}>{run.sweep_id || '—'}</Descriptions.Item>
           <Descriptions.Item label={t('common.agents')}>
-            {[run.spec?.planner, ...(run.spec?.executors ?? [])].map((agent) => agent?.id).filter(Boolean).join(', ') || '—'}
+            {agentIds(run.spec).join(', ') || '—'}
           </Descriptions.Item>
           <Descriptions.Item label={t('common.target')}>{address}</Descriptions.Item>
         </Descriptions>

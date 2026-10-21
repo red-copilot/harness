@@ -23,7 +23,6 @@ type explorationState struct {
 	artifacts    []Artifact
 	lastBatch    []AttemptSummary
 	seq          int
-	dropped      map[string]int
 }
 
 type attemptExecution struct {
@@ -45,7 +44,7 @@ type explorationEngine struct {
 }
 
 func newExplorationState(runID string, spec RunSpec) *explorationState {
-	return &explorationState{runID: runID, task: spec.Task, target: spec.Target, policy: NormalizeExplorationPolicy(spec.Policy), dropped: map[string]int{}}
+	return &explorationState{runID: runID, task: spec.Task, target: spec.Target, policy: NormalizeExplorationPolicy(spec.Policy)}
 }
 
 func (s *explorationState) nextID(kind string) string {
@@ -177,17 +176,11 @@ func (e *explorationEngine) run(ctx context.Context) error {
 			}
 			continue
 		}
-		limit := state.policy.MaxActiveBranches
-		if len(e.executors) < limit {
-			limit = len(e.executors)
-		}
+		limit := min(state.policy.MaxActiveBranches, len(e.executors), len(ready))
 		if limit <= 0 {
 			break
 		}
-		if len(ready) < limit {
-			limit = len(ready)
-		}
-		batch := append([]Branch(nil), ready[:limit]...)
+		batch := ready[:limit]
 		executions, err := e.runBatch(ctx, batch)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -227,7 +220,6 @@ func (e *explorationEngine) plan(ctx context.Context, root Branch) (int, error) 
 	state := e.state
 	request, dropped := buildPlannerContext(state.task, state.target, state.branches, state.knowledge, e.live.progress(), state.attempts, state.policy)
 	if dropped > 0 {
-		state.dropped["planner"] += dropped
 		if err := e.emit("exploration.context.truncated", map[string]any{"context": "planner", "candidates": len(state.knowledge), "kept": len(request.Knowledge), "dropped": dropped}); err != nil {
 			return 0, err
 		}
@@ -365,7 +357,7 @@ func (e *explorationEngine) runBatch(ctx context.Context, branches []Branch) ([]
 				execution.err = err
 				return
 			}
-			request, dropped := buildExecutorContext(state.task, state.target, execution.branch, state.knowledge, AttemptBudget{MaxAttempts: state.policy.MaxAttemptsPerBranch, MaxToolCalls: state.policy.MaxToolCallsPerAttempt, MaxWallTime: state.policy.MaxWallTimePerAttempt}, e.live.sessionWorkspace(state.runID, execution.sessionID), state.policy)
+			request, dropped := buildExecutorContext(state.task, state.target, execution.branch, state.knowledge, AttemptBudget{MaxAttempts: state.policy.MaxAttemptsPerBranch, MaxToolCalls: state.policy.MaxToolCallsPerAttempt, MaxWallTime: state.policy.MaxWallTimePerAttempt}, e.live.sessionWorkspace(execution.sessionID), state.policy)
 			if dropped > 0 {
 				if err := e.emit("exploration.context.truncated", map[string]any{"context": "executor", "attempt_id": execution.attempt.ID, "dropped": dropped}); err != nil {
 					execution.err = err
@@ -406,11 +398,6 @@ func (e *explorationEngine) runBatch(ctx context.Context, branches []Branch) ([]
 	select {
 	case <-done:
 		return executions, nil
-	case completion := <-e.live.backendDone:
-		e.live.setBackendCompletion(completion)
-		cancel()
-		<-done
-		return executions, ctx.Err()
 	case <-ctx.Done():
 		cancel()
 		<-done
@@ -427,23 +414,7 @@ func (e *explorationEngine) mergeAttempt(ctx context.Context, execution attemptE
 	attempt := execution.attempt
 	attempt.FinishedAt = time.Now().UTC()
 	if execution.err != nil {
-		attempt.Status = AttemptFailed
-		attempt.Outcome = AttemptFailure
-		attempt.Error = e.live.redactor().Redact(execution.err.Error())
-		if state.attemptCount(branch.ID) >= state.policy.MaxAttemptsPerBranch {
-			branch.Status = BranchBlocked
-		} else {
-			branch.Status = BranchOpen
-		}
-		branch.UpdatedAt = time.Now().UTC()
-		if err := e.persistAttempt(attempt); err != nil {
-			return err
-		}
-		e.replaceAttempt(attempt)
-		if err := e.persistBranch(*branch); err != nil {
-			return err
-		}
-		return e.emit("exploration.attempt.failed", attempt)
+		return e.failAttempt(branch, &attempt, execution.err.Error())
 	}
 	report := execution.report
 	attempt.Status = report.Status
@@ -457,7 +428,7 @@ func (e *explorationEngine) mergeAttempt(ctx context.Context, execution attemptE
 	}
 	observations, err := ArchiveAttemptEvidence(ctx, e.spec.Artifacts, *e.live.redactor(), EvidenceArchiveRequest{
 		RunID: state.runID, BranchID: branch.ID, AttemptID: attempt.ID, SessionID: execution.sessionID,
-		WorkspaceDir: e.live.sessionWorkspace(state.runID, execution.sessionID), Observations: report.Observations,
+		WorkspaceDir: e.live.sessionWorkspace(execution.sessionID), Observations: report.Observations,
 		MaxFiles: state.policy.MaxEvidenceFilesPerAttempt, MaxFileBytes: state.policy.MaxArtifactBytes, MaxTotalBytes: state.policy.MaxAttemptArtifactBytes,
 	})
 	if err != nil {
@@ -465,23 +436,7 @@ func (e *explorationEngine) mergeAttempt(ctx context.Context, execution attemptE
 		if errors.As(err, &storeErr) {
 			return storeErr
 		}
-		attempt.Status = AttemptFailed
-		attempt.Outcome = AttemptFailure
-		attempt.Error = e.live.redactor().Redact(err.Error())
-		if state.attemptCount(branch.ID) >= state.policy.MaxAttemptsPerBranch {
-			branch.Status = BranchBlocked
-		} else {
-			branch.Status = BranchOpen
-		}
-		branch.UpdatedAt = time.Now().UTC()
-		if saveErr := e.persistAttempt(attempt); saveErr != nil {
-			return saveErr
-		}
-		e.replaceAttempt(attempt)
-		if saveErr := e.persistBranch(*branch); saveErr != nil {
-			return saveErr
-		}
-		return e.emit("exploration.attempt.failed", attempt)
+		return e.failAttempt(branch, &attempt, err.Error())
 	}
 	observationMap := make(map[string]Observation, len(observations))
 	for _, observation := range observations {
@@ -582,6 +537,26 @@ func (e *explorationEngine) mergeAttempt(ctx context.Context, execution attemptE
 	return e.emit("exploration.attempt.completed", attempt)
 }
 
+func (e *explorationEngine) failAttempt(branch *Branch, attempt *Attempt, message string) error {
+	attempt.Status = AttemptFailed
+	attempt.Outcome = AttemptFailure
+	attempt.Error = e.live.redactor().Redact(message)
+	if e.state.attemptCount(branch.ID) >= e.state.policy.MaxAttemptsPerBranch {
+		branch.Status = BranchBlocked
+	} else {
+		branch.Status = BranchOpen
+	}
+	branch.UpdatedAt = time.Now().UTC()
+	if err := e.persistAttempt(*attempt); err != nil {
+		return err
+	}
+	e.replaceAttempt(*attempt)
+	if err := e.persistBranch(*branch); err != nil {
+		return err
+	}
+	return e.emit("exploration.attempt.failed", *attempt)
+}
+
 func (e *explorationEngine) replaceAttempt(attempt Attempt) {
 	for i := range e.state.attempts {
 		if e.state.attempts[i].ID == attempt.ID {
@@ -592,11 +567,9 @@ func (e *explorationEngine) replaceAttempt(attempt Attempt) {
 }
 
 func appendOrReplaceKnowledge(items []Knowledge, knowledge Knowledge) []Knowledge {
-	for i := range items {
-		if items[i].ID == knowledge.ID {
-			items[i] = knowledge
-			return items
-		}
+	if existing := findKnowledge(items, knowledge.ID); existing != nil {
+		*existing = knowledge
+		return items
 	}
 	return append(items, knowledge)
 }
@@ -618,7 +591,7 @@ func (e *explorationEngine) startSession(ctx context.Context, role AgentRole, sp
 	if spec.Runtime == nil {
 		return nil, fmt.Errorf("%s runtime is required", role)
 	}
-	workspace := e.live.sessionWorkspace(e.state.runID, sessionID)
+	workspace := e.live.sessionWorkspace(sessionID)
 	if err := ensureDir(workspace); err != nil {
 		return nil, err
 	}
@@ -650,7 +623,7 @@ func (e *explorationEngine) eventSink(sessionID string) EventSink {
 	return func(event Event) error {
 		event.RunID = e.state.runID
 		event.SessionID = sessionID
-		return e.runner.appendEventChecked(e.live, e.live.redactor(), event)
+		return e.runner.emitEvent(e.live, e.live.redactor(), event)
 	}
 }
 

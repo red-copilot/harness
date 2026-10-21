@@ -28,34 +28,41 @@ func ValidateEvidencePath(root, candidate string) (string, error) {
 	if strings.TrimSpace(root) == "" {
 		return "", errors.New("workspace root is required")
 	}
-	if candidate == "" || filepath.IsAbs(candidate) {
-		return "", fmt.Errorf("invalid evidence path %q", candidate)
-	}
-	clean := filepath.Clean(candidate)
-	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("evidence path escapes workspace: %q", candidate)
-	}
 	evalRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return "", fmt.Errorf("resolve workspace: %w", err)
 	}
+	path, _, err := validateEvidencePath(evalRoot, candidate)
+	return path, err
+}
+
+// validateEvidencePath resolves a candidate against an already-resolved
+// workspace root and returns its FileInfo to avoid a second stat.
+func validateEvidencePath(evalRoot, candidate string) (string, os.FileInfo, error) {
+	if candidate == "" || filepath.IsAbs(candidate) {
+		return "", nil, fmt.Errorf("invalid evidence path %q", candidate)
+	}
+	clean := filepath.Clean(candidate)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", nil, fmt.Errorf("evidence path escapes workspace: %q", candidate)
+	}
 	resolved := filepath.Join(evalRoot, clean)
 	evalPath, err := filepath.EvalSymlinks(resolved)
 	if err != nil {
-		return "", fmt.Errorf("resolve evidence path: %w", err)
+		return "", nil, fmt.Errorf("resolve evidence path: %w", err)
 	}
 	rel, err := filepath.Rel(evalRoot, evalPath)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("evidence path escapes workspace: %q", candidate)
+		return "", nil, fmt.Errorf("evidence path escapes workspace: %q", candidate)
 	}
 	info, err := os.Lstat(evalPath)
 	if err != nil {
-		return "", fmt.Errorf("stat evidence: %w", err)
+		return "", nil, fmt.Errorf("stat evidence: %w", err)
 	}
 	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("evidence path is not a regular file: %q", candidate)
+		return "", nil, fmt.Errorf("evidence path is not a regular file: %q", candidate)
 	}
-	return evalPath, nil
+	return evalPath, info, nil
 }
 
 // ArchiveAttemptEvidence validates and stores every referenced file, then
@@ -66,6 +73,13 @@ func ArchiveAttemptEvidence(ctx context.Context, store ArtifactStore, redactor R
 	}
 	if len(req.Observations) == 0 {
 		return nil, errors.New("attempt requires at least one observation")
+	}
+	if strings.TrimSpace(req.WorkspaceDir) == "" {
+		return nil, errors.New("workspace root is required")
+	}
+	evalRoot, err := filepath.EvalSymlinks(req.WorkspaceDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve workspace: %w", err)
 	}
 	type preparedArtifact struct {
 		name, mediaType string
@@ -92,11 +106,7 @@ func ArchiveAttemptEvidence(ctx context.Context, store ArtifactStore, redactor R
 		}
 		item := preparedObservation{proposal: proposal, artifacts: make([]preparedArtifact, 0, len(proposal.EvidenceFiles))}
 		for _, file := range proposal.EvidenceFiles {
-			path, err := ValidateEvidencePath(req.WorkspaceDir, file)
-			if err != nil {
-				return nil, err
-			}
-			info, err := os.Lstat(path)
+			path, info, err := validateEvidencePath(evalRoot, file)
 			if err != nil {
 				return nil, err
 			}
@@ -130,17 +140,18 @@ func ArchiveAttemptEvidence(ctx context.Context, store ArtifactStore, redactor R
 	for _, item := range prepared {
 		artifacts := make([]Artifact, 0, len(item.artifacts))
 		for _, file := range item.artifacts {
-			sum := sha256.Sum256(file.content)
-			expectedID := hex.EncodeToString(sum[:])
 			artifact, err := store.Put(ctx, ArtifactInput{RunID: req.RunID, AttemptID: req.AttemptID, SessionID: req.SessionID, Name: file.name, MediaType: file.mediaType, Size: int64(len(file.content)), Content: bytes.NewReader(file.content)})
 			if err != nil {
 				return nil, &ArtifactStoreError{Err: fmt.Errorf("store artifact %q: %w", file.name, err)}
 			}
-			if artifact.ID == "" {
-				artifact.ID = expectedID
-			}
-			if artifact.SHA256 == "" {
-				artifact.SHA256 = expectedID
+			if artifact.ID == "" || artifact.SHA256 == "" {
+				expectedID := ArtifactContentID(file.content)
+				if artifact.ID == "" {
+					artifact.ID = expectedID
+				}
+				if artifact.SHA256 == "" {
+					artifact.SHA256 = expectedID
+				}
 			}
 			if artifact.Size == 0 {
 				artifact.Size = int64(len(file.content))
@@ -166,6 +177,12 @@ func ArchiveAttemptEvidence(ctx context.Context, store ArtifactStore, redactor R
 		out = append(out, Observation{ID: req.AttemptID + ":obs:" + item.proposal.LocalID, RunID: req.RunID, BranchID: req.BranchID, AttemptID: req.AttemptID, Kind: item.proposal.Kind, Summary: item.proposal.Summary, Target: item.proposal.Target, Evidence: artifacts, CreatedAt: now})
 	}
 	return out, nil
+}
+
+// ArtifactContentID returns the canonical content-addressed artifact identity.
+func ArtifactContentID(content []byte) string {
+	sum := sha256.Sum256(content)
+	return hex.EncodeToString(sum[:])
 }
 
 func mediaType(data []byte) string {

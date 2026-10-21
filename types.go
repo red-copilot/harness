@@ -728,5 +728,3 @@ type KnowledgePromotionRequest struct {
 	Existing     []Knowledge
 	Now          time.Time
 }
-
-type EvidenceArchiveRequestAlias = EvidenceArchiveRequest

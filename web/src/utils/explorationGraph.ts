@@ -1,4 +1,4 @@
-import type { HypothesisFact, HypothesisFrontier, HypothesisView } from './exploration'
+import type { HypothesisView } from './exploration'
 
 export type GraphNodeKind = 'origin' | 'frontier' | 'fact'
 export type GraphEdgeTone = 'root' | 'planned' | 'derived' | 'fact'
@@ -7,7 +7,6 @@ export interface GraphNode {
   id: string
   kind: GraphNodeKind
   depth: number
-  row: number
   x: number
   y: number
   width: number
@@ -51,7 +50,6 @@ export function buildExplorationGraph(view: HypothesisView): ExplorationGraphLay
     id: frontier.id,
     kind: 'frontier' as const,
     depth: Math.max(1, 2 * (frontier.round ?? 1) - 1),
-    row: 0,
     x: 0,
     y: 0,
     width: FRONTIER.width,
@@ -66,7 +64,6 @@ export function buildExplorationGraph(view: HypothesisView): ExplorationGraphLay
     id: factNodeId(fact.id),
     kind: 'fact' as const,
     depth: Math.max(2, 2 * (fact.round ?? 1)),
-    row: 0,
     x: 0,
     y: 0,
     width: FACT.width,
@@ -82,7 +79,6 @@ export function buildExplorationGraph(view: HypothesisView): ExplorationGraphLay
       id: ORIGIN_NODE_ID,
       kind: 'origin',
       depth: 0,
-      row: 0,
       x: 0,
       y: 0,
       width: ORIGIN.width,
@@ -156,8 +152,7 @@ function layoutColumns(nodes: GraphNode[]): void {
   let x = PADDING
   for (const depth of depthOrder) {
     const column = columns.get(depth)!
-    for (const [row, node] of column.entries()) {
-      node.row = row
+    for (const node of column) {
       node.x = x + (columnWidths.get(depth)! - node.width) / 2
     }
     x += columnWidths.get(depth)! + COLUMN_GAP
@@ -199,14 +194,6 @@ function originStatus(view: HypothesisView): string {
 
 export function factNodeId(factId: string): string {
   return `fact:${factId}`
-}
-
-export function frontierOf(view: HypothesisView, id: string): HypothesisFrontier | undefined {
-  return view.frontiers.find((frontier) => frontier.id === id)
-}
-
-export function factOf(view: HypothesisView, id: string): HypothesisFact | undefined {
-  return view.facts.find((fact) => fact.id === id)
 }
 
 // edgePath draws a horizontal cubic bezier between two node boxes.

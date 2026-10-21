@@ -3,7 +3,6 @@ package harness
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -70,16 +69,7 @@ func boundedKnowledgeDigest(items []Knowledge, target Target, policy Exploration
 		}
 		filtered = append(filtered, item)
 	}
-	sort.SliceStable(filtered, func(i, j int) bool {
-		ri, rj := knowledgeTrustRank(filtered[i].Trust), knowledgeTrustRank(filtered[j].Trust)
-		if ri != rj {
-			return ri < rj
-		}
-		if !filtered[i].ValidFrom.Equal(filtered[j].ValidFrom) {
-			return filtered[i].ValidFrom.After(filtered[j].ValidFrom)
-		}
-		return filtered[i].ID < filtered[j].ID
-	})
+	sortKnowledgeByTrust(filtered)
 	limit := policy.MaxKnowledgeDigestItems
 	if limit <= 0 || limit > len(filtered) {
 		limit = len(filtered)
