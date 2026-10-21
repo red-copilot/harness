@@ -269,17 +269,58 @@ type Verifier interface {
 // Deprecated: use ExplorationPolicy.
 type ExplorationSpec = ExplorationPolicy
 
+// WorkflowResult is the bounded, non-authoritative outcome of a workflow.
+type WorkflowResult struct {
+	Stagnated bool `json:"stagnated,omitempty"`
+}
+
+// Workflow orchestrates work through the run-scoped runtime. A workflow cannot
+// produce a verdict or close a run directly.
+type Workflow interface {
+	Execute(context.Context, WorkflowRuntime) (WorkflowResult, error)
+}
+
+// SessionLease is an opened, isolated agent session owned by the run runtime.
+type SessionLease struct {
+	ID           string
+	Agent        AgentSpec
+	WorkspaceDir string
+	Session      AgentSession
+}
+
+// WorkflowRuntime is the complete capability surface exposed to a workflow.
+type WorkflowRuntime interface {
+	RunID() string
+	Task() Task
+	Target() Target
+	Agents() []AgentSpec
+	Budget() Budget
+	WorkspaceRoot() string
+	Progress() Completion
+	OpenSession(context.Context, AgentSpec) (SessionLease, error)
+	Emit(context.Context, Event) error
+	Redact(string) string
+}
+
+// WorkflowConfig is the serializable audit description of the selected workflow.
+type WorkflowConfig struct {
+	Name   string          `json:"name"`
+	Config json.RawMessage `json:"config,omitempty"`
+}
+
 // RunSpec is the Go-first input contract for one run.
 type RunSpec struct {
-	Task          Task               `json:"task" yaml:"task"`
-	Target        Target             `json:"target,omitempty" yaml:"target,omitempty"`
-	Agents        []AgentSpec        `json:"agents" yaml:"agents"`
-	Exploration   *ExplorationPolicy `json:"exploration,omitempty" yaml:"exploration,omitempty"`
-	Budget        Budget             `json:"budget,omitempty" yaml:"budget,omitempty"`
-	Backend       Backend            `json:"-" yaml:"-"`
-	Verifier      Verifier           `json:"-" yaml:"-"`
-	SecretEnv     []string           `json:"secret_env,omitempty" yaml:"secret_env,omitempty"`
-	WorkspaceRoot string             `json:"workspace_root,omitempty" yaml:"workspace_root,omitempty"`
+	Task           Task               `json:"task" yaml:"task"`
+	Target         Target             `json:"target,omitempty" yaml:"target,omitempty"`
+	Agents         []AgentSpec        `json:"agents" yaml:"agents"`
+	Exploration    *ExplorationPolicy `json:"exploration,omitempty" yaml:"exploration,omitempty"`
+	Workflow       Workflow           `json:"-" yaml:"-"`
+	WorkflowConfig *WorkflowConfig    `json:"workflow,omitempty" yaml:"-"`
+	Budget         Budget             `json:"budget,omitempty" yaml:"budget,omitempty"`
+	Backend        Backend            `json:"-" yaml:"-"`
+	Verifier       Verifier           `json:"-" yaml:"-"`
+	SecretEnv      []string           `json:"secret_env,omitempty" yaml:"secret_env,omitempty"`
+	WorkspaceRoot  string             `json:"workspace_root,omitempty" yaml:"workspace_root,omitempty"`
 }
 
 // Event is an append-only run or session event.

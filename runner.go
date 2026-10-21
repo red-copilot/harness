@@ -170,7 +170,7 @@ func validateSpec(spec RunSpec, maxSessions int) error {
 	if len(spec.Agents) == 0 {
 		return errors.New("at least one agent is required")
 	}
-	if spec.Exploration == nil && len(spec.Agents) > maxSessions {
+	if spec.Exploration == nil && spec.Workflow == nil && len(spec.Agents) > maxSessions {
 		return fmt.Errorf("at most %d agent sessions are supported", maxSessions)
 	}
 	seen := map[string]struct{}{}
@@ -196,6 +196,10 @@ func validateSpec(spec RunSpec, maxSessions int) error {
 }
 
 func (r *Runner) execute(run *Run, spec RunSpec, redactor *Redactor) {
+	if spec.Workflow != nil {
+		r.executeWorkflow(run, spec, redactor)
+		return
+	}
 	started := time.Now().UTC()
 	if err := r.updateRun(run, func(record *RunRecord) {
 		record.Status = StatusRunning
@@ -642,17 +646,25 @@ func (r *Runner) observeBackend(ctx context.Context, redactor *Redactor, run *Ru
 	}
 }
 
-func (r *Runner) emitEvent(run *Run, redactor *Redactor, event Event) Event {
+func (r *Runner) appendEvent(run *Run, redactor *Redactor, event Event) (Event, error) {
 	event.Data = redactor.RedactJSON(event.Data)
 	event.Raw = redactor.RedactJSON(event.Raw)
 	stored, err := r.store.AppendEvent(context.Background(), event)
 	if err != nil {
-		r.logger.Warn("persist event failed", "run_id", run.ID, "type", event.Type, "error", err)
-		return Event{}
+		return Event{}, fmt.Errorf("persist event %q: %w", event.Type, err)
 	}
 	select {
 	case run.events <- stored:
 	default:
+	}
+	return stored, nil
+}
+
+func (r *Runner) emitEvent(run *Run, redactor *Redactor, event Event) Event {
+	stored, err := r.appendEvent(run, redactor, event)
+	if err != nil {
+		r.logger.Warn("persist event failed", "run_id", run.ID, "type", event.Type, "error", err)
+		return Event{}
 	}
 	return stored
 }
@@ -668,9 +680,16 @@ func (r *Runner) checkLiveBudget(run *Run, budget Budget, session AgentSession) 
 	}
 }
 
-func (r *Runner) emitLog(run *Run, redactor *Redactor, record LogRecord) {
+func (r *Runner) appendLog(run *Run, redactor *Redactor, record LogRecord) error {
 	record.Text = redactor.Redact(record.Text)
 	if _, err := r.store.AppendLog(context.Background(), record); err != nil {
+		return fmt.Errorf("persist %s log: %w", record.Stream, err)
+	}
+	return nil
+}
+
+func (r *Runner) emitLog(run *Run, redactor *Redactor, record LogRecord) {
+	if err := r.appendLog(run, redactor, record); err != nil {
 		r.logger.Warn("persist log failed", "run_id", run.ID, "stream", record.Stream, "error", err)
 	}
 }
