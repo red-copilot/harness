@@ -26,24 +26,27 @@ The agent owns its reasoning loop. The SDK governs execution, container isolatio
 Go Library / CLI / HTTP
           │
           ▼
-     Run Controller
+   Runner (owns lifecycle,
+ cancellation, audit, verdict)
           │
-     ┌────┴───────────────┐
-     ▼                    ▼
-Planner / Executors    SQLite Store
-     │                    │
-     ▼                    ▼
-Branch Tree Engine    Events / Knowledge / SQLite v2
-     │
-     ▼
-Isolated Agent + Target Environment
-     │
-     ▼
-Verifier / Benchmark Evaluator
-     │
-     ▼
-Authoritative Verdict
+          ├──────────────► SQLite canonical audit
+          │
+          ▼
+ Workflow (optional exploration)
+          │
+          ▼
+ Isolated Agent + Target Environment
+          │
+          ▼
+ Verifier / Benchmark Evaluator
+          │
+          ▼
+ Authoritative Verdict
 ```
+
+The core package knows only `Run`, `AgentSession`, `Store`, `Verifier`, and the
+injected `Workflow` boundary. Pi, Docker, TSec, SQLite, CLI, HTTP, and Web are
+adapters. Exploration is an optional package, not a second core control path.
 
 ## Requirements · 环境要求
 
@@ -78,7 +81,7 @@ if err != nil {
 }
 defer runner.Close(context.Background())
 
-result, err := runner.Run(ctx, harness.RunSpec{
+spec := harness.RunSpec{
     Task: harness.Task{ID: "demo", Objective: "Find and submit the flag."},
     Target: harness.Target{ID: "local", Addresses: []string{"10.0.0.5:8080"}},
     Agents: []harness.AgentSpec{{
@@ -86,19 +89,27 @@ result, err := runner.Run(ctx, harness.RunSpec{
         Pi: &harness.PiSpec{Provider: "openai", Model: "gpt-5", Thinking: "high"},
         EnvFrom: []string{"OPENAI_API_KEY"},
     }},
-    Exploration: &harness.ExplorationPolicy{MaxDepth: 4, MaxActiveBranches: 2},
     Verifier: verify.Command{Path: "./verify.sh"},
-})
+}
+if err := exploration.Configure(&spec, exploration.DefaultPolicy(), store); err != nil {
+    log.Fatal(err)
+}
+result, err := runner.Run(ctx, spec)
 ```
+
+With no workflow configured, the Runner uses the direct workflow: one isolated
+session per declared agent, followed by verifier/backend authority. Add the
+`github.com/red-copilot/harness/exploration` import when the binary-tree workflow
+is desired.
 
 Only the verifier or benchmark evaluator can produce an authoritative success verdict. Agent messages, tool exit codes, and self-reported completion are observations—not proof.
 
 <sub>只有验证器或基准评测器能够给出权威的成功结论。智能体消息、工具退出码和自述完成状态都只是观测，不是证明。</sub>
 
-### Binary Hypothesis Tree · 二叉假设树
+### Optional Exploration Workflow · 可选探索工作流
 
-When `Exploration` is configured, the Harness expands one agent spec into a
-read-only Planner and fresh-context Executors:
+When the exploration workflow is configured, it expands one agent spec into a
+read-only Planner and fresh-context Executors outside the Harness core:
 
 - `Branch` is the long-lived investigation unit. `Attempt` is one bounded
   execution. `Observation` is immutable evidence. `Knowledge` is a
@@ -121,7 +132,7 @@ read-only Planner and fresh-context Executors:
 - Secrets, flags, and credentials are represented by references, never stored
   as knowledge values.
 
-The CLI enables this path by default for single-agent YAML/JSON runs:
+The CLI enables this workflow by default for single-agent YAML/JSON runs:
 
 ```yaml
 exploration:
