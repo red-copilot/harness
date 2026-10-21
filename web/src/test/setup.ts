@@ -1,8 +1,12 @@
 import '@testing-library/jest-dom/vitest'
-import { cleanup } from '@testing-library/react'
+import { cleanup, configure } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from 'vitest'
+
+// jsdom renders under load on CI; the default 1s findBy* budget is too tight
+// for full antd pages, so a slow machine looks like a real assertion failure.
+configure({ asyncUtilTimeout: 10000 })
 
 export const server = setupServer()
 
