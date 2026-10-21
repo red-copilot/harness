@@ -1,11 +1,10 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -14,183 +13,47 @@ import (
 	"time"
 
 	"github.com/red-copilot/harness"
-	"github.com/red-copilot/harness/exploration"
-	"github.com/red-copilot/harness/verify"
 )
 
-func (r *RunRequest) UnmarshalJSON(data []byte) error {
-	var raw struct {
-		Run             json.RawMessage     `json:"run"`
-		Exploration     *exploration.Policy `json:"exploration,omitempty"`
-		VerifierCommand *verify.Command     `json:"verifier_command,omitempty"`
-		TSec            *TSecRequest        `json:"tsec,omitempty"`
-		Target          *TargetRequest      `json:"target,omitempty"`
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&raw); err != nil {
-		return err
-	}
-	if len(raw.Run) > 0 {
-		var run struct {
-			harness.RunSpec
-			Exploration *exploration.Policy `json:"exploration,omitempty"`
-		}
-		runDecoder := json.NewDecoder(bytes.NewReader(raw.Run))
-		runDecoder.DisallowUnknownFields()
-		if err := runDecoder.Decode(&run); err != nil {
-			return err
-		}
-		r.Run = run.RunSpec
-		if raw.Exploration == nil {
-			raw.Exploration = run.Exploration
-		}
-	}
-	r.Exploration = raw.Exploration
-	r.VerifierCommand = raw.VerifierCommand
-	r.TSec = raw.TSec
-	r.Target = raw.Target
-	return nil
-}
-
-type TargetRequest struct {
-	Kind        string   `json:"kind,omitempty"`
-	ID          string   `json:"id,omitempty"`
-	Addresses   []string `json:"addresses,omitempty"`
-	Image       string   `json:"image,omitempty"`
-	Command     []string `json:"command,omitempty"`
-	Ports       []string `json:"ports,omitempty"`
-	Network     string   `json:"network,omitempty"`
-	ComposeFile string   `json:"compose_file,omitempty"`
-	ProjectName string   `json:"project_name,omitempty"`
-	Service     string   `json:"service,omitempty"`
-	Port        string   `json:"port,omitempty"`
-}
-
 type RunRequest struct {
-	Run             harness.RunSpec     `json:"run"`
-	Exploration     *exploration.Policy `json:"exploration,omitempty"`
-	VerifierCommand *verify.Command     `json:"verifier_command,omitempty"`
-	TSec            *TSecRequest        `json:"tsec,omitempty"`
-	Target          *TargetRequest      `json:"target,omitempty"`
+	Descriptor harness.RunDescriptor `json:"descriptor"`
 }
 
-type TSecRequest struct {
-	BaseURL   string `json:"base_url"`
-	Token     string `json:"token,omitempty"`
-	Challenge string `json:"challenge"`
-	UseHint   bool   `json:"use_hint,omitempty"`
+func (r *RunRequest) UnmarshalJSON(data []byte) error {
+	var envelope struct {
+		Descriptor json.RawMessage `json:"descriptor"`
+	}
+	if err := json.Unmarshal(data, &envelope); err == nil && len(envelope.Descriptor) > 0 {
+		decoder := json.NewDecoder(strings.NewReader(string(envelope.Descriptor)))
+		decoder.DisallowUnknownFields()
+		return decoder.Decode(&r.Descriptor)
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(&r.Descriptor)
 }
 
-type Builder func(RunRequest) (harness.RunSpec, error)
-
-type SweepRequest struct {
-	Run        harness.RunSpec `json:"run"`
-	TSec       *TSecRequest    `json:"tsec,omitempty"`
-	Challenges []string        `json:"challenges,omitempty"`
-	Parallel   int             `json:"parallel,omitempty"`
-	UseHint    bool            `json:"use_hint,omitempty"`
-}
-
-type SweepPlan struct {
-	ChallengeCodes []string
-	Parallel       int
-	Build          func(string) (harness.RunSpec, error)
-}
-
-type SweepBuilder func(SweepRequest) (SweepPlan, error)
-
-type SweepState struct {
-	ID         string           `json:"id"`
-	Status     harness.Status   `json:"status"`
-	RunIDs     []string         `json:"run_ids,omitempty"`
-	Results    []harness.Result `json:"results,omitempty"`
-	Error      string           `json:"error,omitempty"`
-	CreatedAt  time.Time        `json:"created_at"`
-	FinishedAt *time.Time       `json:"finished_at,omitempty"`
-}
-
-// Overview is the bounded observability summary returned to the UI.
-type Overview struct {
-	GeneratedAt time.Time        `json:"generated_at"`
-	Window      int              `json:"window"`
-	Runs        RunOverview      `json:"runs"`
-	Usage       harness.Usage    `json:"usage"`
-	Duration    DurationOverview `json:"duration"`
-	Sweeps      SweepOverview    `json:"sweeps"`
-}
-
-type RunOverview struct {
-	Total       int     `json:"total"`
-	Active      int     `json:"active"`
-	Terminal    int     `json:"terminal"`
-	Queued      int     `json:"queued"`
-	Starting    int     `json:"starting"`
-	Running     int     `json:"running"`
-	Verifying   int     `json:"verifying"`
-	Succeeded   int     `json:"succeeded"`
-	Failed      int     `json:"failed"`
-	Cancelled   int     `json:"cancelled"`
-	TimedOut    int     `json:"timed_out"`
-	Interrupted int     `json:"interrupted"`
-	Stagnated   int     `json:"stagnated"`
-	SuccessRate float64 `json:"success_rate"`
-}
-
-type DurationOverview struct {
-	Samples   int     `json:"samples"`
-	AverageMS float64 `json:"average_ms"`
-	P50MS     float64 `json:"p50_ms"`
-	P95MS     float64 `json:"p95_ms"`
-}
-
-type SweepOverview struct {
-	Total     int `json:"total"`
-	Active    int `json:"active"`
-	Succeeded int `json:"succeeded"`
-	Failed    int `json:"failed"`
-}
-
-type branchReader interface {
-	ListBranches(context.Context, string) ([]exploration.Branch, error)
-}
-
-type knowledgeReader interface {
-	ListKnowledge(context.Context, string) ([]exploration.Knowledge, error)
-}
+type Builder func(harness.RunDescriptor) (harness.RunSpec, error)
 
 type Server struct {
-	runner       *harness.Runner
-	store        harness.Store
-	builder      Builder
-	sweepBuilder SweepBuilder
-
-	mu     sync.Mutex
-	live   map[string]*harness.Run
-	sweeps map[string]*SweepState
+	runner  *harness.Runner
+	store   harness.Store
+	builder Builder
+	mu      sync.Mutex
+	live    map[string]*harness.Run
 }
 
-func New(runner *harness.Runner, store harness.Store, builder Builder, sweepBuilder ...SweepBuilder) *Server {
-	s := &Server{runner: runner, store: store, builder: builder,
-		live: map[string]*harness.Run{}, sweeps: map[string]*SweepState{}}
-	if len(sweepBuilder) > 0 {
-		s.sweepBuilder = sweepBuilder[0]
-	}
-	return s
+func New(runner *harness.Runner, store harness.Store, builder Builder) *Server {
+	return &Server{runner: runner, store: store, builder: builder, live: map[string]*harness.Run{}}
 }
-
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.health)
 	mux.HandleFunc("/v1/runs", s.runs)
 	mux.HandleFunc("/v1/runs/", s.run)
-	mux.HandleFunc("/v1/overview", s.overview)
 	mux.HandleFunc("/v1/tasks/", s.task)
-	mux.HandleFunc("/v1/tsec/sweeps", s.sweepListCreate)
-	mux.HandleFunc("/v1/tsec/sweeps/", s.sweepGet)
 	return mux
 }
-
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w, http.MethodGet)
@@ -198,52 +61,42 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
-
 func (s *Server) runs(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
-	case http.MethodPost:
-		s.createRun(w, r)
 	case http.MethodGet:
-		runs, err := s.store.ListRuns(r.Context(), 100)
+		records, err := s.store.ListRuns(r.Context(), 100)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, runs)
-	default:
-		methodNotAllowed(w, http.MethodGet, http.MethodPost)
-	}
-}
-
-func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
-	var request RunRequest
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid run request: "+err.Error())
-		return
-	}
-	spec := request.Run
-	if s.builder != nil {
-		var err error
-		spec, err = s.builder(request)
+		writeJSON(w, http.StatusOK, records)
+	case http.MethodPost:
+		defer r.Body.Close()
+		var request RunRequest
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid run request: "+err.Error())
+			return
+		}
+		spec, err := s.builder(request.Descriptor)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		run, err := s.runner.Start(context.WithoutCancel(r.Context()), spec)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.mu.Lock()
+		s.live[run.ID] = run
+		s.mu.Unlock()
+		writeJSON(w, http.StatusAccepted, map[string]string{"run_id": run.ID})
+	default:
+		methodNotAllowed(w, http.MethodGet, http.MethodPost)
 	}
-	run, err := s.runner.Start(context.WithoutCancel(r.Context()), spec)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	s.mu.Lock()
-	s.live[run.ID] = run
-	s.mu.Unlock()
-	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": run.ID})
 }
-
 func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/v1/runs/")
 	parts := strings.Split(strings.Trim(path, "/"), "/")
@@ -267,39 +120,55 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 	}
 	switch parts[1] {
 	case "events":
-		if r.Method != http.MethodGet {
-			methodNotAllowed(w, http.MethodGet)
-			return
-		}
 		s.streamEvents(w, r, runID)
 	case "logs":
-		if r.Method != http.MethodGet {
-			methodNotAllowed(w, http.MethodGet)
-			return
-		}
-		s.runLogs(w, r, runID)
+		s.logs(w, r, runID)
 	case "verdict":
-		if r.Method != http.MethodGet {
-			methodNotAllowed(w, http.MethodGet)
-			return
-		}
-		s.runVerdict(w, r, runID)
+		s.verdict(w, r, runID)
 	case "branches":
 		if r.Method != http.MethodGet {
 			methodNotAllowed(w, http.MethodGet)
 			return
 		}
-		reader, ok := s.store.(branchReader)
-		if !ok {
-			writeError(w, http.StatusNotImplemented, "branch reader is not configured")
-			return
-		}
-		branches, err := reader.ListBranches(r.Context(), runID)
+		items, err := s.store.ListBranches(r.Context(), runID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, branches)
+		writeJSON(w, http.StatusOK, items)
+	case "attempts":
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, http.MethodGet)
+			return
+		}
+		items, err := s.store.ListAttempts(r.Context(), runID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
+	case "observations":
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, http.MethodGet)
+			return
+		}
+		items, err := s.store.ListObservations(r.Context(), runID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
+	case "artifacts":
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, http.MethodGet)
+			return
+		}
+		items, err := s.store.ListArtifacts(r.Context(), runID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
 	case "cancel":
 		if r.Method != http.MethodPost {
 			methodNotAllowed(w, http.MethodPost)
@@ -324,7 +193,9 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 			SessionID string `json:"session_id"`
 			Message   string `json:"message"`
 		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&body); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid steer request")
 			return
 		}
@@ -342,7 +213,6 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	}
 }
-
 func (s *Server) task(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w, http.MethodGet)
@@ -350,24 +220,22 @@ func (s *Server) task(w http.ResponseWriter, r *http.Request) {
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/v1/tasks/")
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] != "knowledge" {
+	if len(parts) != 2 || parts[1] != "knowledge" {
 		http.NotFound(w, r)
 		return
 	}
-	reader, ok := s.store.(knowledgeReader)
-	if !ok {
-		writeError(w, http.StatusNotImplemented, "knowledge reader is not configured")
-		return
-	}
-	items, err := reader.ListKnowledge(r.Context(), parts[0])
+	items, err := s.store.QueryKnowledge(r.Context(), harness.KnowledgeQuery{TaskID: parts[0], AllowCrossRun: true, Now: time.Now().UTC()})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, items)
 }
-
 func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, runID string) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
 	if _, err := s.store.GetRun(r.Context(), runID); err != nil {
 		writeError(w, http.StatusNotFound, "run not found")
 		return
@@ -378,116 +246,79 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, runID stri
 		return
 	}
 	after := int64(0)
+	if value := r.Header.Get("Last-Event-ID"); value != "" {
+		after, _ = strconv.ParseInt(value, 10, 64)
+	}
 	if value := r.URL.Query().Get("after_seq"); value != "" {
-		parsed, err := strconv.ParseInt(value, 10, 64)
-		if err != nil || parsed < 0 {
-			writeError(w, http.StatusBadRequest, "after_seq must be a non-negative integer")
-			return
-		}
-		after = parsed
-	} else if value := r.Header.Get("Last-Event-ID"); value != "" {
-		if parsed, err := strconv.ParseInt(value, 10, 64); err == nil && parsed >= 0 {
-			after = parsed
+		candidate, _ := strconv.ParseInt(value, 10, 64)
+		if candidate > after {
+			after = candidate
 		}
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-	lastSeq := after
+	events, err := s.store.ListEvents(r.Context(), runID, after)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	for _, event := range events {
+		data, _ := json.Marshal(event)
+		fmt.Fprintf(w, "id: %d\ndata: %s\n\n", event.Seq, data)
+		flusher.Flush()
+	}
+	live := s.lookupLive(runID)
+	if live == nil {
+		return
+	}
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
 	for {
-		events, err := s.store.ListEvents(r.Context(), runID, lastSeq)
+		cursor := after
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+		}
+		events, err := s.store.ListEvents(r.Context(), runID, cursor)
 		if err != nil {
 			return
 		}
 		for _, event := range events {
 			data, _ := json.Marshal(event)
-			_, _ = fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", event.Seq, event.Type, data)
-			lastSeq = event.Seq
-		}
-		flusher.Flush()
-		record, err := s.store.GetRun(r.Context(), runID)
-		if err != nil {
-			return
-		}
-		if isTerminal(record.Status) && len(events) == 0 {
-			return
+			fmt.Fprintf(w, "id: %d\ndata: %s\n\n", event.Seq, data)
+			flusher.Flush()
+			after = event.Seq
 		}
 		select {
-		case <-r.Context().Done():
+		case <-live.Done():
+			remaining, _ := s.store.ListEvents(r.Context(), runID, after)
+			for _, event := range remaining {
+				data, _ := json.Marshal(event)
+				fmt.Fprintf(w, "id: %d\ndata: %s\n\n", event.Seq, data)
+				flusher.Flush()
+			}
 			return
-		case <-time.After(100 * time.Millisecond):
+		default:
 		}
 	}
 }
-
-func (s *Server) runLogs(w http.ResponseWriter, r *http.Request, runID string) {
-	if _, err := s.store.GetRun(r.Context(), runID); err != nil {
-		writeError(w, http.StatusNotFound, "run not found")
+func (s *Server) logs(w http.ResponseWriter, r *http.Request, runID string) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
 		return
 	}
-	after, limit, tail, err := parseLogQuery(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	var logs []harness.LogRecord
-	if reader, ok := s.store.(harness.LogPageReader); ok {
-		logs, err = reader.ListLogsPage(r.Context(), runID, after, limit, tail)
-	} else {
-		var all []harness.LogRecord
-		all, err = s.store.ListLogs(r.Context(), runID, after)
-		if err == nil {
-			if tail && after == 0 && len(all) > limit {
-				all = all[len(all)-limit:]
-			} else if len(all) > limit {
-				all = all[:limit]
-			}
-			logs = all
-		}
-	}
+	after, _ := strconv.ParseInt(r.URL.Query().Get("after_seq"), 10, 64)
+	items, err := s.store.ListLogs(r.Context(), runID, after)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if logs == nil {
-		logs = []harness.LogRecord{}
-	}
-	writeJSON(w, http.StatusOK, logs)
+	writeJSON(w, http.StatusOK, items)
 }
-
-func parseLogQuery(r *http.Request) (int64, int, bool, error) {
-	query := r.URL.Query()
-	after := int64(0)
-	if value := query.Get("after_seq"); value != "" {
-		parsed, err := strconv.ParseInt(value, 10, 64)
-		if err != nil || parsed < 0 {
-			return 0, 0, false, fmt.Errorf("after_seq must be a non-negative integer")
-		}
-		after = parsed
-	}
-	limit := 1000
-	if value := query.Get("limit"); value != "" {
-		parsed, err := strconv.Atoi(value)
-		if err != nil || parsed < 1 || parsed > 5000 {
-			return 0, 0, false, fmt.Errorf("limit must be between 1 and 5000")
-		}
-		limit = parsed
-	}
-	tail := false
-	if value := query.Get("tail"); value != "" {
-		parsed, err := strconv.ParseBool(value)
-		if err != nil {
-			return 0, 0, false, fmt.Errorf("tail must be a boolean")
-		}
-		tail = parsed
-	}
-	return after, limit, tail, nil
-}
-
-func (s *Server) runVerdict(w http.ResponseWriter, r *http.Request, runID string) {
-	if _, err := s.store.GetRun(r.Context(), runID); err != nil {
-		writeError(w, http.StatusNotFound, "run not found")
+func (s *Server) verdict(w http.ResponseWriter, r *http.Request, runID string) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
 		return
 	}
 	verdict, err := s.store.GetVerdict(r.Context(), runID)
@@ -497,334 +328,32 @@ func (s *Server) runVerdict(w http.ResponseWriter, r *http.Request, runID string
 	}
 	writeJSON(w, http.StatusOK, verdict)
 }
-
-func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		methodNotAllowed(w, http.MethodGet)
-		return
-	}
-	runs, err := s.store.ListRuns(r.Context(), 100)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	sweeps, err := s.store.ListSweeps(r.Context(), 100)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, buildOverview(runs, sweeps))
-}
-
-func buildOverview(runs []harness.RunRecord, sweeps []harness.SweepRecord) Overview {
-	overview := Overview{
-		GeneratedAt: time.Now().UTC(),
-		Window:      100,
-		Runs:        RunOverview{Total: len(runs)},
-	}
-	durations := make([]float64, 0)
-	for _, run := range runs {
-		switch run.Status {
-		case harness.StatusQueued:
-			overview.Runs.Queued++
-		case harness.StatusStarting:
-			overview.Runs.Starting++
-		case harness.StatusRunning:
-			overview.Runs.Running++
-		case harness.StatusVerifying:
-			overview.Runs.Verifying++
-		case harness.StatusSucceeded:
-			overview.Runs.Succeeded++
-		case harness.StatusFailed:
-			overview.Runs.Failed++
-		case harness.StatusCancelled:
-			overview.Runs.Cancelled++
-		case harness.StatusTimedOut:
-			overview.Runs.TimedOut++
-		case harness.StatusInterrupted:
-			overview.Runs.Interrupted++
-		case harness.StatusStagnated:
-			overview.Runs.Stagnated++
-		}
-		if isActive(run.Status) {
-			overview.Runs.Active++
-		}
-		if isTerminal(run.Status) {
-			overview.Runs.Terminal++
-		}
-		if len(run.Result) != 0 {
-			var result harness.Result
-			if json.Unmarshal(run.Result, &result) == nil {
-				overview.Usage.InputTokens += result.Usage.InputTokens
-				overview.Usage.OutputTokens += result.Usage.OutputTokens
-				overview.Usage.TotalTokens += result.Usage.TotalTokens
-				overview.Usage.ModelCalls += result.Usage.ModelCalls
-				overview.Usage.ToolCalls += result.Usage.ToolCalls
-				overview.Usage.CostUSD += result.Usage.CostUSD
-			}
-		}
-		if run.StartedAt != nil && run.FinishedAt != nil && !run.FinishedAt.Before(*run.StartedAt) {
-			durations = append(durations, float64(run.FinishedAt.Sub(*run.StartedAt).Milliseconds()))
-		}
-	}
-	if overview.Runs.Terminal > 0 {
-		overview.Runs.SuccessRate = round(float64(overview.Runs.Succeeded)/float64(overview.Runs.Terminal), 4)
-	}
-	overview.Duration = summarizeDurations(durations)
-	overview.Usage.CostUSD = round(overview.Usage.CostUSD, 6)
-	overview.Sweeps.Total = len(sweeps)
-	for _, sweep := range sweeps {
-		if isActive(sweep.Status) {
-			overview.Sweeps.Active++
-		}
-		switch sweep.Status {
-		case harness.StatusSucceeded:
-			overview.Sweeps.Succeeded++
-		case harness.StatusFailed:
-			overview.Sweeps.Failed++
-		}
-	}
-	return overview
-}
-
-func summarizeDurations(values []float64) DurationOverview {
-	if len(values) == 0 {
-		return DurationOverview{}
-	}
-	sort.Float64s(values)
-	total := 0.0
-	for _, value := range values {
-		total += value
-	}
-	return DurationOverview{
-		Samples:   len(values),
-		AverageMS: round(total/float64(len(values)), 3),
-		P50MS:     percentile(values, 0.50),
-		P95MS:     percentile(values, 0.95),
-	}
-}
-
-func percentile(sorted []float64, p float64) float64 {
-	index := int(math.Ceil(p*float64(len(sorted)))) - 1
-	if index < 0 {
-		index = 0
-	}
-	if index >= len(sorted) {
-		index = len(sorted) - 1
-	}
-	return sorted[index]
-}
-
-func round(value float64, places int) float64 {
-	scale := math.Pow10(places)
-	return math.Round(value*scale) / scale
-}
-
-func isActive(status harness.Status) bool {
-	switch status {
-	case harness.StatusQueued, harness.StatusStarting, harness.StatusRunning, harness.StatusVerifying:
-		return true
-	default:
-		return false
-	}
-}
-
 func (s *Server) lookupLive(runID string) *harness.Run {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.live[runID]
-}
-
-func isTerminal(status harness.Status) bool {
-	switch status {
-	case harness.StatusSucceeded, harness.StatusFailed, harness.StatusCancelled,
-		harness.StatusTimedOut, harness.StatusInterrupted, harness.StatusStagnated:
-		return true
-	default:
-		return false
-	}
-}
-
-func (s *Server) sweepListCreate(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodPost:
-		s.createSweep(w, r)
-	case http.MethodGet:
-		s.mu.Lock()
-		out := make([]SweepState, 0, len(s.sweeps))
-		for _, sweep := range s.sweeps {
-			out = append(out, snapshotSweepLocked(sweep))
-		}
-		s.mu.Unlock()
-		if len(out) == 0 {
-			sweeps, err := s.store.ListSweeps(r.Context(), 100)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-			for _, record := range sweeps {
-				var state SweepState
-				if json.Unmarshal(record.Result, &state) == nil {
-					out = append(out, state)
-				}
-			}
-		}
-		writeJSON(w, http.StatusOK, out)
-	default:
-		methodNotAllowed(w, http.MethodGet, http.MethodPost)
-	}
-}
-
-func (s *Server) createSweep(w http.ResponseWriter, r *http.Request) {
-	if s.sweepBuilder == nil {
-		writeError(w, http.StatusNotImplemented, "TSec sweeps are not configured")
-		return
-	}
-	defer r.Body.Close()
-	var request SweepRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid sweep request: "+err.Error())
-		return
-	}
-	plan, err := s.sweepBuilder(request)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if plan.Parallel <= 0 {
-		plan.Parallel = 3
-	}
-	if plan.Parallel > 3 {
-		plan.Parallel = 3
-	}
-	state := &SweepState{ID: "sweep_" + time.Now().UTC().Format("20060102T150405.000000000Z"), Status: harness.StatusQueued, CreatedAt: time.Now().UTC()}
-	s.mu.Lock()
-	s.sweeps[state.ID] = state
-	snapshot := snapshotSweepLocked(state)
-	s.mu.Unlock()
-	s.persistSweep(snapshot)
-	go s.executeSweep(state, plan)
-	writeJSON(w, http.StatusAccepted, snapshot)
-}
-
-func (s *Server) executeSweep(state *SweepState, plan SweepPlan) {
-	s.updateSweep(state, func() { state.Status = harness.StatusRunning })
-	sem := make(chan struct{}, plan.Parallel)
-	var wg sync.WaitGroup
-	for _, code := range plan.ChallengeCodes {
-		code := code
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			spec, err := plan.Build(code)
-			if err != nil {
-				s.appendSweepError(state, err)
-				return
-			}
-			run, err := s.runner.Start(context.WithoutCancel(context.Background()), spec)
-			if err != nil {
-				s.appendSweepError(state, err)
-				return
-			}
-			s.mu.Lock()
-			state.RunIDs = append(state.RunIDs, run.ID)
-			s.mu.Unlock()
-			result, _ := run.Wait(context.Background())
-			s.mu.Lock()
-			state.Results = append(state.Results, result)
-			s.mu.Unlock()
-		}()
-	}
-	wg.Wait()
-	s.updateSweep(state, func() {
-		finished := time.Now().UTC()
-		state.FinishedAt = &finished
-		state.Status = harness.StatusSucceeded
-		if state.Error != "" || len(state.Results) == 0 {
-			state.Status = harness.StatusFailed
-		}
-	})
-}
-
-func (s *Server) updateSweep(state *SweepState, mutate func()) {
-	s.mu.Lock()
-	mutate()
-	snapshot := snapshotSweepLocked(state)
-	s.mu.Unlock()
-	s.persistSweep(snapshot)
-}
-
-func (s *Server) appendSweepError(state *SweepState, err error) {
-	s.updateSweep(state, func() {
-		if state.Error != "" {
-			state.Error += "; "
-		}
-		state.Error += err.Error()
-	})
-}
-
-func (s *Server) persistSweep(snapshot SweepState) {
-	result, err := json.Marshal(snapshot)
-	if err != nil {
-		return
-	}
-	_ = s.store.SaveSweep(context.Background(), harness.SweepRecord{
-		ID: snapshot.ID, Status: snapshot.Status, Result: result,
-		Error: snapshot.Error, CreatedAt: snapshot.CreatedAt, FinishedAt: snapshot.FinishedAt,
-	})
-}
-
-func (s *Server) sweepGet(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		methodNotAllowed(w, http.MethodGet)
-		return
-	}
-	id := strings.TrimPrefix(r.URL.Path, "/v1/tsec/sweeps/")
-	s.mu.Lock()
-	state := s.sweeps[id]
-	var snapshot SweepState
-	if state != nil {
-		snapshot = snapshotSweepLocked(state)
-	}
-	s.mu.Unlock()
-	if state == nil {
-		record, err := s.store.GetSweep(r.Context(), id)
-		if err != nil {
-			writeError(w, http.StatusNotFound, "sweep not found")
-			return
-		}
-		if err := json.Unmarshal(record.Result, &snapshot); err != nil {
-			writeError(w, http.StatusInternalServerError, "stored sweep is invalid")
-			return
+	run := s.live[runID]
+	if run != nil {
+		select {
+		case <-run.Done():
+			delete(s.live, runID)
+			run = nil
+		default:
 		}
 	}
-	writeJSON(w, http.StatusOK, snapshot)
+	return run
 }
-
-func snapshotSweepLocked(state *SweepState) SweepState {
-	snapshot := *state
-	snapshot.RunIDs = append([]string(nil), state.RunIDs...)
-	snapshot.Results = append([]harness.Result(nil), state.Results...)
-	if state.FinishedAt != nil {
-		finished := *state.FinishedAt
-		snapshot.FinishedAt = &finished
-	}
-	return snapshot
-}
-
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
 }
-
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
-
-func methodNotAllowed(w http.ResponseWriter, methods ...string) {
-	w.Header().Set("Allow", strings.Join(methods, ", "))
+func methodNotAllowed(w http.ResponseWriter, allowed ...string) {
+	w.Header().Set("Allow", strings.Join(allowed, ", "))
 	writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 }
+
+var _ = errors.Is
+var _ = sort.Strings

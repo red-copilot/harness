@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"encoding/json"
 	"os"
 	"regexp"
 	"sort"
@@ -11,15 +12,12 @@ const RedactedValue = "[REDACTED]"
 
 var flagLikePattern = regexp.MustCompile(`(?i)(flag|ctf|tsec)\{[^}]{1,256}\}`)
 
-// Redactor removes known secret values from persisted text. It is intentionally
-// best-effort: callers should never put credentials in prompts or logs.
-type Redactor struct {
-	values []string
-}
+// Redactor removes known secret values and obvious secret-like flags.
+type Redactor struct{ values []string }
 
 func NewRedactor(values ...string) *Redactor {
 	seen := map[string]struct{}{}
-	var clean []string
+	clean := make([]string, 0, len(values))
 	for _, value := range values {
 		if len(value) < 4 {
 			continue
@@ -43,37 +41,89 @@ func (r *Redactor) Redact(value string) string {
 	return flagLikePattern.ReplaceAllString(value, RedactedValue)
 }
 
-func (r *Redactor) RedactJSON(value []byte) []byte {
-	if len(value) == 0 || r == nil {
+func (r *Redactor) RedactJSON(value []byte) []byte { return redactJSONPreserve(r, value) }
+
+func (r *Redactor) Contains(value string) bool {
+	if r != nil {
+		for _, secret := range r.values {
+			if strings.Contains(value, secret) {
+				return true
+			}
+		}
+	}
+	return flagLikePattern.MatchString(value) || containsSecretLikeValue(value)
+}
+
+func redactJSONPreserve(r *Redactor, value []byte) []byte {
+	if len(value) == 0 {
+		return value
+	}
+	var decoded any
+	if err := json.Unmarshal(value, &decoded); err == nil {
+		cleaned := redactJSONValue(r, decoded)
+		if encoded, err := json.Marshal(cleaned); err == nil {
+			return encoded
+		}
+	}
+	if r == nil {
 		return value
 	}
 	return []byte(r.Redact(string(value)))
 }
 
+func redactJSONValue(r *Redactor, value any) any {
+	switch typed := value.(type) {
+	case string:
+		if r == nil {
+			return value
+		}
+		return r.Redact(typed)
+	case []any:
+		for i := range typed {
+			typed[i] = redactJSONValue(r, typed[i])
+		}
+		return typed
+	case map[string]any:
+		for key, item := range typed {
+			typed[key] = redactJSONValue(r, item)
+		}
+		return typed
+	default:
+		return value
+	}
+}
+
 func redactorForSpec(spec RunSpec) *Redactor {
 	names := append([]string(nil), spec.SecretEnv...)
-	valuesFromEnv := []string{}
-	for _, agent := range spec.Agents {
+	values := []string{}
+	agents := append([]AgentSpec{spec.Planner}, spec.Executors...)
+	for _, agent := range agents {
 		for _, value := range agent.Env {
-			valuesFromEnv = append(valuesFromEnv, value)
+			values = append(values, value)
 		}
 		names = append(names, agent.EnvFrom...)
-		if agent.Pi != nil {
-			names = append(names, agent.Pi.EnvPassthrough...)
-		}
-		for key := range agent.Env {
+		for key, value := range agent.Env {
 			for _, secretName := range spec.SecretEnv {
 				if key == secretName {
-					names = append(names, key)
+					values = append(values, value)
 				}
 			}
 		}
 	}
-	values := append([]string(nil), valuesFromEnv...)
 	for _, name := range names {
 		if value, ok := os.LookupEnv(name); ok {
 			values = append(values, value)
 		}
 	}
 	return NewRedactor(values...)
+}
+
+func containsSecretLikeValue(value string) bool {
+	lower := strings.ToLower(value)
+	for _, marker := range []string{"password=", "token=", "flag{", "ctf{", "tsec{", "benchmark_token", "authorization: bearer"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }

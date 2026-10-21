@@ -3,9 +3,13 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -13,40 +17,33 @@ import (
 	"github.com/red-copilot/harness"
 )
 
-const schemaVersion = 2
+const schemaVersion = 3
 
-// Store is the SQLite implementation of harness.Store.
 type Store struct {
-	db *sql.DB
+	db           *sql.DB
+	path         string
+	artifactRoot string
 }
 
-// Open opens or creates the canonical harness database.
 func Open(path string) (*Store, error) {
 	if path == "" {
 		path = ".harness/harness.db"
 	}
-	if dir := filepath.Dir(path); dir != "." && dir != "" {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return nil, fmt.Errorf("create database directory: %w", err)
-		}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil && filepath.Dir(path) != "." {
+		return nil, fmt.Errorf("create database directory: %w", err)
 	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open database file: %w", err)
 	}
-	if err := file.Close(); err != nil {
-		return nil, fmt.Errorf("close database file: %w", err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return nil, fmt.Errorf("secure database file: %w", err)
-	}
-
+	_ = file.Close()
+	_ = os.Chmod(path, 0o600)
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 	db.SetMaxOpenConns(1)
-	store := &Store{db: db}
+	store := &Store{db: db, path: path, artifactRoot: filepath.Join(filepath.Dir(path), "artifacts", "sha256")}
 	if err := store.configure(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -61,12 +58,7 @@ func Open(path string) (*Store, error) {
 func (s *Store) configure() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	for _, pragma := range []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA busy_timeout=5000",
-		"PRAGMA foreign_keys=ON",
-		"PRAGMA synchronous=NORMAL",
-	} {
+	for _, pragma := range []string{"PRAGMA journal_mode=WAL", "PRAGMA busy_timeout=5000", "PRAGMA foreign_keys=ON", "PRAGMA synchronous=NORMAL"} {
 		if _, err := s.db.ExecContext(ctx, pragma); err != nil {
 			return fmt.Errorf("%s: %w", pragma, err)
 		}
@@ -77,127 +69,44 @@ func (s *Store) configure() error {
 func (s *Store) migrate() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	core := []string{
+	statements := []string{
 		`CREATE TABLE IF NOT EXISTS schema_meta (version INTEGER NOT NULL)`,
 		`INSERT INTO schema_meta(version) SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM schema_meta)`,
-		`CREATE TABLE IF NOT EXISTS runs (
-			id TEXT PRIMARY KEY, status TEXT NOT NULL, spec BLOB, result BLOB,
-			error TEXT NOT NULL DEFAULT '', sweep_id TEXT NOT NULL DEFAULT '',
-			metadata BLOB, created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT
-		)`,
-		`CREATE TABLE IF NOT EXISTS events (
-			seq INTEGER PRIMARY KEY AUTOINCREMENT,
-			run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-			session_id TEXT NOT NULL DEFAULT '', source TEXT NOT NULL, type TEXT NOT NULL,
-			time TEXT NOT NULL, data BLOB, raw BLOB
-		)`,
+		`CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, spec BLOB, result BLOB, error TEXT NOT NULL DEFAULT '', sweep_id TEXT NOT NULL DEFAULT '', metadata BLOB, created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT)`,
+		`CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, session_id TEXT NOT NULL DEFAULT '', source TEXT NOT NULL, type TEXT NOT NULL, time TEXT NOT NULL, data BLOB, raw BLOB, schema_version INTEGER NOT NULL DEFAULT 1)`,
 		`CREATE INDEX IF NOT EXISTS events_run_seq ON events(run_id, seq)`,
-		`CREATE TABLE IF NOT EXISTS logs (
-			seq INTEGER PRIMARY KEY AUTOINCREMENT,
-			run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-			session_id TEXT NOT NULL DEFAULT '', stream TEXT NOT NULL, time TEXT NOT NULL, text TEXT NOT NULL
-		)`,
+		`CREATE TABLE IF NOT EXISTS logs (seq INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, session_id TEXT NOT NULL DEFAULT '', stream TEXT NOT NULL, time TEXT NOT NULL, text TEXT NOT NULL)`,
 		`CREATE INDEX IF NOT EXISTS logs_run_seq ON logs(run_id, seq)`,
-		`CREATE TABLE IF NOT EXISTS verdicts (
-			run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
-			success INTEGER NOT NULL, score REAL NOT NULL DEFAULT 0,
-			message TEXT NOT NULL DEFAULT '', evidence BLOB, created_at TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS sweeps (
-			id TEXT PRIMARY KEY, status TEXT NOT NULL, spec BLOB, result BLOB,
-			created_at TEXT NOT NULL, finished_at TEXT
-		)`,
+		`CREATE TABLE IF NOT EXISTS verdicts (run_id TEXT PRIMARY KEY, success INTEGER NOT NULL, score REAL NOT NULL DEFAULT 0, message TEXT NOT NULL DEFAULT '', evidence BLOB, created_at TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS sweeps (id TEXT PRIMARY KEY, status TEXT NOT NULL, spec BLOB, result BLOB, error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, finished_at TEXT)`,
+		`CREATE TABLE IF NOT EXISTS exploration_branches (id TEXT PRIMARY KEY, parent_id TEXT NOT NULL DEFAULT '', task_id TEXT NOT NULL, run_id TEXT NOT NULL DEFAULT '', depth INTEGER NOT NULL, topic TEXT NOT NULL, goal TEXT NOT NULL DEFAULT '', hypothesis TEXT NOT NULL DEFAULT '', success_condition TEXT NOT NULL DEFAULT '', failure_condition TEXT NOT NULL DEFAULT '', scope TEXT NOT NULL, budget BLOB, status TEXT NOT NULL, priority INTEGER NOT NULL DEFAULT 0, knowledge_refs BLOB, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, payload BLOB)`,
+		`CREATE TABLE IF NOT EXISTS exploration_attempts (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, branch_id TEXT NOT NULL, session_id TEXT NOT NULL, status TEXT NOT NULL, outcome TEXT NOT NULL, observation_ids BLOB, started_at TEXT NOT NULL, finished_at TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', payload BLOB)`,
+		`CREATE TABLE IF NOT EXISTS exploration_observations (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, branch_id TEXT NOT NULL, attempt_id TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL, summary TEXT NOT NULL, evidence BLOB, created_at TEXT NOT NULL, payload BLOB)`,
+		`CREATE TABLE IF NOT EXISTS exploration_observation_artifacts (run_id TEXT NOT NULL, observation_id TEXT NOT NULL, artifact_id TEXT NOT NULL, PRIMARY KEY(run_id, observation_id, artifact_id))`,
+		`CREATE TABLE IF NOT EXISTS artifacts (run_id TEXT NOT NULL, id TEXT NOT NULL, attempt_id TEXT NOT NULL, session_id TEXT NOT NULL, name TEXT NOT NULL, media_type TEXT NOT NULL, size INTEGER NOT NULL, sha256 TEXT NOT NULL, redacted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, PRIMARY KEY(run_id, id, attempt_id, name))`,
+		`CREATE TABLE IF NOT EXISTS knowledge (run_id TEXT NOT NULL, id TEXT NOT NULL, task_id TEXT NOT NULL, version INTEGER NOT NULL, payload BLOB NOT NULL, PRIMARY KEY(run_id, id, version))`,
+		`CREATE TABLE IF NOT EXISTS knowledge_sources (run_id TEXT NOT NULL, knowledge_id TEXT NOT NULL, version INTEGER NOT NULL, source BLOB NOT NULL, PRIMARY KEY(run_id, knowledge_id, version, source))`,
+		`CREATE TABLE IF NOT EXISTS knowledge_versions (run_id TEXT NOT NULL, knowledge_id TEXT NOT NULL, version INTEGER NOT NULL, payload BLOB NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(run_id, knowledge_id, version))`,
 	}
-	for _, stmt := range core {
+	for _, stmt := range statements {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("migrate core: %w", err)
+			return fmt.Errorf("migrate v3: %w", err)
 		}
 	}
-	var version int
-	if err := s.db.QueryRowContext(ctx, `SELECT version FROM schema_meta LIMIT 1`).Scan(&version); err != nil {
-		return fmt.Errorf("read schema version: %w", err)
-	}
-	if version >= schemaVersion {
-		return nil
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	// Additive upgrades for databases created by pre-v3 binaries.
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE events ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1`)
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE exploration_branches ADD COLUMN payload BLOB`)
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE exploration_attempts ADD COLUMN payload BLOB`)
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE exploration_observations ADD COLUMN payload BLOB`)
+	_, err := s.db.ExecContext(ctx, `UPDATE schema_meta SET version=?`, schemaVersion)
 	if err != nil {
-		return fmt.Errorf("begin schema migration: %w", err)
-	}
-	rollback := func(cause error) error {
-		_ = tx.Rollback()
-		return cause
-	}
-	for _, stmt := range v2SchemaStatements() {
-		if _, err := tx.ExecContext(ctx, stmt); err != nil {
-			return rollback(fmt.Errorf("migrate v2: %w", err))
-		}
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE schema_meta SET version=?`, schemaVersion); err != nil {
-		return rollback(fmt.Errorf("update schema version: %w", err))
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit schema migration: %w", err)
+		return fmt.Errorf("update schema version: %w", err)
 	}
 	return nil
 }
 
-func v2SchemaStatements() []string {
-	return []string{
-		`CREATE TABLE IF NOT EXISTS exploration_branches (
-			id TEXT PRIMARY KEY, parent_id TEXT NOT NULL DEFAULT '', task_id TEXT NOT NULL,
-			run_id TEXT NOT NULL DEFAULT '', depth INTEGER NOT NULL, topic TEXT NOT NULL,
-			goal TEXT NOT NULL DEFAULT '', hypothesis TEXT NOT NULL DEFAULT '',
-			success_condition TEXT NOT NULL DEFAULT '', failure_condition TEXT NOT NULL DEFAULT '',
-			scope TEXT NOT NULL, budget BLOB, status TEXT NOT NULL, priority INTEGER NOT NULL DEFAULT 0,
-			knowledge_refs BLOB, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-		)`,
-		`CREATE INDEX IF NOT EXISTS exploration_branches_task_status ON exploration_branches(task_id, status)`,
-		`CREATE TABLE IF NOT EXISTS exploration_attempts (
-			id TEXT PRIMARY KEY,
-			branch_id TEXT NOT NULL REFERENCES exploration_branches(id) ON DELETE CASCADE,
-			run_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL DEFAULT '',
-			status TEXT NOT NULL, outcome TEXT NOT NULL DEFAULT '', observation_ids BLOB,
-			started_at TEXT, finished_at TEXT, error TEXT NOT NULL DEFAULT ''
-		)`,
-		`CREATE INDEX IF NOT EXISTS exploration_attempts_branch ON exploration_attempts(branch_id)`,
-		`CREATE TABLE IF NOT EXISTS exploration_observations (
-			id TEXT PRIMARY KEY,
-			branch_id TEXT NOT NULL REFERENCES exploration_branches(id) ON DELETE CASCADE,
-			attempt_id TEXT NOT NULL REFERENCES exploration_attempts(id) ON DELETE CASCADE,
-			kind TEXT NOT NULL, action TEXT NOT NULL DEFAULT '', target TEXT NOT NULL DEFAULT '',
-			summary TEXT NOT NULL DEFAULT '', data BLOB, evidence_refs BLOB, created_at TEXT NOT NULL
-		)`,
-		`CREATE INDEX IF NOT EXISTS exploration_observations_attempt ON exploration_observations(attempt_id)`,
-		`CREATE TABLE IF NOT EXISTS task_knowledge (
-			id TEXT PRIMARY KEY, task_id TEXT NOT NULL, run_id TEXT NOT NULL DEFAULT '',
-			topic TEXT NOT NULL, kind TEXT NOT NULL, statement TEXT NOT NULL,
-			scope TEXT NOT NULL, target TEXT NOT NULL DEFAULT '', trust TEXT NOT NULL,
-			reuse TEXT NOT NULL, evidence_refs BLOB, sources BLOB, contradicts BLOB,
-			valid_from TEXT, last_validated_at TEXT, expires_at TEXT,
-			version INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-			UNIQUE(task_id, topic, scope, kind)
-		)`,
-		`CREATE INDEX IF NOT EXISTS task_knowledge_task_trust ON task_knowledge(task_id, trust)`,
-		`CREATE TABLE IF NOT EXISTS knowledge_contradictions (
-			knowledge_id TEXT NOT NULL REFERENCES task_knowledge(id) ON DELETE CASCADE,
-			contradicts_id TEXT NOT NULL REFERENCES task_knowledge(id) ON DELETE CASCADE,
-			status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL,
-			PRIMARY KEY(knowledge_id, contradicts_id)
-		)`,
-	}
-}
-
 func (s *Store) CreateRun(ctx context.Context, record harness.RunRecord) error {
-	if record.CreatedAt.IsZero() {
-		record.CreatedAt = time.Now().UTC()
-	}
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO runs(id, status, spec, result, error, sweep_id, metadata, created_at, started_at, finished_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		record.ID, string(record.Status), []byte(record.Spec), []byte(record.Result), record.Error,
-		record.SweepID, []byte(record.Metadata), formatTime(record.CreatedAt),
-		formatOptionalTime(record.StartedAt), formatOptionalTime(record.FinishedAt))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO runs(id,status,spec,result,error,sweep_id,metadata,created_at,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, record.ID, record.Status, nullableJSON(record.Spec), nullableJSON(record.Result), record.Error, record.SweepID, nullableJSON(record.Metadata), formatTime(record.CreatedAt), formatTimePtr(record.StartedAt), formatTimePtr(record.FinishedAt))
 	if err != nil {
 		return fmt.Errorf("create run: %w", err)
 	}
@@ -205,37 +114,30 @@ func (s *Store) CreateRun(ctx context.Context, record harness.RunRecord) error {
 }
 
 func (s *Store) UpdateRun(ctx context.Context, record harness.RunRecord) error {
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE runs SET status=?, spec=?, result=?, error=?, sweep_id=?, metadata=?, started_at=?, finished_at=?
-		WHERE id=?`,
-		string(record.Status), []byte(record.Spec), []byte(record.Result), record.Error,
-		record.SweepID, []byte(record.Metadata), formatOptionalTime(record.StartedAt),
-		formatOptionalTime(record.FinishedAt), record.ID)
+	result, err := s.db.ExecContext(ctx, `UPDATE runs SET status=?, spec=?, result=?, error=?, sweep_id=?, metadata=?, started_at=?, finished_at=? WHERE id=?`, record.Status, nullableJSON(record.Spec), nullableJSON(record.Result), record.Error, record.SweepID, nullableJSON(record.Metadata), formatTimePtr(record.StartedAt), formatTimePtr(record.FinishedAt), record.ID)
 	if err != nil {
 		return fmt.Errorf("update run: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("run %q not found", record.ID)
 	}
 	return nil
 }
 
 func (s *Store) GetRun(ctx context.Context, id string) (harness.RunRecord, error) {
-	row := s.db.QueryRowContext(ctx, `
-		SELECT id, status, spec, result, error, sweep_id, metadata, created_at, started_at, finished_at
-		FROM runs WHERE id=?`, id)
-	return scanRun(row)
+	return scanRun(s.db.QueryRowContext(ctx, `SELECT id,status,spec,result,error,sweep_id,metadata,created_at,started_at,finished_at FROM runs WHERE id=?`, id))
 }
-
 func (s *Store) ListRuns(ctx context.Context, limit int) ([]harness.RunRecord, error) {
 	if limit <= 0 {
-		limit = 50
+		limit = 100
 	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, status, spec, result, error, sweep_id, metadata, created_at, started_at, finished_at
-		FROM runs ORDER BY created_at DESC LIMIT ?`, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,status,spec,result,error,sweep_id,metadata,created_at,started_at,finished_at FROM runs ORDER BY created_at DESC LIMIT ?`, limit)
 	if err != nil {
-		return nil, fmt.Errorf("list runs: %w", err)
+		return nil, err
 	}
 	defer rows.Close()
-	out := make([]harness.RunRecord, 0)
+	var out []harness.RunRecord
 	for rows.Next() {
 		record, err := scanRun(rows)
 		if err != nil {
@@ -246,352 +148,304 @@ func (s *Store) ListRuns(ctx context.Context, limit int) ([]harness.RunRecord, e
 	return out, rows.Err()
 }
 
-type rowScanner interface {
-	Scan(...any) error
-}
-
-func scanRun(row rowScanner) (harness.RunRecord, error) {
+func scanRun(scanner interface{ Scan(...any) error }) (harness.RunRecord, error) {
 	var record harness.RunRecord
-	var status string
+	var status, created string
 	var spec, result, metadata []byte
-	var createdAt string
-	var startedAt, finishedAt sql.NullString
-	if err := row.Scan(&record.ID, &status, &spec, &result, &record.Error, &record.SweepID,
-		&metadata, &createdAt, &startedAt, &finishedAt); err != nil {
-		return harness.RunRecord{}, fmt.Errorf("scan run: %w", err)
+	var started, finished sql.NullString
+	if err := scanner.Scan(&record.ID, &status, &spec, &result, &record.Error, &record.SweepID, &metadata, &created, &started, &finished); err != nil {
+		return record, err
 	}
 	record.Status = harness.Status(status)
-	record.Spec = append([]byte(nil), spec...)
-	record.Result = append([]byte(nil), result...)
-	record.Metadata = append([]byte(nil), metadata...)
-	var err error
-	record.CreatedAt, err = parseTime(createdAt)
-	if err != nil {
-		return harness.RunRecord{}, err
-	}
-	if startedAt.Valid {
-		t, err := parseTime(startedAt.String)
-		if err != nil {
-			return harness.RunRecord{}, err
-		}
-		record.StartedAt = &t
-	}
-	if finishedAt.Valid {
-		t, err := parseTime(finishedAt.String)
-		if err != nil {
-			return harness.RunRecord{}, err
-		}
-		record.FinishedAt = &t
-	}
+	record.Spec = spec
+	record.Result = result
+	record.Metadata = metadata
+	record.CreatedAt = parseTime(created)
+	record.StartedAt = parseTimePtr(started)
+	record.FinishedAt = parseTimePtr(finished)
 	return record, nil
 }
 
 func (s *Store) AppendEvent(ctx context.Context, event harness.Event) (harness.Event, error) {
-	if event.Time.IsZero() {
-		event.Time = time.Now().UTC()
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = 1
 	}
-	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO events(run_id, session_id, source, type, time, data, raw)
-		VALUES(?, ?, ?, ?, ?, ?, ?)`,
-		event.RunID, event.SessionID, event.Source, event.Type, formatTime(event.Time),
-		[]byte(event.Data), []byte(event.Raw))
+	result, err := s.db.ExecContext(ctx, `INSERT INTO events(run_id,session_id,source,type,time,data,raw,schema_version) VALUES(?,?,?,?,?,?,?,?)`, event.RunID, event.SessionID, event.Source, event.Type, formatTime(event.Time), nullableJSON(event.Data), nullableJSON(event.Raw), event.SchemaVersion)
 	if err != nil {
 		return harness.Event{}, fmt.Errorf("append event: %w", err)
 	}
-	event.Seq, err = res.LastInsertId()
-	if err != nil {
-		return harness.Event{}, fmt.Errorf("event sequence: %w", err)
-	}
+	event.Seq, _ = result.LastInsertId()
 	return event, nil
 }
-
 func (s *Store) ListEvents(ctx context.Context, runID string, after int64) ([]harness.Event, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT seq, run_id, session_id, source, type, time, data, raw
-		FROM events WHERE run_id=? AND seq>? ORDER BY seq`, runID, after)
+	rows, err := s.db.QueryContext(ctx, `SELECT seq,schema_version,run_id,session_id,source,type,time,data,raw FROM events WHERE run_id=? AND seq>? ORDER BY seq`, runID, after)
 	if err != nil {
-		return nil, fmt.Errorf("list events: %w", err)
+		return nil, err
 	}
 	defer rows.Close()
-	out := make([]harness.Event, 0)
+	var out []harness.Event
 	for rows.Next() {
 		var event harness.Event
-		var at string
+		var tm string
 		var data, raw []byte
-		if err := rows.Scan(&event.Seq, &event.RunID, &event.SessionID, &event.Source,
-			&event.Type, &at, &data, &raw); err != nil {
-			return nil, fmt.Errorf("scan event: %w", err)
-		}
-		event.Time, err = parseTime(at)
-		if err != nil {
+		if err := rows.Scan(&event.Seq, &event.SchemaVersion, &event.RunID, &event.SessionID, &event.Source, &event.Type, &tm, &data, &raw); err != nil {
 			return nil, err
 		}
-		event.Data = append([]byte(nil), data...)
-		event.Raw = append([]byte(nil), raw...)
+		event.Time = parseTime(tm)
+		event.Data = data
+		event.Raw = raw
 		out = append(out, event)
 	}
 	return out, rows.Err()
 }
-
 func (s *Store) AppendLog(ctx context.Context, record harness.LogRecord) (harness.LogRecord, error) {
-	if record.Time.IsZero() {
-		record.Time = time.Now().UTC()
-	}
-	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO logs(run_id, session_id, stream, time, text)
-		VALUES(?, ?, ?, ?, ?)`,
-		record.RunID, record.SessionID, record.Stream, formatTime(record.Time), record.Text)
+	result, err := s.db.ExecContext(ctx, `INSERT INTO logs(run_id,session_id,stream,time,text) VALUES(?,?,?,?,?)`, record.RunID, record.SessionID, record.Stream, formatTime(record.Time), record.Text)
 	if err != nil {
-		return harness.LogRecord{}, fmt.Errorf("append log: %w", err)
+		return harness.LogRecord{}, err
 	}
-	record.Seq, err = res.LastInsertId()
-	if err != nil {
-		return harness.LogRecord{}, fmt.Errorf("log sequence: %w", err)
-	}
+	record.Seq, _ = result.LastInsertId()
 	return record, nil
 }
-
 func (s *Store) ListLogs(ctx context.Context, runID string, after int64) ([]harness.LogRecord, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT seq, run_id, session_id, stream, time, text
-		FROM logs WHERE run_id=? AND seq>? ORDER BY seq`, runID, after)
-	if err != nil {
-		return nil, fmt.Errorf("list logs: %w", err)
-	}
-	defer rows.Close()
-	return scanLogs(rows)
-}
-
-// ListLogsPage returns a bounded page of logs. When tail is true and after is
-// zero, the newest limit rows are returned in ascending sequence order.
-func (s *Store) ListLogsPage(ctx context.Context, runID string, after int64, limit int, tail bool) ([]harness.LogRecord, error) {
-	if limit <= 0 {
-		limit = 1000
-	}
-	var rows *sql.Rows
-	var err error
-	if tail && after == 0 {
-		rows, err = s.db.QueryContext(ctx, `
-			SELECT seq, run_id, session_id, stream, time, text
-			FROM logs WHERE run_id=? ORDER BY seq DESC LIMIT ?`, runID, limit)
-	} else {
-		rows, err = s.db.QueryContext(ctx, `
-			SELECT seq, run_id, session_id, stream, time, text
-			FROM logs WHERE run_id=? AND seq>? ORDER BY seq LIMIT ?`, runID, after, limit)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("list logs page: %w", err)
-	}
-	defer rows.Close()
-	out, err := scanLogs(rows)
+	rows, err := s.db.QueryContext(ctx, `SELECT seq,run_id,session_id,stream,time,text FROM logs WHERE run_id=? AND seq>? ORDER BY seq`, runID, after)
 	if err != nil {
 		return nil, err
 	}
-	if tail && after == 0 {
-		for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
-			out[i], out[j] = out[j], out[i]
-		}
-	}
-	return out, nil
-}
-
-func scanLogs(rows *sql.Rows) ([]harness.LogRecord, error) {
-	out := make([]harness.LogRecord, 0)
+	defer rows.Close()
+	var out []harness.LogRecord
 	for rows.Next() {
 		var record harness.LogRecord
-		var at string
-		if err := rows.Scan(&record.Seq, &record.RunID, &record.SessionID, &record.Stream,
-			&at, &record.Text); err != nil {
-			return nil, fmt.Errorf("scan log: %w", err)
-		}
-		t, err := parseTime(at)
-		if err != nil {
+		var tm string
+		if err := rows.Scan(&record.Seq, &record.RunID, &record.SessionID, &record.Stream, &tm, &record.Text); err != nil {
 			return nil, err
 		}
-		record.Time = t
+		record.Time = parseTime(tm)
 		out = append(out, record)
 	}
 	return out, rows.Err()
 }
 
 func (s *Store) SaveVerdict(ctx context.Context, record harness.VerdictRecord) error {
-	if record.CreatedAt.IsZero() {
-		record.CreatedAt = time.Now().UTC()
-	}
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO verdicts(run_id, success, score, message, evidence, created_at)
-		VALUES(?, ?, ?, ?, ?, ?)
-		ON CONFLICT(run_id) DO UPDATE SET
-			success=excluded.success, score=excluded.score, message=excluded.message,
-			evidence=excluded.evidence, created_at=excluded.created_at`,
-		record.RunID, boolInt(record.Success), record.Score, record.Message,
-		[]byte(record.Evidence), formatTime(record.CreatedAt))
-	if err != nil {
-		return fmt.Errorf("save verdict: %w", err)
-	}
-	return nil
+	_, err := s.db.ExecContext(ctx, `INSERT INTO verdicts(run_id,success,score,message,evidence,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET success=excluded.success,score=excluded.score,message=excluded.message,evidence=excluded.evidence,created_at=excluded.created_at`, record.RunID, record.Success, record.Score, record.Message, nullableJSON(record.Evidence), formatTime(record.CreatedAt))
+	return err
 }
-
 func (s *Store) GetVerdict(ctx context.Context, runID string) (harness.VerdictRecord, error) {
 	var record harness.VerdictRecord
-	var success int
 	var evidence []byte
-	var createdAt string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT run_id, success, score, message, evidence, created_at
-		FROM verdicts WHERE run_id=?`, runID).Scan(
-		&record.RunID, &success, &record.Score, &record.Message, &evidence, &createdAt)
-	if err != nil {
-		return harness.VerdictRecord{}, fmt.Errorf("get verdict: %w", err)
-	}
-	record.Success = success != 0
-	record.Evidence = append([]byte(nil), evidence...)
-	record.CreatedAt, err = parseTime(createdAt)
-	if err != nil {
-		return harness.VerdictRecord{}, err
-	}
-	return record, nil
+	var created string
+	err := s.db.QueryRowContext(ctx, `SELECT run_id,success,score,message,evidence,created_at FROM verdicts WHERE run_id=?`, runID).Scan(&record.RunID, &record.Success, &record.Score, &record.Message, &evidence, &created)
+	record.Evidence = evidence
+	record.CreatedAt = parseTime(created)
+	return record, err
 }
 
-func (s *Store) SaveSweep(ctx context.Context, record harness.SweepRecord) error {
-	if record.CreatedAt.IsZero() {
-		record.CreatedAt = time.Now().UTC()
-	}
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO sweeps(id, status, spec, result, created_at, finished_at)
-		VALUES(?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
-			status=excluded.status, spec=excluded.spec, result=excluded.result,
-			created_at=excluded.created_at, finished_at=excluded.finished_at`,
-		record.ID, string(record.Status), []byte(record.Spec), []byte(record.Result),
-		formatTime(record.CreatedAt), formatOptionalTime(record.FinishedAt))
-	if err != nil {
-		return fmt.Errorf("save sweep: %w", err)
-	}
-	return nil
+func (s *Store) SaveBranch(ctx context.Context, branch harness.Branch) error {
+	payload, _ := json.Marshal(branch)
+	refs, _ := json.Marshal([]string{})
+	_, err := s.db.ExecContext(ctx, `INSERT INTO exploration_branches(id,parent_id,task_id,run_id,depth,topic,goal,hypothesis,success_condition,failure_condition,scope,budget,status,priority,knowledge_refs,created_at,updated_at,payload) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,priority=excluded.priority,payload=excluded.payload,updated_at=excluded.updated_at`, scopedID(branch.RunID, branch.ID), branch.ParentID, branch.TaskID, branch.RunID, branch.Depth, branch.Topic, branch.Goal, branch.Hypothesis, branch.SuccessCondition, branch.FailureCondition, branch.Scope, []byte(nil), branch.Status, branch.Priority, refs, formatTime(branch.CreatedAt), formatTime(branch.UpdatedAt), payload)
+	return err
 }
-
-func (s *Store) GetSweep(ctx context.Context, id string) (harness.SweepRecord, error) {
-	var record harness.SweepRecord
-	var status string
-	var spec, result []byte
-	var createdAt string
-	var finishedAt sql.NullString
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, status, spec, result, created_at, finished_at
-		FROM sweeps WHERE id=?`, id).Scan(
-		&record.ID, &status, &spec, &result, &createdAt, &finishedAt)
-	if err != nil {
-		return harness.SweepRecord{}, fmt.Errorf("get sweep: %w", err)
-	}
-	record.Status = harness.Status(status)
-	record.Spec = append([]byte(nil), spec...)
-	record.Result = append([]byte(nil), result...)
-	record.CreatedAt, err = parseTime(createdAt)
-	if err != nil {
-		return harness.SweepRecord{}, err
-	}
-	if finishedAt.Valid {
-		t, err := parseTime(finishedAt.String)
-		if err != nil {
-			return harness.SweepRecord{}, err
-		}
-		record.FinishedAt = &t
-	}
-	return record, nil
+func (s *Store) ListBranches(ctx context.Context, runID string) ([]harness.Branch, error) {
+	return queryPayload[harness.Branch](ctx, s.db, `SELECT payload FROM exploration_branches WHERE run_id=? ORDER BY created_at,id`, runID)
 }
-
-func (s *Store) ListSweeps(ctx context.Context, limit int) ([]harness.SweepRecord, error) {
-	if limit <= 0 {
-		limit = 50
-	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, status, spec, result, created_at, finished_at
-		FROM sweeps ORDER BY created_at DESC LIMIT ?`, limit)
+func (s *Store) SaveAttempt(ctx context.Context, attempt harness.Attempt) error {
+	payload, _ := json.Marshal(attempt)
+	ids, _ := json.Marshal(attempt.ObservationIDs)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO exploration_attempts(id,run_id,branch_id,session_id,status,outcome,observation_ids,started_at,finished_at,error,payload) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,outcome=excluded.outcome,observation_ids=excluded.observation_ids,finished_at=excluded.finished_at,error=excluded.error,payload=excluded.payload`, scopedID(attempt.RunID, attempt.ID), attempt.RunID, attempt.BranchID, attempt.SessionID, attempt.Status, attempt.Outcome, ids, formatTime(attempt.StartedAt), formatTime(attempt.FinishedAt), attempt.Error, payload)
+	return err
+}
+func (s *Store) ListAttempts(ctx context.Context, runID string) ([]harness.Attempt, error) {
+	return queryPayload[harness.Attempt](ctx, s.db, `SELECT payload FROM exploration_attempts WHERE run_id=? ORDER BY started_at,id`, runID)
+}
+func (s *Store) SaveObservation(ctx context.Context, observation harness.Observation) error {
+	payload, _ := json.Marshal(observation)
+	evidence, _ := json.Marshal(observation.Evidence)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO exploration_observations(id,run_id,branch_id,attempt_id,kind,target,summary,evidence,created_at,payload) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload`, scopedID(observation.RunID, observation.ID), observation.RunID, observation.BranchID, observation.AttemptID, observation.Kind, observation.Target, observation.Summary, evidence, formatTime(observation.CreatedAt), payload)
+	return err
+}
+func (s *Store) ListObservations(ctx context.Context, runID string) ([]harness.Observation, error) {
+	return queryPayload[harness.Observation](ctx, s.db, `SELECT payload FROM exploration_observations WHERE run_id=? ORDER BY created_at,id`, runID)
+}
+func (s *Store) SaveArtifact(ctx context.Context, artifact harness.Artifact) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO artifacts(run_id,id,attempt_id,session_id,name,media_type,size,sha256,redacted,created_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id,id,attempt_id,name) DO UPDATE SET redacted=excluded.redacted`, artifact.RunID, artifact.ID, artifact.AttemptID, artifact.SessionID, artifact.Name, artifact.MediaType, artifact.Size, artifact.SHA256, artifact.Redacted, formatTime(artifact.CreatedAt))
+	return err
+}
+func (s *Store) ListArtifacts(ctx context.Context, runID string) ([]harness.Artifact, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT run_id,id,attempt_id,session_id,name,media_type,size,sha256,redacted,created_at FROM artifacts WHERE run_id=? ORDER BY created_at,id`, runID)
 	if err != nil {
-		return nil, fmt.Errorf("list sweeps: %w", err)
+		return nil, err
 	}
 	defer rows.Close()
-	out := make([]harness.SweepRecord, 0)
+	var out []harness.Artifact
 	for rows.Next() {
-		var record harness.SweepRecord
-		var status string
-		var spec, result []byte
-		var createdAt string
-		var finishedAt sql.NullString
-		if err := rows.Scan(&record.ID, &status, &spec, &result, &createdAt, &finishedAt); err != nil {
-			return nil, fmt.Errorf("scan sweep: %w", err)
-		}
-		record.Status = harness.Status(status)
-		record.Spec = append([]byte(nil), spec...)
-		record.Result = append([]byte(nil), result...)
-		record.CreatedAt, err = parseTime(createdAt)
-		if err != nil {
+		var a harness.Artifact
+		var tm string
+		if err := rows.Scan(&a.RunID, &a.ID, &a.AttemptID, &a.SessionID, &a.Name, &a.MediaType, &a.Size, &a.SHA256, &a.Redacted, &tm); err != nil {
 			return nil, err
 		}
-		if finishedAt.Valid {
-			t, err := parseTime(finishedAt.String)
-			if err != nil {
-				return nil, err
-			}
-			record.FinishedAt = &t
-		}
-		out = append(out, record)
+		a.CreatedAt = parseTime(tm)
+		out = append(out, a)
 	}
 	return out, rows.Err()
 }
 
-func (s *Store) MarkInterrupted(ctx context.Context) error {
-	now := formatTime(time.Now().UTC())
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE runs SET status=?, finished_at=?
-		WHERE status IN (?, ?, ?)`,
-		string(harness.StatusInterrupted), now,
-		string(harness.StatusQueued), string(harness.StatusStarting), string(harness.StatusRunning)); err != nil {
-		return fmt.Errorf("mark interrupted runs: %w", err)
-	}
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE sweeps SET status=?, finished_at=?
-		WHERE status IN (?, ?, ?)`,
-		string(harness.StatusInterrupted), now,
-		string(harness.StatusQueued), string(harness.StatusStarting), string(harness.StatusRunning)); err != nil {
-		return fmt.Errorf("mark interrupted sweeps: %w", err)
-	}
-	return nil
+func (s *Store) SaveKnowledge(ctx context.Context, knowledge harness.Knowledge) error {
+	return s.saveKnowledgeVersion(ctx, knowledge)
 }
-
-func (s *Store) Close() error {
-	if s == nil || s.db == nil {
-		return nil
+func (s *Store) UpdateKnowledge(ctx context.Context, knowledge harness.Knowledge) error {
+	if knowledge.Version <= 0 {
+		knowledge.Version = 1
 	}
-	return s.db.Close()
+	return s.saveKnowledgeVersion(ctx, knowledge)
 }
-
-func formatTime(t time.Time) string {
-	return t.UTC().Format(time.RFC3339Nano)
-}
-
-func formatOptionalTime(t *time.Time) any {
-	if t == nil {
-		return nil
-	}
-	return formatTime(*t)
-}
-
-func parseTime(value string) (time.Time, error) {
-	t, err := time.Parse(time.RFC3339Nano, value)
+func (s *Store) saveKnowledgeVersion(ctx context.Context, knowledge harness.Knowledge) error {
+	payload, _ := json.Marshal(knowledge)
+	sources, _ := json.Marshal(knowledge.Sources)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO knowledge(run_id,id,task_id,version,payload) VALUES(?,?,?,?,?) ON CONFLICT(run_id,id,version) DO UPDATE SET payload=excluded.payload`, knowledge.RunID, knowledge.ID, knowledge.TaskID, knowledge.Version, payload)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("parse time %q: %w", value, err)
+		return err
 	}
-	return t, nil
+	_, err = s.db.ExecContext(ctx, `INSERT INTO knowledge_versions(run_id,knowledge_id,version,payload,created_at) VALUES(?,?,?,?,?) ON CONFLICT(run_id,knowledge_id,version) DO NOTHING`, knowledge.RunID, knowledge.ID, knowledge.Version, payload, formatTime(time.Now().UTC()))
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO knowledge_sources(run_id,knowledge_id,version,source) VALUES(?,?,?,?) ON CONFLICT(run_id,knowledge_id,version,source) DO NOTHING`, knowledge.RunID, knowledge.ID, knowledge.Version, sources)
+	return err
+}
+func (s *Store) QueryKnowledge(ctx context.Context, query harness.KnowledgeQuery) ([]harness.Knowledge, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT payload FROM knowledge WHERE task_id=? ORDER BY version DESC`, query.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	latest := map[string]harness.Knowledge{}
+	for rows.Next() {
+		var payload []byte
+		if err := rows.Scan(&payload); err != nil {
+			return nil, err
+		}
+		var item harness.Knowledge
+		if err := json.Unmarshal(payload, &item); err != nil {
+			return nil, err
+		}
+		key := item.RunID + "\x00" + item.ID
+		if _, ok := latest[key]; !ok {
+			latest[key] = item
+		}
+	}
+	var all []harness.Knowledge
+	for _, item := range latest {
+		all = append(all, item)
+	}
+	return harness.FilterKnowledge(all, query), nil
 }
 
-func boolInt(v bool) int {
-	if v {
-		return 1
+func (s *Store) SaveSweep(ctx context.Context, record harness.SweepRecord) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO sweeps(id,status,spec,result,error,created_at,finished_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,result=excluded.result,error=excluded.error,finished_at=excluded.finished_at`, record.ID, record.Status, nullableJSON(record.Spec), nullableJSON(record.Result), record.Error, formatTime(record.CreatedAt), formatTimePtr(record.FinishedAt))
+	return err
+}
+func (s *Store) GetSweep(ctx context.Context, id string) (harness.SweepRecord, error) {
+	var r harness.SweepRecord
+	var status, created string
+	var spec, result []byte
+	var finished sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT id,status,spec,result,error,created_at,finished_at FROM sweeps WHERE id=?`, id).Scan(&r.ID, &status, &spec, &result, &r.Error, &created, &finished)
+	r.Status = harness.Status(status)
+	r.Spec = spec
+	r.Result = result
+	r.CreatedAt = parseTime(created)
+	r.FinishedAt = parseTimePtr(finished)
+	return r, err
+}
+func (s *Store) ListSweeps(ctx context.Context, limit int) ([]harness.SweepRecord, error) {
+	if limit <= 0 {
+		limit = 100
 	}
-	return 0
+	rows, err := s.db.QueryContext(ctx, `SELECT id,status,spec,result,error,created_at,finished_at FROM sweeps ORDER BY created_at DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []harness.SweepRecord
+	for rows.Next() {
+		var r harness.SweepRecord
+		var status, created string
+		var spec, result []byte
+		var finished sql.NullString
+		if err := rows.Scan(&r.ID, &status, &spec, &result, &r.Error, &created, &finished); err != nil {
+			return nil, err
+		}
+		r.Status = harness.Status(status)
+		r.Spec = spec
+		r.Result = result
+		r.CreatedAt = parseTime(created)
+		r.FinishedAt = parseTimePtr(finished)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+func (s *Store) MarkInterrupted(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE runs SET status=?, finished_at=? WHERE status NOT IN (?,?,?,?,?,?)`, harness.StatusInterrupted, formatTime(time.Now().UTC()), harness.StatusSucceeded, harness.StatusFailed, harness.StatusCancelled, harness.StatusTimedOut, harness.StatusInterrupted, harness.StatusStagnated)
+	return err
+}
+func (s *Store) Close() error { return s.db.Close() }
+
+func queryPayload[T any](ctx context.Context, db *sql.DB, query string, args ...any) ([]T, error) {
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []T
+	for rows.Next() {
+		var payload []byte
+		if err := rows.Scan(&payload); err != nil {
+			return nil, err
+		}
+		var item T
+		if err := json.Unmarshal(payload, &item); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+func scopedID(runID, id string) string {
+	if strings.Contains(id, runID+":") {
+		return runID + "\x00" + id
+	}
+	return runID + "\x00" + id
+}
+func nullableJSON(value json.RawMessage) any {
+	if len(value) == 0 {
+		return nil
+	}
+	return []byte(value)
+}
+func formatTime(value time.Time) string {
+	if value.IsZero() {
+		value = time.Now().UTC()
+	}
+	return value.UTC().Format(time.RFC3339Nano)
+}
+func formatTimePtr(value *time.Time) any {
+	if value == nil || value.IsZero() {
+		return nil
+	}
+	return formatTime(*value)
+}
+func parseTime(value string) time.Time { tm, _ := time.Parse(time.RFC3339Nano, value); return tm }
+func parseTimePtr(value sql.NullString) *time.Time {
+	if !value.Valid || value.String == "" {
+		return nil
+	}
+	tm := parseTime(value.String)
+	return &tm
+}
+func sortedKnowledge(items []harness.Knowledge) []harness.Knowledge {
+	sort.SliceStable(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	return items
 }
 
 var _ harness.Store = (*Store)(nil)
-var _ harness.LogPageReader = (*Store)(nil)
+var _ = errors.Is

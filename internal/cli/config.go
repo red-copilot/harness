@@ -5,13 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/red-copilot/harness"
-	"github.com/red-copilot/harness/exploration"
+	"github.com/red-copilot/harness/pi"
 	"github.com/red-copilot/harness/sandbox/docker"
 	"github.com/red-copilot/harness/verify"
 )
@@ -24,21 +23,11 @@ type BudgetFile struct {
 	MaxCostUSD      float64 `json:"max_cost_usd,omitempty" yaml:"max_cost_usd,omitempty"`
 }
 
-type TSecFileConfig struct {
-	Challenge  string `json:"challenge,omitempty" yaml:"challenge,omitempty"`
-	All        bool   `json:"all,omitempty" yaml:"all,omitempty"`
-	Parallel   int    `json:"parallel,omitempty" yaml:"parallel,omitempty"`
-	UseHint    bool   `json:"use_hint,omitempty" yaml:"use_hint,omitempty"`
-	BaseURLEnv string `json:"base_url_env,omitempty" yaml:"base_url_env,omitempty"`
-	TokenEnv   string `json:"token_env,omitempty" yaml:"token_env,omitempty"`
-	BaseURL    string `json:"base_url,omitempty" yaml:"base_url,omitempty"`
-	Token      string `json:"token,omitempty" yaml:"token,omitempty"`
-}
-
 type TargetFileConfig struct {
 	Kind        string   `json:"kind,omitempty" yaml:"kind,omitempty"`
 	ID          string   `json:"id,omitempty" yaml:"id,omitempty"`
 	Addresses   []string `json:"addresses,omitempty" yaml:"addresses,omitempty"`
+	Isolation   string   `json:"isolation,omitempty" yaml:"isolation,omitempty"`
 	Image       string   `json:"image,omitempty" yaml:"image,omitempty"`
 	Command     []string `json:"command,omitempty" yaml:"command,omitempty"`
 	Ports       []string `json:"ports,omitempty" yaml:"ports,omitempty"`
@@ -50,16 +39,16 @@ type TargetFileConfig struct {
 }
 
 type FileConfig struct {
-	APIVersion    string              `json:"apiVersion" yaml:"apiVersion"`
-	Task          harness.Task        `json:"task" yaml:"task"`
-	Target        *TargetFileConfig   `json:"target,omitempty" yaml:"target,omitempty"`
-	Agents        []harness.AgentSpec `json:"agents" yaml:"agents"`
-	Exploration   *exploration.Policy `json:"exploration,omitempty" yaml:"exploration,omitempty"`
-	Budget        BudgetFile          `json:"budget,omitempty" yaml:"budget,omitempty"`
-	SecretEnv     []string            `json:"secret_env,omitempty" yaml:"secret_env,omitempty"`
-	WorkspaceRoot string              `json:"workspace_root,omitempty" yaml:"workspace_root,omitempty"`
-	Verifier      *verify.Command     `json:"verifier,omitempty" yaml:"verifier,omitempty"`
-	TSec          *TSecFileConfig     `json:"tsec,omitempty" yaml:"tsec,omitempty"`
+	APIVersion    string                    `json:"apiVersion" yaml:"apiVersion"`
+	Task          harness.Task              `json:"task" yaml:"task"`
+	Target        TargetFileConfig          `json:"target" yaml:"target"`
+	Planner       harness.AgentSpec         `json:"planner" yaml:"planner"`
+	Executors     []harness.AgentSpec       `json:"executors" yaml:"executors"`
+	Policy        harness.ExplorationPolicy `json:"policy,omitempty" yaml:"policy,omitempty"`
+	Budget        BudgetFile                `json:"budget,omitempty" yaml:"budget,omitempty"`
+	SecretEnv     []string                  `json:"secret_env,omitempty" yaml:"secret_env,omitempty"`
+	WorkspaceRoot string                    `json:"workspace_root,omitempty" yaml:"workspace_root,omitempty"`
+	Verifier      *verify.Command           `json:"verifier,omitempty" yaml:"verifier,omitempty"`
 }
 
 func LoadConfig(path string) (*FileConfig, error) {
@@ -67,173 +56,100 @@ func LoadConfig(path string) (*FileConfig, error) {
 	if err != nil {
 		return nil, err
 	}
+	var raw map[string]any
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("decode config: %w", err)
+	}
+	for _, legacy := range []string{"workflow", "pi", "agents", "targets", "exploration"} {
+		if _, ok := raw[legacy]; ok {
+			return nil, fmt.Errorf("legacy key %q is unsupported; see docs/migration-v1.md", legacy)
+		}
+	}
 	var cfg FileConfig
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
 	if cfg.APIVersion == "" {
-		cfg.APIVersion = "harness/v1alpha1"
+		cfg.APIVersion = "harness/v1"
 	}
-	if cfg.APIVersion != "harness/v1alpha1" {
+	if cfg.APIVersion != "harness/v1" {
 		return nil, fmt.Errorf("unsupported apiVersion %q", cfg.APIVersion)
 	}
-	if cfg.TSec != nil && cfg.TSec.Parallel == 0 {
-		cfg.TSec.Parallel = 3
+	if cfg.Target.Isolation == "" {
+		cfg.Target.Isolation = string(harness.IsolationCallerManaged)
 	}
-	if cfg.TSec != nil && cfg.TSec.BaseURLEnv == "" {
-		cfg.TSec.BaseURLEnv = "BENCHMARK_BASE_URL"
-	}
-	if cfg.TSec != nil && cfg.TSec.TokenEnv == "" {
-		cfg.TSec.TokenEnv = "BENCHMARK_TOKEN"
+	if cfg.Policy.MaxDepth == 0 {
+		cfg.Policy = harness.DefaultExplorationPolicy()
 	}
 	return &cfg, nil
 }
 
-func (c *FileConfig) ToRunSpec() (harness.RunSpec, error) {
-	if c.Task.ID == "" || c.Task.Objective == "" {
-		return harness.RunSpec{}, errors.New("task.id and task.objective are required")
+// ToRunSpec composes serializable configuration with deployment adapters.
+func (c *FileConfig) ToRunSpec(artifacts harness.ArtifactStore) (harness.RunSpec, error) {
+	if artifacts == nil {
+		return harness.RunSpec{}, errors.New("artifact store is required")
 	}
-	if len(c.Agents) == 0 {
-		return harness.RunSpec{}, errors.New("at least one agent is required")
+	target := harness.Target{ID: c.Target.ID, Addresses: append([]string(nil), c.Target.Addresses...), Isolation: harness.IsolationMode(c.Target.Isolation)}
+	spec := harness.RunSpec{Task: c.Task, Target: target, Policy: harness.NormalizeExplorationPolicy(c.Policy), Budget: harness.Budget{WallTime: time.Duration(c.Budget.WallTimeSeconds) * time.Second, MaxTokens: c.Budget.MaxTokens, MaxModelCalls: c.Budget.MaxModelCalls, MaxToolCalls: c.Budget.MaxToolCalls, MaxCostUSD: c.Budget.MaxCostUSD}, Artifacts: artifacts, SecretEnv: append([]string(nil), c.SecretEnv...), WorkspaceRoot: c.WorkspaceRoot}
+	var err error
+	spec.Planner, err = composeAgent(c.Planner)
+	if err != nil {
+		return harness.RunSpec{}, fmt.Errorf("planner: %w", err)
 	}
-	spec := harness.RunSpec{
-		Task: c.Task, Agents: c.Agents,
-		Budget: harness.Budget{
-			WallTime:  time.Duration(c.Budget.WallTimeSeconds) * time.Second,
-			MaxTokens: c.Budget.MaxTokens, MaxModelCalls: c.Budget.MaxModelCalls,
-			MaxToolCalls: c.Budget.MaxToolCalls, MaxCostUSD: c.Budget.MaxCostUSD,
-		},
-		SecretEnv: c.SecretEnv, WorkspaceRoot: c.WorkspaceRoot,
+	for i := range c.Executors {
+		spec.Executors = append(spec.Executors, c.Executors[i])
+		spec.Executors[i], err = composeAgent(c.Executors[i])
+		if err != nil {
+			return harness.RunSpec{}, fmt.Errorf("executor %d: %w", i, err)
+		}
+	}
+	switch c.Target.Kind {
+	case "", "external":
+	case "image":
+		spec.Backend = docker.ImageBackend{Image: c.Target.Image, Command: c.Target.Command, Ports: c.Target.Ports, Network: c.Target.Network, Addresses: c.Target.Addresses}
+	case "compose":
+		spec.Backend = docker.ComposeBackend{File: c.Target.ComposeFile, ProjectName: c.Target.ProjectName, Service: c.Target.Service, Port: c.Target.Port, Addresses: c.Target.Addresses}
+	default:
+		return harness.RunSpec{}, fmt.Errorf("unsupported target kind %q", c.Target.Kind)
 	}
 	if c.Verifier != nil {
 		spec.Verifier = *c.Verifier
 	}
-	if c.Target != nil {
-		switch c.Target.Kind {
-		case "", "external":
-			spec.Target = harness.Target{ID: c.Target.ID, Addresses: c.Target.Addresses}
-		case "image":
-			spec.Backend = docker.ImageBackend{
-				Image: c.Target.Image, Command: c.Target.Command, Ports: c.Target.Ports,
-				Network: c.Target.Network, Addresses: c.Target.Addresses,
-			}
-		case "compose":
-			spec.Backend = docker.ComposeBackend{
-				File: c.Target.ComposeFile, ProjectName: c.Target.ProjectName,
-				Service: c.Target.Service, Port: c.Target.Port, Addresses: c.Target.Addresses,
-			}
-		default:
-			return harness.RunSpec{}, fmt.Errorf("unsupported target kind %q", c.Target.Kind)
-		}
-	}
 	return spec, nil
 }
 
-func configureExploration(spec *harness.RunSpec, policy *exploration.Policy, store harness.Store) error {
-	if spec == nil {
-		return nil
+func composeAgent(agent harness.AgentSpec) (harness.AgentSpec, error) {
+	config := pi.Config{}
+	if len(agent.RuntimeConfig) > 0 {
+		if err := json.Unmarshal(agent.RuntimeConfig, &config); err != nil {
+			return agent, fmt.Errorf("invalid pi runtime config: %w", err)
+		}
 	}
-	var workflowStore exploration.Store
-	if store != nil {
-		workflowStore, _ = store.(exploration.Store)
-	}
-	if policy != nil {
-		return exploration.Configure(spec, *policy, workflowStore)
-	}
-	if len(spec.Agents) != 1 {
-		return nil
-	}
-	return exploration.Configure(spec, exploration.DefaultPolicy(), workflowStore)
+	agent.Runtime = pi.NewFactory(config)
+	return agent, nil
 }
 
-func applyPiEnvironmentDefaults(spec *harness.RunSpec) {
+func ApplyPiEnvironmentDefaults(descriptor *harness.RunDescriptor) {
 	provider, providerSet := os.LookupEnv("PI_PROVIDER")
 	model, modelSet := os.LookupEnv("PI_MODEL")
-	for index := range spec.Agents {
-		piSpec := spec.Agents[index].Pi
-		if piSpec == nil {
-			continue
+	if !providerSet && !modelSet {
+		return
+	}
+	apply := func(agent *harness.AgentSpec) {
+		var config pi.Config
+		if len(agent.RuntimeConfig) > 0 {
+			_ = json.Unmarshal(agent.RuntimeConfig, &config)
 		}
-		if piSpec.Provider == "" && providerSet {
-			piSpec.Provider = provider
+		if config.Provider == "" && providerSet {
+			config.Provider = provider
 		}
-		if piSpec.Model == "" && modelSet {
-			piSpec.Model = model
+		if config.Model == "" && modelSet {
+			config.Model = model
 		}
+		agent.RuntimeConfig, _ = json.Marshal(config)
 	}
-}
-
-// Migrate converts the legacy Python task/agent YAML into a Go-first config.
-// It is intentionally one-way; legacy formats are not runtime contracts.
-func Migrate(taskPath, agentPath, outPath string) error {
-	var legacyTask struct {
-		ID        string `yaml:"id"`
-		Objective struct {
-			Description string `yaml:"description"`
-		} `yaml:"objective"`
+	apply(&descriptor.Planner)
+	for i := range descriptor.Executors {
+		apply(&descriptor.Executors[i])
 	}
-	var legacyAgent struct {
-		ID      string            `yaml:"id"`
-		Image   string            `yaml:"image"`
-		Network string            `yaml:"network"`
-		Env     map[string]string `yaml:"env"`
-		Pi      *legacyPi         `yaml:"pi"`
-	}
-	if err := decodeYAMLFile(taskPath, &legacyTask); err != nil {
-		return fmt.Errorf("read task: %w", err)
-	}
-	if err := decodeYAMLFile(agentPath, &legacyAgent); err != nil {
-		return fmt.Errorf("read agent: %w", err)
-	}
-	if legacyTask.ID == "" || legacyAgent.ID == "" {
-		return errors.New("legacy task and agent must have ids")
-	}
-	var piSpec *harness.PiSpec
-	var capAdd []string
-	if legacyAgent.Pi != nil {
-		piSpec = &harness.PiSpec{
-			Provider: legacyAgent.Pi.Provider, Model: legacyAgent.Pi.Model,
-			Thinking: legacyAgent.Pi.Thinking, Tools: legacyAgent.Pi.Tools,
-			EnvPassthrough: legacyAgent.Pi.EnvPassthrough,
-		}
-		capAdd = legacyAgent.Pi.CapAdd
-	}
-	network := legacyAgent.Network
-	if network == "environment" || network == "" {
-		network = "bridge"
-	}
-	cfg := FileConfig{
-		APIVersion: "harness/v1alpha1",
-		Task:       harness.Task{ID: legacyTask.ID, Objective: legacyTask.Objective.Description},
-		Agents: []harness.AgentSpec{{
-			ID: legacyAgent.ID, Image: legacyAgent.Image, Network: network,
-			Env: legacyAgent.Env, CapAdd: capAdd, Pi: piSpec,
-		}},
-	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	if err := os.MkdirAll(filepath.Dir(outPath), 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(outPath, data, 0o600)
-}
-
-type legacyPi struct {
-	Provider       string   `yaml:"provider"`
-	Model          string   `yaml:"model"`
-	Thinking       string   `yaml:"thinking"`
-	Tools          []string `yaml:"tools"`
-	EnvPassthrough []string `yaml:"env_passthrough"`
-	CapAdd         []string `yaml:"cap_add"`
-}
-
-func decodeYAMLFile(path string, out any) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	return yaml.Unmarshal(data, out)
 }
