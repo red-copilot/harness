@@ -82,7 +82,7 @@ Planner and executor are the same `AgentSession` contract with role-specific too
 
 ## Package map and responsibilities
 
-- `types.go` — public records and defaults (`DefaultExplorationPolicy`, `NormalizeExplorationPolicy`). `ports.go` — all interfaces; the root package depends on nothing else.
+- `types_*.go` — public records split by plane (`run`, `target`, `agent`, `exploration`, `knowledge`, `evidence`) plus defaults (`DefaultExplorationPolicy`, `NormalizeExplorationPolicy`). `ports.go` — all interfaces; the root package depends on nothing else.
 - `exploration.go` — tree/budget enforcement, child/review branch rules, context truncation events, stagnation detection. Review branches bind exactly two conflicting Knowledge IDs.
 - `knowledge.go` — promotion, support/corroboration, refute→`contested`, fingerprint dedupe, `FilterKnowledge` cross-run/reuse/expiry rules. Highest trust is `corroborated`; `refuted` and expired knowledge are never injected.
 - `artifact.go` — `ValidateEvidencePath` rejects absolute paths, `..`, symlink escape and non-regular files; text evidence is redacted before hashing; `ArtifactStoreError` marks canonical failures that must end the Run.

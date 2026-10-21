@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/red-copilot/harness/internal/naming"
 	"io"
 	"os"
 	"os/exec"
@@ -218,7 +219,7 @@ func (p *process) Kill(ctx context.Context) error {
 func (r *Runner) CleanupOrphans(ctx context.Context) error {
 	filters := []string{"--filter", "label=harness.managed=true"}
 	if r != nil && r.Owner != "" {
-		filters = append(filters, "--filter", "label=harness.owner="+safeName(r.Owner))
+		filters = append(filters, "--filter", "label=harness.owner="+naming.Identifier(r.Owner, "target"))
 	}
 	commands := [][]string{
 		append([]string{"ps", "-aq"}, filters...),

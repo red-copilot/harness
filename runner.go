@@ -297,6 +297,9 @@ func (r *Runner) watchBackend(run *Run, backend CompletionSource, target Target,
 	}
 }
 
+// updateStatus records a non-terminal status transition. Terminal
+// finalization deliberately does not go through here: finishExecution commits
+// the run record, the verdict and run.finalized in one transaction.
 func (r *Runner) updateStatus(run *Run, status Status, err error) error {
 	record, getErr := r.store.GetRun(context.Background(), run.ID)
 	if getErr != nil {

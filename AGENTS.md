@@ -5,7 +5,7 @@
 This is a standalone Go SDK for the Red Harness execution/trust boundary. It
 does not depend on Python or the legacy `red-copilot` runtime.
 
-- `types.go`, `runner.go`, `run.go`: public harness contracts and run lifecycle.
+- `types_*.go`, `runner.go`, `run.go`: public harness contracts by plane and the run lifecycle.
 - `pi/`: Pi RPC session implementation and hardened command construction.
 - `sandbox/docker/`: Docker process starter, external/image/Compose target backends.
 - `tsec/`: TSec API client, challenge backend and completion polling.

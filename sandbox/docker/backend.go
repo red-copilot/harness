@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"fmt"
+	"github.com/red-copilot/harness/internal/naming"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -50,12 +51,12 @@ func (b ImageBackend) Provision(ctx context.Context, req harness.ProvisionReques
 	}
 	name := b.Name
 	if name == "" {
-		name = "harness_target_" + safeName(req.RunID)
+		name = "harness_target_" + naming.Identifier(req.RunID, "target")
 	}
 	network := b.Network
 	createdNetwork := false
 	if network == "" {
-		network = "harness_net_" + safeName(req.RunID)
+		network = "harness_net_" + naming.Identifier(req.RunID, "target")
 		if err := run(ctx, docker, "network", "create", "--label", "harness.managed=true", "--label", "harness.run_id="+req.RunID, "--label", "harness.owner="+ownerLabel(b.Owner), network); err != nil {
 			return harness.Target{}, fmt.Errorf("create target network: %w", err)
 		}
@@ -147,7 +148,7 @@ func (b ComposeBackend) Provision(ctx context.Context, req harness.ProvisionRequ
 	}
 	project := b.ProjectName
 	if project == "" {
-		project = "harness_" + safeName(req.RunID)
+		project = "harness_" + naming.Identifier(req.RunID, "target")
 	}
 	composeFile := filepath.Clean(b.File)
 	// Compose has no per-invocation label flag, so a generated override adds
@@ -303,7 +304,7 @@ func ownerLabel(owner string) string {
 	if owner == "" {
 		return defaultOwner()
 	}
-	return safeName(owner)
+	return naming.Identifier(owner, "target")
 }
 
 func defaultOwner() string {
@@ -311,22 +312,7 @@ func defaultOwner() string {
 	if err != nil || host == "" {
 		return "harness"
 	}
-	return safeName(host)
-}
-
-func safeName(value string) string {
-	var b strings.Builder
-	for _, r := range value {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-			b.WriteRune(r)
-		} else {
-			b.WriteByte('_')
-		}
-	}
-	if b.Len() == 0 {
-		return "target"
-	}
-	return b.String()
+	return naming.Identifier(host, "target")
 }
 
 // These adapters own a Target's lifecycle only. Only TSec or an external

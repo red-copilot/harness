@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/red-copilot/harness/internal/naming"
 	"io"
 	"os"
 	"path/filepath"
@@ -120,7 +121,7 @@ func (f *Factory) NewSession(ctx context.Context, req harness.RuntimeRequest) (h
 	if resources.CPUs == "" {
 		resources.CPUs = "2"
 	}
-	spec := harness.ProcessSpec{Image: image, Command: command, Env: env, Mounts: mounts, Network: network, CapAdd: caps, Name: "harness_pi_" + safeName(req.RunID+"_"+req.SessionID), Labels: map[string]string{"harness.run_id": req.RunID, "harness.session_id": req.SessionID}, WorkingDir: "/workspace", User: fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), ReadOnlyRoot: true, PidsLimit: resources.PidsLimit, Memory: resources.Memory, CPUs: resources.CPUs}
+	spec := harness.ProcessSpec{Image: image, Command: command, Env: env, Mounts: mounts, Network: network, CapAdd: caps, Name: "harness_pi_" + naming.Identifier(req.RunID+"_"+req.SessionID, "session"), Labels: map[string]string{"harness.run_id": req.RunID, "harness.session_id": req.SessionID}, WorkingDir: "/workspace", User: fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), ReadOnlyRoot: true, PidsLimit: resources.PidsLimit, Memory: resources.Memory, CPUs: resources.CPUs}
 	proc, err := req.Starter.Start(ctx, spec)
 	if err != nil {
 		return nil, fmt.Errorf("start pi process: %w", err)
@@ -668,21 +669,6 @@ func parseToolStart(line []byte) (tool, path string, writesFile bool) {
 		return "", "", false
 	}
 	return payload.ToolName, payload.Args.Path, payload.ToolName == "write"
-}
-
-func safeName(value string) string {
-	var b strings.Builder
-	for _, r := range value {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-			b.WriteRune(r)
-		} else {
-			b.WriteByte('_')
-		}
-	}
-	if b.Len() == 0 {
-		return "session"
-	}
-	return b.String()
 }
 
 func mustRaw(v any) json.RawMessage {

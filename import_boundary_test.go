@@ -117,6 +117,24 @@ func TestNoLegacyControlSymbols(t *testing.T) {
 	}
 }
 
+// TestNameSanitizerIsShared: the identifier rule handed to Docker and to the
+// Pi RPC process has one implementation. pi and sandbox/docker each carried a
+// private safeName whose fallback had already started to diverge.
+func TestNameSanitizerIsShared(t *testing.T) {
+	for _, path := range []string{"pi/session.go", "sandbox/docker/backend.go", "sandbox/docker/runtime.go"} {
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if ok && fn.Name.Name == "safeName" {
+				t.Fatalf("%s defines a private safeName; use internal/naming", path)
+			}
+		}
+	}
+}
+
 func fileImports(path string) ([]string, error) {
 	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
 	if err != nil {
