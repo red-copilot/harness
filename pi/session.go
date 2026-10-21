@@ -67,7 +67,14 @@ func (f *Factory) NewSession(ctx context.Context, req harness.RuntimeRequest) (h
 		if err := os.MkdirAll(piDir, 0o700); err != nil {
 			return nil, fmt.Errorf("create pi config directory: %w", err)
 		}
-		if err := os.WriteFile(filepath.Join(piDir, "models.json"), []byte(config.ModelsJSON), 0o600); err != nil {
+		// models.json frequently carries provider keys. It lands in a path the
+		// agent can read, so the Run's known secrets are removed before the file
+		// is written. Credentials belong in the agent environment, not here.
+		modelsJSON := config.ModelsJSON
+		if req.Redactor != nil {
+			modelsJSON = req.Redactor.Redact(modelsJSON)
+		}
+		if err := os.WriteFile(filepath.Join(piDir, "models.json"), []byte(modelsJSON), 0o600); err != nil {
 			return nil, fmt.Errorf("write pi models.json: %w", err)
 		}
 	}

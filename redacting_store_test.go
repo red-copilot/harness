@@ -87,7 +87,7 @@ func TestRedactingStoreRedactsEveryWrite(t *testing.T) {
 	store := newRedactingStore(spy)
 	store.register("run-1", NewRedactor(secret))
 	ctx := context.Background()
-	if err := store.CreateRun(ctx, RunRecord{ID: "run-1", Error: secret}); err != nil {
+	if err := store.CreateRun(ctx, RunRecord{ID: "run-1", Error: secret, Spec: json.RawMessage(`{"planner":{"models_json":"` + secret + `"}}`)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.AppendEvent(ctx, Event{RunID: "run-1", Data: json.RawMessage(`{"note":"` + secret + `"}`), Raw: json.RawMessage(`{"note":"` + secret + `"}`)}); err != nil {

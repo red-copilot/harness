@@ -688,6 +688,9 @@ type RuntimeRequest struct {
 	SkillsDir    string
 	Env          map[string]string
 	Starter      ProcessStarter
+	// Redactor is the Run's known-secret redactor. Adapters must apply it
+	// before writing any configuration into an agent-visible path.
+	Redactor *Redactor
 }
 
 // ProcessSpec is the sandbox contract.

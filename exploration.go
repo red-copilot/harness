@@ -729,7 +729,7 @@ func (e *explorationEngine) startSession(ctx context.Context, role AgentRole, sp
 		return nil, err
 	}
 	env := buildEnvironment(e.state.runID, sessionID, e.spec, spec, e.state.target, workspace, e.live.taskDir, e.live.skillsDir)
-	session, err := spec.Runtime.NewSession(ctx, RuntimeRequest{RunID: e.state.runID, SessionID: sessionID, Role: role, Agent: spec, Task: e.state.task, Target: e.state.target, WorkspaceDir: workspace, TaskDir: e.live.taskDir, SkillsDir: e.live.skillsDir, Env: env, Starter: e.runner.starter})
+	session, err := spec.Runtime.NewSession(ctx, RuntimeRequest{RunID: e.state.runID, SessionID: sessionID, Role: role, Agent: spec, Task: e.state.task, Target: e.state.target, WorkspaceDir: workspace, TaskDir: e.live.taskDir, SkillsDir: e.live.skillsDir, Env: env, Starter: e.runner.starter, Redactor: e.live.redactor()})
 	if err != nil {
 		return nil, fmt.Errorf("start %s session: %w", role, err)
 	}

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -223,3 +225,34 @@ func (w *recordingWriteCloser) Close() error {
 
 var _ harness.Process = (*testProcess)(nil)
 var _ = errors.Is
+
+// TestFactoryRedactsKnownSecretsInModelsJSON: models.json is written into the
+// agent-visible workspace, so the Run's known secrets must be gone before the
+// file exists.
+func TestFactoryRedactsKnownSecretsInModelsJSON(t *testing.T) {
+	secret := "sk-live-models-secret"
+	runtimeConfig, err := json.Marshal(Config{ModelsJSON: `{"providers":{"p":{"apiKey":"` + secret + `"}}}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	_, err = NewFactory().NewSession(context.Background(), harness.RuntimeRequest{
+		RunID: "run", SessionID: "planner", Role: harness.AgentRolePlanner,
+		Agent:        harness.AgentSpec{ID: "planner", RuntimeConfig: runtimeConfig},
+		WorkspaceDir: workspace, TaskDir: t.TempDir(), SkillsDir: t.TempDir(),
+		Redactor: harness.NewRedactor(secret), Starter: &recordingStarter{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(workspace, ".pi", "models.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), secret) {
+		t.Fatalf("models.json retained a known secret: %s", data)
+	}
+	if !strings.Contains(string(data), harness.RedactedValue) || !json.Valid(data) {
+		t.Fatalf("models.json = %s, want valid redacted JSON", data)
+	}
+}
