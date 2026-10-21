@@ -202,7 +202,7 @@ func buildPlanPrompt(request PlanRequest) string {
 	}
 	out.WriteString("Authorized targets:\n")
 	for _, target := range request.Targets {
-		fmt.Fprintf(&out, "- %s %s\n", target.ID, strings.Join(target.Addresses, ", "))
+		fmt.Fprintf(&out, "- id=%s addresses=%s\n", target.ID, strings.Join(target.Addresses, ", "))
 	}
 	out.WriteString("\nFacts:\n")
 	limit := len(request.Facts)
@@ -240,7 +240,7 @@ Return exactly one JSON object and no prose:
 Rules:
 - Propose at most 3 independent frontiers.
 - Each question must produce concrete evidence.
-- Every target must be authorized above.
+- The target field must contain one exact authorized ID or address, never a label plus address.
 - Anchors may reference only corroborated facts.
 - Do not repeat a closed frontier or claim objective success.
 `)

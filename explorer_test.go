@@ -148,6 +148,15 @@ func TestAuthorizeTargetRejectsUnrelatedHost(t *testing.T) {
 	}
 }
 
+func TestAuthorizeTargetAcceptsPlannerLabelAndAddress(t *testing.T) {
+	targets := []Target{{ID: "web", Addresses: []string{"10.0.0.5:80"}}}
+	for _, target := range []string{"web 10.0.0.5:80", "10.0.0.5 web", "web: 10.0.0.5:80"} {
+		if !AuthorizeTarget(target, targets) {
+			t.Fatalf("planner target %q should be authorized", target)
+		}
+	}
+}
+
 func TestDigestFactsPrefersCorroboratedThenNewestObserved(t *testing.T) {
 	item := testItem()
 	digest := DigestFacts(item, []Fact{

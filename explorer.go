@@ -159,6 +159,30 @@ func AuthorizeTarget(target string, targets []Target) bool {
 	if target == "" {
 		return false
 	}
+	if matchesAuthorizedScope(target, targets) {
+		return true
+	}
+	tokens := strings.Fields(target)
+	for index := range tokens {
+		tokens[index] = strings.Trim(strings.TrimSuffix(tokens[index], ":"), "[](),;")
+	}
+	for _, authorized := range targets {
+		idMatch := authorized.ID == "" || !containsFold(tokens, authorized.ID)
+		addressMatch := false
+		for _, address := range authorized.Addresses {
+			if containsFold(tokens, address) || containsHost(tokens, scopeHost(address)) {
+				addressMatch = true
+				break
+			}
+		}
+		if !idMatch && addressMatch {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesAuthorizedScope(target string, targets []Target) bool {
 	targetHost := scopeHost(target)
 	for _, authorized := range targets {
 		if authorized.ID != "" && strings.EqualFold(target, authorized.ID) {
@@ -171,6 +195,27 @@ func AuthorizeTarget(target string, targets []Target) bool {
 			if targetHost != "" && strings.EqualFold(targetHost, scopeHost(address)) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func containsFold(values []string, want string) bool {
+	for _, value := range values {
+		if strings.EqualFold(value, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsHost(values []string, host string) bool {
+	if host == "" {
+		return false
+	}
+	for _, value := range values {
+		if strings.EqualFold(scopeHost(value), host) {
+			return true
 		}
 	}
 	return false
