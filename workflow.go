@@ -15,7 +15,21 @@ import (
 type workflowSession struct {
 	lease   SessionLease
 	logDone chan struct{}
-	logErr  error
+
+	errMu  sync.Mutex
+	logErr error
+}
+
+func (s *workflowSession) setLogError(err error) {
+	s.errMu.Lock()
+	s.logErr = err
+	s.errMu.Unlock()
+}
+
+func (s *workflowSession) logError() error {
+	s.errMu.Lock()
+	defer s.errMu.Unlock()
+	return s.logErr
 }
 
 // workflowRuntime is the run-scoped capability surface given to a Workflow.
@@ -165,7 +179,7 @@ func (rt *workflowRuntime) OpenSession(ctx context.Context, agent AgentSpec) (Se
 					if err := rt.runner.appendLog(rt.run, rt.redactor, LogRecord{
 						RunID: rt.run.ID, SessionID: sessionID, Stream: log.Stream, Time: time.Now().UTC(), Text: log.Text,
 					}); err != nil {
-						handle.logErr = err
+						handle.setLogError(err)
 						rt.run.setControlError(err)
 						rt.run.cancel()
 						return
@@ -242,9 +256,9 @@ func (rt *workflowRuntime) CloseSessions(ctx context.Context, workflowErr error)
 		case workflowErr != nil:
 			result.Status = StatusFailed
 			result.Error = rt.redactor.Redact(workflowErr.Error())
-		case handle.logErr != nil:
+		case handle.logError() != nil:
 			result.Status = StatusFailed
-			result.Error = rt.redactor.Redact(handle.logErr.Error())
+			result.Error = rt.redactor.Redact(handle.logError().Error())
 		}
 		if err := rt.Emit(context.Background(), Event{
 			SessionID: handle.lease.ID, Source: "harness", Type: "session.finished", Data: mustJSON(result),
@@ -256,8 +270,8 @@ func (rt *workflowRuntime) CloseSessions(ctx context.Context, workflowErr error)
 		}); err != nil {
 			closeErrors = append(closeErrors, err)
 		}
-		if handle.logErr != nil {
-			closeErrors = append(closeErrors, handle.logErr)
+		if logErr := handle.logError(); logErr != nil {
+			closeErrors = append(closeErrors, logErr)
 		}
 		results = append(results, result)
 	}

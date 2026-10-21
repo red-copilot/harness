@@ -230,3 +230,39 @@ func TestWorkflowEventPersistenceFailureFailsRun(t *testing.T) {
 		t.Fatalf("success verdict after persistence failure: %#v", result.Verdict)
 	}
 }
+
+type directEventFailStore struct {
+	*memoryStore
+}
+
+func (s *directEventFailStore) AppendEvent(ctx context.Context, event harness.Event) (harness.Event, error) {
+	if event.Type == "test.event" {
+		return harness.Event{}, errors.New("direct event store unavailable")
+	}
+	return s.memoryStore.AppendEvent(ctx, event)
+}
+
+func TestDirectWorkflowAgentEventPersistenceFailureFailsRun(t *testing.T) {
+	store := &directEventFailStore{memoryStore: newMemoryStore()}
+	factory := &fakeFactory{newSession: func(harness.SessionRequest) harness.AgentSession {
+		return &fakeSession{
+			result: harness.AgentResult{Status: harness.StatusSucceeded},
+			events: [][]byte{[]byte(`{"text":"observation"}`)},
+		}
+	}}
+	runner, err := harness.NewRunner(harness.Config{Store: store, DefaultFactory: factory, WorkspaceRoot: t.TempDir()})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	result, err := runner.Run(context.Background(), harness.RunSpec{
+		Task:     harness.Task{ID: "direct-event-failure", Objective: "solve"},
+		Agents:   []harness.AgentSpec{{ID: "agent-1"}},
+		Verifier: fakeVerifier{verdict: harness.Verdict{Success: true}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "event store unavailable") {
+		t.Fatalf("Run error = %v, result=%#v", err, result)
+	}
+	if result.Status != harness.StatusFailed {
+		t.Fatalf("status = %q, want failed", result.Status)
+	}
+}
