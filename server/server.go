@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -25,7 +26,9 @@ func (r *RunRequest) UnmarshalJSON(data []byte) error {
 		TSec            *TSecRequest        `json:"tsec,omitempty"`
 		Target          *TargetRequest      `json:"target,omitempty"`
 	}
-	if err := json.Unmarshal(data, &raw); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&raw); err != nil {
 		return err
 	}
 	if len(raw.Run) > 0 {
@@ -33,7 +36,9 @@ func (r *RunRequest) UnmarshalJSON(data []byte) error {
 			harness.RunSpec
 			Exploration *exploration.Policy `json:"exploration,omitempty"`
 		}
-		if err := json.Unmarshal(raw.Run, &run); err != nil {
+		runDecoder := json.NewDecoder(bytes.NewReader(raw.Run))
+		runDecoder.DisallowUnknownFields()
+		if err := runDecoder.Decode(&run); err != nil {
 			return err
 		}
 		r.Run = run.RunSpec
