@@ -472,3 +472,57 @@ func TestBranchEngineMarksConflictingKnowledgeContested(t *testing.T) {
 		t.Fatalf("review branch missing: %+v", engine.Branches())
 	}
 }
+
+func TestBranchEngineExemptsReviewBranchesFromChildCap(t *testing.T) {
+	target := Target{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}
+	policy := DefaultExplorationPolicy()
+	policy.MaxChildrenPerBranch = 2
+	var events []BranchEvent
+	engine := NewBranchEngine(BranchEngineConfig{
+		RunID: "run-1", Task: Task{ID: "task-1", Objective: "find flag"}, Targets: []Target{target}, Policy: policy,
+	}, nil, func(event BranchEvent) { events = append(events, event) })
+	parent := Branch{
+		ID: "branch-parent", TaskID: "task-1", RunID: "run-1", Depth: 1,
+		Topic: "web.oa", Scope: "b-02", Status: BranchResolved,
+	}
+	engine.branches = append(engine.branches,
+		Branch{ID: "root", TaskID: "task-1", RunID: "run-1", Depth: 0, Topic: "root", Scope: "b-02", Status: BranchResolved},
+		parent,
+	)
+	engine.addReviewBranch(parent, Knowledge{Topic: "web.oa.alt", Scope: KnowledgeScopeTarget})
+
+	reviewIndex := -1
+	var review Branch
+	for index, branch := range engine.branches {
+		if strings.HasPrefix(branch.Topic, "review.") {
+			reviewIndex = index
+			review = branch
+			break
+		}
+	}
+	if reviewIndex < 0 {
+		t.Fatalf("review branch missing: %+v", engine.Branches())
+	}
+	proposals := []BranchProposal{
+		{ParentID: review.ID, Topic: "review.one", Goal: "review one", Hypothesis: "one is supportable", Target: "b-02", SuccessCondition: "one supported", FailureCondition: "one unsupported"},
+		{ParentID: review.ID, Topic: "review.two", Goal: "review two", Hypothesis: "two is supportable", Target: "b-02", SuccessCondition: "two supported", FailureCondition: "two unsupported"},
+		{ParentID: review.ID, Topic: "review.three", Goal: "review three", Hypothesis: "three is supportable", Target: "b-02", SuccessCondition: "three supported", FailureCondition: "three unsupported"},
+	}
+	engine.expandChildren(reviewIndex, Attempt{
+		ID: "attempt-review", BranchID: review.ID, Status: AttemptCompleted,
+		Outcome: AttemptLocalSuccess, ObservationIDs: []string{"obs-review"},
+	}, proposals)
+
+	children := 0
+	for _, branch := range engine.Branches() {
+		if branch.ParentID == review.ID {
+			children++
+		}
+	}
+	if children != len(proposals) {
+		t.Fatalf("review children = %d, want %d: %+v", children, len(proposals), engine.Branches())
+	}
+	if _, rejected := findBranchRejection(events, "child_limit_exceeded"); rejected {
+		t.Fatalf("review branch was capped: %+v", events)
+	}
+}

@@ -121,6 +121,7 @@ type BranchEngine struct {
 	lastProgress   int
 	lastKnowledge  int
 	needPlan       bool
+	reviewBranches map[string]struct{}
 }
 
 // NewBranchEngine creates a v2 tree engine.
@@ -129,7 +130,10 @@ func NewBranchEngine(cfg BranchEngineConfig, planner BranchPlanner, emit func(Br
 	if emit == nil {
 		emit = func(BranchEvent) {}
 	}
-	return &BranchEngine{cfg: cfg, planner: planner, emit: emit, needPlan: true}
+	return &BranchEngine{
+		cfg: cfg, planner: planner, emit: emit, needPlan: true,
+		reviewBranches: make(map[string]struct{}),
+	}
 }
 
 // Run executes the binary tree until progress, exhaustion, or context stop.
@@ -350,8 +354,9 @@ func (e *BranchEngine) expandChildren(parentIndex int, attempt Attempt, proposal
 		return
 	}
 	created := 0
+	_, reviewBranch := e.reviewBranches[parent.ID]
 	for _, proposal := range proposals {
-		if created >= e.cfg.Policy.MaxChildrenPerBranch {
+		if !reviewBranch && created >= e.cfg.Policy.MaxChildrenPerBranch {
 			e.rejectBranch(parent.ID, "child_limit_exceeded", proposal)
 			continue
 		}
@@ -502,6 +507,10 @@ func (e *BranchEngine) addReviewBranch(parent Branch, knowledge Knowledge) {
 	topic := "review." + normalizeTopic(knowledge.Topic)
 	for _, branch := range e.branches {
 		if branch.Topic == topic && branch.Scope == parent.Scope {
+			if e.reviewBranches == nil {
+				e.reviewBranches = make(map[string]struct{})
+			}
+			e.reviewBranches[branch.ID] = struct{}{}
 			return
 		}
 	}
@@ -518,6 +527,10 @@ func (e *BranchEngine) addReviewBranch(parent Branch, knowledge Knowledge) {
 		Scope: parent.Scope, Status: BranchOpen, CreatedAt: now, UpdatedAt: now,
 	}
 	e.branches = append(e.branches, branch)
+	if e.reviewBranches == nil {
+		e.reviewBranches = make(map[string]struct{})
+	}
+	e.reviewBranches[branch.ID] = struct{}{}
 	e.saveBranch(branch)
 	e.emit(BranchEvent{Type: "branch.created", Data: branch})
 }
