@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -121,6 +122,13 @@ type Target struct {
 	Addresses []string          `json:"addresses,omitempty" yaml:"addresses,omitempty"`
 	Isolation IsolationMode     `json:"isolation" yaml:"isolation"`
 	Metadata  map[string]string `json:"metadata,omitempty" yaml:"metadata,omitempty"`
+}
+
+// TargetFingerprint is the canonical, code-owned identity of a logical
+// Target. Runtime names such as container or compose project names are per-Run
+// and never identity, so Knowledge reuse always compares fingerprints.
+func TargetFingerprint(target Target) string {
+	return strings.TrimSpace(target.ID)
 }
 
 // AgentRole selects the fixed capability policy enforced by a runtime.
@@ -619,7 +627,6 @@ type RunRecord struct {
 	Spec       json.RawMessage `json:"spec,omitempty"`
 	Result     json.RawMessage `json:"result,omitempty"`
 	Error      string          `json:"error,omitempty"`
-	SweepID    string          `json:"sweep_id,omitempty"`
 	Metadata   json.RawMessage `json:"metadata,omitempty"`
 	CreatedAt  time.Time       `json:"created_at"`
 	StartedAt  *time.Time      `json:"started_at,omitempty"`
@@ -633,16 +640,6 @@ type VerdictRecord struct {
 	Message   string          `json:"message,omitempty"`
 	Evidence  json.RawMessage `json:"evidence,omitempty"`
 	CreatedAt time.Time       `json:"created_at"`
-}
-
-type SweepRecord struct {
-	ID         string          `json:"id"`
-	Status     Status          `json:"status"`
-	Spec       json.RawMessage `json:"spec,omitempty"`
-	Result     json.RawMessage `json:"result,omitempty"`
-	Error      string          `json:"error,omitempty"`
-	CreatedAt  time.Time       `json:"created_at"`
-	FinishedAt *time.Time      `json:"finished_at,omitempty"`
 }
 
 // AgentEvent is the normalized runtime event consumed by the turn protocol.
@@ -714,7 +711,6 @@ type VerifyRequest struct {
 	Target        Target
 	Sessions      []SessionResult
 	WorkspaceRoot string
-	Store         Store
 }
 
 type EvidenceArchiveRequest struct {

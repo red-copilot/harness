@@ -25,6 +25,16 @@ func PromoteKnowledge(req KnowledgePromotionRequest) (Knowledge, []KnowledgeEven
 	if containsSecretLikeValue(req.Proposal.Statement) {
 		return Knowledge{}, nil, errors.New("knowledge statement contains a secret value")
 	}
+	switch req.Proposal.Scope {
+	case "", KnowledgeScopeTask, KnowledgeScopeTarget, KnowledgeScopeInstance:
+	default:
+		return Knowledge{}, nil, fmt.Errorf("unknown knowledge scope %q", req.Proposal.Scope)
+	}
+	switch req.Proposal.Reuse {
+	case "", ReuseStable, ReuseInstance, ReuseNever:
+	default:
+		return Knowledge{}, nil, fmt.Errorf("unknown knowledge reuse %q", req.Proposal.Reuse)
+	}
 	for _, ref := range req.Proposal.ObservationRefs {
 		if _, ok := req.Observations[ref]; !ok {
 			return Knowledge{}, nil, fmt.Errorf("knowledge observation %q is not in current attempt", ref)
@@ -55,9 +65,11 @@ func PromoteKnowledge(req KnowledgePromotionRequest) (Knowledge, []KnowledgeEven
 	if len(req.Existing) >= 200 {
 		return Knowledge{}, nil, errors.New("knowledge limit exceeded")
 	}
-	candidateTarget := req.Proposal.Target
+	// Target identity is code-owned: an executor-supplied target string must not
+	// become the cross-Run identity used by reuse filtering.
+	candidateTarget := TargetFingerprint(req.Target)
 	if candidateTarget == "" {
-		candidateTarget = req.Target.ID
+		candidateTarget = TargetFingerprint(Target{ID: req.Proposal.Target})
 	}
 	candidate := Knowledge{TaskID: req.Task.ID, RunID: req.RunID, Topic: normalizeKnowledgeTopic(req.Proposal.Topic), Kind: req.Proposal.Kind, Statement: req.Proposal.Statement, Scope: req.Proposal.Scope, Target: candidateTarget, Trust: KnowledgeObserved, Reuse: req.Proposal.Reuse, Sources: sources, ValidFrom: now, LastValidated: now, ExpiresAt: req.Proposal.ExpiresAt, Version: 1}
 	if candidate.Scope == "" {

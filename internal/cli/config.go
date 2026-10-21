@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -91,7 +92,9 @@ func LoadConfig(path string) (*FileConfig, error) {
 		}
 	}
 	var cfg FileConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
 	if cfg.APIVersion == "" {
@@ -103,9 +106,7 @@ func LoadConfig(path string) (*FileConfig, error) {
 	if cfg.Target.Isolation == "" {
 		cfg.Target.Isolation = string(harness.IsolationCallerManaged)
 	}
-	if cfg.Policy.MaxDepth == 0 {
-		cfg.Policy = harness.DefaultExplorationPolicy()
-	}
+	cfg.Policy = harness.NormalizeExplorationPolicy(cfg.Policy)
 	if cfg.TSec != nil {
 		if cfg.TSec.BaseURLEnv == "" {
 			cfg.TSec.BaseURLEnv = "BENCHMARK_BASE_URL"

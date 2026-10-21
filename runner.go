@@ -19,6 +19,7 @@ import (
 // Runner owns Run lifecycle and adapter composition.
 type Runner struct {
 	store         Store
+	redacting     *redactingStore
 	starter       ProcessStarter
 	workspaceRoot string
 	maxSessions   int
@@ -58,7 +59,10 @@ func NewRunner(cfg Config) (*Runner, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	}
-	runner := &Runner{store: cfg.Store, starter: cfg.Starter, workspaceRoot: cfg.WorkspaceRoot, maxSessions: cfg.MaxSessions, pollInterval: cfg.PollInterval, closeTimeout: cfg.CloseTimeout, cleaner: cfg.Cleaner, logger: cfg.Logger, runs: map[string]*Run{}}
+	// The composition root installs the redacting boundary, so no Run and no
+	// adapter can reach the canonical store without redaction.
+	redacting := newRedactingStore(cfg.Store)
+	runner := &Runner{store: redacting, redacting: redacting, starter: cfg.Starter, workspaceRoot: cfg.WorkspaceRoot, maxSessions: cfg.MaxSessions, pollInterval: cfg.PollInterval, closeTimeout: cfg.CloseTimeout, cleaner: cfg.Cleaner, logger: cfg.Logger, runs: map[string]*Run{}}
 	if !cfg.SkipRecovery {
 		if err := cfg.Store.MarkInterrupted(context.Background()); err != nil {
 			return nil, fmt.Errorf("mark interrupted runs: %w", err)
@@ -100,12 +104,14 @@ func (r *Runner) Start(ctx context.Context, spec RunSpec) (*Run, error) {
 	run := newRun(r, runID, runCtx, cancel)
 	run.budget = spec.Budget
 	redactor := redactorForSpec(spec)
+	r.redacting.register(runID, redactor)
 	run.redaction = redactor
 	run.startedAt = &now
 	descriptor := RunDescriptor{SchemaVersion: CurrentSchemaVersion, Task: spec.Task, Target: spec.Target, Planner: spec.Planner, Executors: spec.Executors, Policy: NormalizeExplorationPolicy(spec.Policy), Budget: spec.Budget}
 	specJSON, _ := json.Marshal(descriptor)
 	specJSON = redactJSONPreserve(redactor, specJSON)
 	if err := r.store.CreateRun(ctx, RunRecord{ID: runID, Status: StatusQueued, Spec: specJSON, CreatedAt: now}); err != nil {
+		r.redacting.unregister(runID)
 		return nil, fmt.Errorf("create run: %w", err)
 	}
 	r.mu.Lock()
@@ -116,9 +122,13 @@ func (r *Runner) Start(ctx context.Context, spec RunSpec) (*Run, error) {
 		r.mu.Lock()
 		delete(r.runs, runID)
 		r.mu.Unlock()
+		r.redacting.unregister(runID)
 		return nil, err
 	}
-	go r.execute(run, spec, redactor)
+	go func() {
+		defer r.redacting.unregister(runID)
+		r.execute(run, spec, redactor)
+	}()
 	return run, nil
 }
 
@@ -233,7 +243,7 @@ func (r *Runner) execute(run *Run, spec RunSpec, redactor *Redactor) {
 		} else if updateErr := r.updateStatus(run, StatusVerifying, nil); updateErr != nil {
 			finalErr = updateErr
 		} else {
-			verifyVerdict, verifyErr := spec.Verifier.Verify(run.ctx, VerifyRequest{RunID: run.ID, Task: spec.Task, Target: target, Sessions: run.sessionResults(), WorkspaceRoot: run.root, Store: r.store})
+			verifyVerdict, verifyErr := spec.Verifier.Verify(run.ctx, VerifyRequest{RunID: run.ID, Task: spec.Task, Target: target, Sessions: run.sessionResults(), WorkspaceRoot: run.root})
 			if verifyErr != nil {
 				finalErr = verifyErr
 			} else {
@@ -386,11 +396,11 @@ func (r *Runner) persistKnowledge(ctx context.Context, redactor *Redactor, knowl
 }
 
 func (r *Runner) queryReusableKnowledge(ctx context.Context, spec RunSpec) ([]Knowledge, error) {
-	items, err := r.store.QueryKnowledge(ctx, KnowledgeQuery{TaskID: spec.Task.ID, RunID: "", TargetFingerprint: spec.Target.ID, AllowCrossRun: true, Now: time.Now().UTC()})
+	items, err := r.store.QueryKnowledge(ctx, KnowledgeQuery{TaskID: spec.Task.ID, RunID: "", TargetFingerprint: TargetFingerprint(spec.Target), AllowCrossRun: true, Now: time.Now().UTC()})
 	if err != nil {
 		return nil, err
 	}
-	return FilterKnowledge(items, KnowledgeQuery{TaskID: spec.Task.ID, TargetFingerprint: spec.Target.ID, AllowCrossRun: true, Now: time.Now().UTC()}), nil
+	return FilterKnowledge(items, KnowledgeQuery{TaskID: spec.Task.ID, TargetFingerprint: TargetFingerprint(spec.Target), AllowCrossRun: true, Now: time.Now().UTC()}), nil
 }
 
 // Close cancels live Runs and waits for them to finish persisting before the

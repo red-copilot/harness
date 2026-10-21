@@ -102,7 +102,7 @@ func (s *Store) migrate() error {
 }
 
 func (s *Store) CreateRun(ctx context.Context, record harness.RunRecord) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO runs(id,status,spec,result,error,sweep_id,metadata,created_at,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, record.ID, record.Status, nullableJSON(record.Spec), nullableJSON(record.Result), record.Error, record.SweepID, nullableJSON(record.Metadata), formatTime(record.CreatedAt), formatTimePtr(record.StartedAt), formatTimePtr(record.FinishedAt))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO runs(id,status,spec,result,error,metadata,created_at,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?)`, record.ID, record.Status, nullableJSON(record.Spec), nullableJSON(record.Result), record.Error, nullableJSON(record.Metadata), formatTime(record.CreatedAt), formatTimePtr(record.StartedAt), formatTimePtr(record.FinishedAt))
 	if err != nil {
 		return fmt.Errorf("create run: %w", err)
 	}
@@ -110,7 +110,7 @@ func (s *Store) CreateRun(ctx context.Context, record harness.RunRecord) error {
 }
 
 func (s *Store) UpdateRun(ctx context.Context, record harness.RunRecord) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE runs SET status=?, spec=?, result=?, error=?, sweep_id=?, metadata=?, started_at=?, finished_at=? WHERE id=?`, record.Status, nullableJSON(record.Spec), nullableJSON(record.Result), record.Error, record.SweepID, nullableJSON(record.Metadata), formatTimePtr(record.StartedAt), formatTimePtr(record.FinishedAt), record.ID)
+	result, err := s.db.ExecContext(ctx, `UPDATE runs SET status=?, spec=?, result=?, error=?, metadata=?, started_at=?, finished_at=? WHERE id=?`, record.Status, nullableJSON(record.Spec), nullableJSON(record.Result), record.Error, nullableJSON(record.Metadata), formatTimePtr(record.StartedAt), formatTimePtr(record.FinishedAt), record.ID)
 	if err != nil {
 		return fmt.Errorf("update run: %w", err)
 	}
@@ -122,13 +122,13 @@ func (s *Store) UpdateRun(ctx context.Context, record harness.RunRecord) error {
 }
 
 func (s *Store) GetRun(ctx context.Context, id string) (harness.RunRecord, error) {
-	return scanRun(s.db.QueryRowContext(ctx, `SELECT id,status,spec,result,error,sweep_id,metadata,created_at,started_at,finished_at FROM runs WHERE id=?`, id))
+	return scanRun(s.db.QueryRowContext(ctx, `SELECT id,status,spec,result,error,metadata,created_at,started_at,finished_at FROM runs WHERE id=?`, id))
 }
 func (s *Store) ListRuns(ctx context.Context, limit int) ([]harness.RunRecord, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,status,spec,result,error,sweep_id,metadata,created_at,started_at,finished_at FROM runs ORDER BY created_at DESC LIMIT ?`, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,status,spec,result,error,metadata,created_at,started_at,finished_at FROM runs ORDER BY created_at DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +149,7 @@ func scanRun(scanner interface{ Scan(...any) error }) (harness.RunRecord, error)
 	var status, created string
 	var spec, result, metadata []byte
 	var started, finished sql.NullString
-	if err := scanner.Scan(&record.ID, &status, &spec, &result, &record.Error, &record.SweepID, &metadata, &created, &started, &finished); err != nil {
+	if err := scanner.Scan(&record.ID, &status, &spec, &result, &record.Error, &metadata, &created, &started, &finished); err != nil {
 		return record, err
 	}
 	record.Status = harness.Status(status)
@@ -336,48 +336,6 @@ func (s *Store) QueryKnowledge(ctx context.Context, query harness.KnowledgeQuery
 	return harness.FilterKnowledge(all, query), nil
 }
 
-func (s *Store) SaveSweep(ctx context.Context, record harness.SweepRecord) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO sweeps(id,status,spec,result,error,created_at,finished_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,result=excluded.result,error=excluded.error,finished_at=excluded.finished_at`, record.ID, record.Status, nullableJSON(record.Spec), nullableJSON(record.Result), record.Error, formatTime(record.CreatedAt), formatTimePtr(record.FinishedAt))
-	return err
-}
-func (s *Store) GetSweep(ctx context.Context, id string) (harness.SweepRecord, error) {
-	return scanSweep(s.db.QueryRowContext(ctx, `SELECT id,status,spec,result,error,created_at,finished_at FROM sweeps WHERE id=?`, id))
-}
-func (s *Store) ListSweeps(ctx context.Context, limit int) ([]harness.SweepRecord, error) {
-	if limit <= 0 {
-		limit = 100
-	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,status,spec,result,error,created_at,finished_at FROM sweeps ORDER BY created_at DESC LIMIT ?`, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []harness.SweepRecord
-	for rows.Next() {
-		record, err := scanSweep(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, record)
-	}
-	return out, rows.Err()
-}
-
-func scanSweep(scanner interface{ Scan(...any) error }) (harness.SweepRecord, error) {
-	var record harness.SweepRecord
-	var status, created string
-	var spec, result []byte
-	var finished sql.NullString
-	if err := scanner.Scan(&record.ID, &status, &spec, &result, &record.Error, &created, &finished); err != nil {
-		return record, err
-	}
-	record.Status = harness.Status(status)
-	record.Spec = spec
-	record.Result = result
-	record.CreatedAt = parseTime(created)
-	record.FinishedAt = parseTimePtr(finished)
-	return record, nil
-}
 func (s *Store) MarkInterrupted(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE runs SET status=?, finished_at=? WHERE status NOT IN (?,?,?,?,?,?)`, harness.StatusInterrupted, formatTime(time.Now().UTC()), harness.StatusSucceeded, harness.StatusFailed, harness.StatusCancelled, harness.StatusTimedOut, harness.StatusInterrupted, harness.StatusStagnated)
 	return err

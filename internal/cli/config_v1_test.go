@@ -103,3 +103,47 @@ func TestCLIComposesTSecBackend(t *testing.T) {
 		t.Fatalf("credential binding = %+v secret=%v", spec.Executors[0].EnvFrom, spec.SecretEnv)
 	}
 }
+
+func TestCLIRejectsUnknownPolicyKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "typo.yaml")
+	data := `apiVersion: harness/v1
+task: {id: task-1, objective: test}
+target: {id: target-1}
+planner: {id: planner}
+executors: [{id: exec-1}]
+policy:
+  max_dept: 3
+`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err == nil {
+		t.Fatal("misspelled policy key was silently ignored")
+	}
+}
+
+func TestCLIDefaultsEachPolicyFieldIndependently(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	data := `apiVersion: harness/v1
+task: {id: task-1, objective: test}
+target: {id: target-1}
+planner: {id: planner}
+executors: [{id: exec-1}]
+policy:
+  max_active_branches: 1
+`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaults := harness.DefaultExplorationPolicy()
+	if cfg.Policy.MaxActiveBranches != 1 {
+		t.Fatalf("explicit max_active_branches was overwritten: %d", cfg.Policy.MaxActiveBranches)
+	}
+	if cfg.Policy.MaxDepth != defaults.MaxDepth {
+		t.Fatalf("max_depth = %d, want default %d", cfg.Policy.MaxDepth, defaults.MaxDepth)
+	}
+}

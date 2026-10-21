@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -199,5 +200,56 @@ func TestUnknownSchemaVersionRejected(t *testing.T) {
 	}
 	if err := harness.ValidateDescriptor(harness.RunDescriptor{SchemaVersion: harness.CurrentSchemaVersion}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestStorePortIsComposedOfPlanes forces every persistence method into exactly
+// one plane, so Store cannot grow back into an unpartitioned god interface.
+func TestStorePortIsComposedOfPlanes(t *testing.T) {
+	planes := map[string]reflect.Type{
+		"RunStore":         reflect.TypeOf((*harness.RunStore)(nil)).Elem(),
+		"AuditStore":       reflect.TypeOf((*harness.AuditStore)(nil)).Elem(),
+		"ExplorationStore": reflect.TypeOf((*harness.ExplorationStore)(nil)).Elem(),
+		"KnowledgeStore":   reflect.TypeOf((*harness.KnowledgeStore)(nil)).Elem(),
+	}
+	owner := map[string]string{}
+	for name, plane := range planes {
+		if plane.NumMethod() == 0 {
+			t.Fatalf("plane %s is empty", name)
+		}
+		for i := 0; i < plane.NumMethod(); i++ {
+			method := plane.Method(i).Name
+			if previous, ok := owner[method]; ok {
+				t.Fatalf("method %s belongs to both %s and %s", method, previous, name)
+			}
+			owner[method] = name
+		}
+	}
+	storePort := reflect.TypeOf((*harness.Store)(nil)).Elem()
+	for i := 0; i < storePort.NumMethod(); i++ {
+		method := storePort.Method(i).Name
+		if method == "Close" {
+			continue
+		}
+		if _, ok := owner[method]; !ok {
+			t.Fatalf("Store method %s belongs to no plane", method)
+		}
+	}
+	if _, ok := reflect.TypeOf(harness.VerifyRequest{}).FieldByName("Store"); ok {
+		t.Fatal("VerifyRequest grants the verifier persistence access")
+	}
+}
+
+// TestStorePortHasNoCampaignSurface keeps the SDK single-Run/single-Target:
+// the persistence port must not expose campaign-wide primitives.
+func TestStorePortHasNoCampaignSurface(t *testing.T) {
+	storePort := reflect.TypeOf((*harness.Store)(nil)).Elem()
+	for i := 0; i < storePort.NumMethod(); i++ {
+		if strings.Contains(strings.ToLower(storePort.Method(i).Name), "sweep") {
+			t.Fatalf("Store exposes campaign method %q", storePort.Method(i).Name)
+		}
+	}
+	if _, ok := reflect.TypeOf(harness.RunRecord{}).FieldByName("SweepID"); ok {
+		t.Fatal("RunRecord carries a campaign identifier")
 	}
 }

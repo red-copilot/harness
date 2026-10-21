@@ -435,17 +435,24 @@ func (e *explorationEngine) mergeAttempt(ctx context.Context, execution attemptE
 	if attempt.Outcome == "" {
 		attempt.Outcome = AttemptInconclusive
 	}
-	observations, err := ArchiveAttemptEvidence(ctx, e.spec.Artifacts, *e.live.redactor(), EvidenceArchiveRequest{
-		RunID: state.runID, BranchID: branch.ID, AttemptID: attempt.ID, SessionID: execution.sessionID,
-		WorkspaceDir: e.live.sessionWorkspace(execution.sessionID), Observations: report.Observations,
-		MaxFiles: state.policy.MaxEvidenceFilesPerAttempt, MaxFileBytes: state.policy.MaxArtifactBytes, MaxTotalBytes: state.policy.MaxAttemptArtifactBytes,
-	})
-	if err != nil {
-		var storeErr *ArtifactStoreError
-		if errors.As(err, &storeErr) {
-			return storeErr
+	// A blocked or refuted attempt may report no evidence at all: the negative
+	// result is itself the finding. Every other outcome must archive evidence.
+	needsEvidence := len(report.Observations) > 0 || (attempt.Outcome != AttemptRefuted && attempt.Outcome != AttemptBlocked)
+	var observations []Observation
+	var err error
+	if needsEvidence {
+		observations, err = ArchiveAttemptEvidence(ctx, e.spec.Artifacts, *e.live.redactor(), EvidenceArchiveRequest{
+			RunID: state.runID, BranchID: branch.ID, AttemptID: attempt.ID, SessionID: execution.sessionID,
+			WorkspaceDir: e.live.sessionWorkspace(execution.sessionID), Observations: report.Observations,
+			MaxFiles: state.policy.MaxEvidenceFilesPerAttempt, MaxFileBytes: state.policy.MaxArtifactBytes, MaxTotalBytes: state.policy.MaxAttemptArtifactBytes,
+		})
+		if err != nil {
+			var storeErr *ArtifactStoreError
+			if errors.As(err, &storeErr) {
+				return storeErr
+			}
+			return e.failAttempt(branch, &attempt, err.Error())
 		}
-		return e.failAttempt(branch, &attempt, err.Error())
 	}
 	observationMap := make(map[string]Observation, len(observations))
 	for _, observation := range observations {

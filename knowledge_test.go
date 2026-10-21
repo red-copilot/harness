@@ -156,3 +156,33 @@ func contains(values []string, target string) bool {
 	}
 	return false
 }
+
+// TestKnowledgeTargetIdentityIsCodeOwned: the executor cannot redefine the
+// Target identity that cross-Run reuse compares against.
+func TestKnowledgeTargetIdentityIsCodeOwned(t *testing.T) {
+	if got := harness.TargetFingerprint(harness.Target{ID: "  target-1  "}); got != "target-1" {
+		t.Fatalf("fingerprint = %q", got)
+	}
+	req := knowledgeRequest()
+	req.Proposal.Target = "harness_target_run-abc"
+	promoted, _, err := harness.PromoteKnowledge(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if promoted.Target != "target-1" {
+		t.Fatalf("knowledge target = %q, want the logical target fingerprint", promoted.Target)
+	}
+}
+
+func TestUnknownKnowledgeEnumsRejected(t *testing.T) {
+	req := knowledgeRequest()
+	req.Proposal.Scope = harness.KnowledgeScope("universal")
+	if _, _, err := harness.PromoteKnowledge(req); err == nil || !strings.Contains(err.Error(), "scope") {
+		t.Fatalf("err = %v, want unknown scope", err)
+	}
+	req = knowledgeRequest()
+	req.Proposal.Reuse = harness.ReusePolicy("always")
+	if _, _, err := harness.PromoteKnowledge(req); err == nil || !strings.Contains(err.Error(), "reuse") {
+		t.Fatalf("err = %v, want unknown reuse", err)
+	}
+}

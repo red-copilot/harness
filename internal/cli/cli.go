@@ -159,11 +159,8 @@ func composeDescriptor(base *FileConfig, descriptor harness.RunDescriptor, store
 	for _, executor := range descriptor.Executors {
 		cfg.Executors = append(cfg.Executors, agentFromHarness(executor))
 	}
-	cfg.Policy = descriptor.Policy
+	cfg.Policy = harness.NormalizeExplorationPolicy(descriptor.Policy)
 	cfg.Budget = BudgetFile{WallTimeSeconds: int(descriptor.Budget.WallTime / time.Second), MaxTokens: descriptor.Budget.MaxTokens, MaxModelCalls: descriptor.Budget.MaxModelCalls, MaxToolCalls: descriptor.Budget.MaxToolCalls, MaxCostUSD: descriptor.Budget.MaxCostUSD}
-	if cfg.Policy.MaxDepth == 0 {
-		cfg.Policy = harness.DefaultExplorationPolicy()
-	}
 	return cfg.ToRunSpec(store)
 }
 

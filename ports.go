@@ -56,20 +56,27 @@ type ArtifactStore interface {
 	Open(context.Context, string) (io.ReadCloser, error)
 }
 
-type Store interface {
+// RunStore persists Run lifecycle records.
+type RunStore interface {
 	CreateRun(context.Context, RunRecord) error
 	UpdateRun(context.Context, RunRecord) error
 	GetRun(context.Context, string) (RunRecord, error)
 	ListRuns(context.Context, int) ([]RunRecord, error)
+	MarkInterrupted(context.Context) error
+}
 
+// AuditStore is the append-only audit stream: events, logs and verdicts.
+type AuditStore interface {
 	AppendEvent(context.Context, Event) (Event, error)
 	ListEvents(context.Context, string, int64) ([]Event, error)
 	AppendLog(context.Context, LogRecord) (LogRecord, error)
 	ListLogs(context.Context, string, int64) ([]LogRecord, error)
-
 	SaveVerdict(context.Context, VerdictRecord) error
 	GetVerdict(context.Context, string) (VerdictRecord, error)
+}
 
+// ExplorationStore persists the hypothesis tree and its evidence links.
+type ExplorationStore interface {
 	SaveBranch(context.Context, Branch) error
 	ListBranches(context.Context, string) ([]Branch, error)
 	SaveAttempt(context.Context, Attempt) error
@@ -78,15 +85,22 @@ type Store interface {
 	ListObservations(context.Context, string) ([]Observation, error)
 	SaveArtifact(context.Context, Artifact) error
 	ListArtifacts(context.Context, string) ([]Artifact, error)
+}
 
+// KnowledgeStore persists versioned Knowledge.
+type KnowledgeStore interface {
 	SaveKnowledge(context.Context, Knowledge) error
 	UpdateKnowledge(context.Context, Knowledge) error
 	QueryKnowledge(context.Context, KnowledgeQuery) ([]Knowledge, error)
+}
 
-	SaveSweep(context.Context, SweepRecord) error
-	GetSweep(context.Context, string) (SweepRecord, error)
-	ListSweeps(context.Context, int) ([]SweepRecord, error)
-	MarkInterrupted(context.Context) error
+// Store is the canonical persistence port. It composes the four planes so a
+// consumer can depend on the narrowest one it actually needs.
+type Store interface {
+	RunStore
+	AuditStore
+	ExplorationStore
+	KnowledgeStore
 	Close() error
 }
 

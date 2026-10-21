@@ -205,13 +205,6 @@ func (s *memoryStore) QueryKnowledge(_ context.Context, query harness.KnowledgeQ
 	out := append([]harness.Knowledge(nil), s.knowledge...)
 	return harness.FilterKnowledge(out, query), nil
 }
-func (s *memoryStore) SaveSweep(context.Context, harness.SweepRecord) error { return nil }
-func (s *memoryStore) GetSweep(context.Context, string) (harness.SweepRecord, error) {
-	return harness.SweepRecord{}, nil
-}
-func (s *memoryStore) ListSweeps(context.Context, int) ([]harness.SweepRecord, error) {
-	return nil, nil
-}
 func (s *memoryStore) MarkInterrupted(context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

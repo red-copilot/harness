@@ -248,3 +248,59 @@ func eventContains(events []harness.Event, typ, data string) bool {
 	}
 	return false
 }
+
+// TestBlockedAndRefutedAttemptsNeedNoEvidence: a negative finding is the
+// result itself, so an attempt with no observations must not be downgraded to
+// a failure just because there is nothing to archive.
+func TestBlockedAndRefutedAttemptsNeedNoEvidence(t *testing.T) {
+	store := newMemoryStore()
+	spec := integrationSpec(t, store)
+	spec.PlannerStrategy = staticPlannerStrategy{proposal: harness.PlanProposal{CreateBranches: []harness.BranchProposal{
+		{ParentID: "root", Topic: "web.blocked", Goal: "blocked", Hypothesis: "blocked", Target: "target-1", SuccessCondition: "yes", FailureCondition: "no"},
+		{ParentID: "root", Topic: "web.refuted", Goal: "refuted", Hypothesis: "refuted", Target: "target-1", SuccessCondition: "yes", FailureCondition: "no"},
+	}}}
+	spec.ExecutorStrategy = noEvidenceOutcomeExecutor{outcomes: map[string]harness.AttemptOutcome{
+		"web.blocked": harness.AttemptBlocked,
+		"web.refuted": harness.AttemptRefuted,
+	}}
+	result, err := newTestRunner(t, store).Run(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	branches, err := store.ListBranches(context.Background(), result.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses := map[string]harness.BranchStatus{}
+	for _, branch := range branches {
+		statuses[branch.Topic] = branch.Status
+	}
+	if statuses["web.blocked"] != harness.BranchBlocked || statuses["web.refuted"] != harness.BranchRefuted {
+		t.Fatalf("branch statuses = %#v", statuses)
+	}
+	attempts, err := store.ListAttempts(context.Background(), result.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcomes := map[harness.AttemptOutcome]bool{}
+	for _, attempt := range attempts {
+		if attempt.Status == harness.AttemptFailed {
+			t.Fatalf("negative attempt was downgraded to failure: %#v", attempt)
+		}
+		outcomes[attempt.Outcome] = true
+	}
+	if !outcomes[harness.AttemptBlocked] || !outcomes[harness.AttemptRefuted] {
+		t.Fatalf("attempt outcomes = %#v", outcomes)
+	}
+}
+
+type noEvidenceOutcomeExecutor struct {
+	outcomes map[string]harness.AttemptOutcome
+}
+
+func (noEvidenceOutcomeExecutor) Prompt(harness.AttemptRequest) (string, error) {
+	return "execute", nil
+}
+func (e noEvidenceOutcomeExecutor) Parse(req harness.AttemptRequest, _ harness.TurnResult) (harness.AttemptReport, error) {
+	return harness.AttemptReport{BranchID: req.Branch.ID, Status: harness.AttemptCompleted, Outcome: e.outcomes[req.Branch.Topic]}, nil
+}
