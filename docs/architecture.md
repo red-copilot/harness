@@ -21,18 +21,20 @@ The SDK is a Go modular monolith:
    policy and empty blackboard before any Executor process is created.
 4. The backend is observed before planning starts. Its authoritative progress,
    such as `2/6` flags, is injected into every Planner snapshot.
-5. The Planner proposes coarse-grained Branches from the Goal, authoritative
-   progress, task memory and recent Attempt summaries; it never dispatches work
-   or establishes success.
+5. The Planner proposes coarse-grained root-level Branches from the Goal,
+   authoritative progress, task memory and recent Attempt summaries; it never
+   dispatches work, proposes child branches or establishes success.
 6. The deterministic tree engine validates authorization, topic+scope+kind
    deduplication, depth/node limits and active-branch limits before dispatch.
 7. Each Executor resets Pi with `new_session`, receives one Branch and a
    bounded Knowledge digest, and may explore freely inside that Branch until its
    success/failure condition or budget is reached.
 8. Attempts produce immutable Observations. Model-proposed Knowledge is
-   validated and promoted by code. Local success may expand a Branch into two
-   children; refuted/blocked Branches stop. `agent_settled` ends a Pi turn;
-   `agent_end` is only an intermediate observation.
+   validated and promoted by code. Expansion is executor-driven: only an
+   AttemptReport with `local_success` and at least one Observation may propose
+   children. Code caps each depth >= 1 hypothesis branch at
+   `MaxChildrenPerBranch`; refuted/blocked Branches stop. `agent_settled` ends
+   a Pi turn; `agent_end` is only an intermediate observation.
 9. A backend completion or a caller-provided verifier produces the only
    authoritative verdict.
 10. Target, session processes and labeled Docker resources are closed in all
@@ -46,12 +48,16 @@ The v2 exploration core is a binary hypothesis tree:
   success/failure conditions, budget, status, priority and knowledge refs.
 - `Attempt` is one bounded execution of a Branch. `Observation` records raw
   evidence. `Knowledge` is a code-promoted, coarse-grained conclusion.
-- The Planner is read-only and proposes branches. The deterministic engine
-  validates authorization, topic+scope+kind deduplication, depth, node count,
-  and active-branch limits.
-- A local-success branch may expand into two children. Refuted or blocked
-  branches stop. Inconclusive attempts may retry within the branch budget.
-  Operational failures retry once.
+- The Planner is read-only and may only seed root-level branches. The
+  deterministic engine validates authorization, topic+scope+kind
+  deduplication, depth, node count, and active-branch limits.
+- Expansion is executor-driven. A branch may create children only when its
+  Attempt has `local_success` and at least one Observation, and it may create
+  at most `MaxChildrenPerBranch` children (default 2). The cap applies to
+  depth >= 1 hypothesis branches. `root` is the depth-0 task node, is bounded
+  by `MaxNodes`, and is exempt from the child cap. Refuted or blocked branches
+  stop. Inconclusive attempts may retry within the branch budget. Operational
+  failures retry once.
 - Local branch success never establishes run success. Only a Backend completion
   or Verifier can produce an authoritative verdict.
 - Task memory is scoped by `Task.ID`. Stable knowledge can cross runs;
@@ -71,11 +77,16 @@ Default limits:
 |---|---:|
 | Tree depth | 4 |
 | Tree nodes | 15 |
+| Children per hypothesis branch | 2 |
 | Concurrent branches | 2 |
 | Attempts per branch | 3 |
 | Tool calls per attempt | 20 |
 | Wall time per attempt | 10 minutes |
 | Stagnation rounds | 3 |
+
+`MaxDepth` counts the task root at depth 0. `MaxNodes` is an independent,
+ tighter budget: a full binary tree through depth 4 would contain 31 nodes,
+ while the default total tree budget is 15.
 
 ## Trust boundary
 

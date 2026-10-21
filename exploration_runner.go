@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -182,8 +183,12 @@ func (r *Runner) runExplorationSessions(
 		AcquireExecutors: acquireBranchExecutors,
 	}
 	engine := NewBranchEngine(engineCfg, planner, func(event BranchEvent) {
+		eventType := event.Type
+		if !strings.HasPrefix(eventType, "exploration.") {
+			eventType = "exploration." + eventType
+		}
 		r.emitEvent(run, redactor, Event{
-			RunID: run.ID, Source: "control", Type: "exploration." + event.Type,
+			RunID: run.ID, Source: "control", Type: eventType,
 			Time: time.Now().UTC(), Data: mustJSON(event.Data),
 		})
 	})

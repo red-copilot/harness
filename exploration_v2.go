@@ -198,6 +198,7 @@ type ExplorationPolicy struct {
 
 	MaxDepth               int           `json:"max_depth,omitempty" yaml:"max_depth,omitempty"`
 	MaxNodes               int           `json:"max_nodes,omitempty" yaml:"max_nodes,omitempty"`
+	MaxChildrenPerBranch   int           `json:"max_children_per_branch,omitempty" yaml:"max_children_per_branch,omitempty"`
 	MaxActiveBranches      int           `json:"max_active_branches,omitempty" yaml:"max_active_branches,omitempty"`
 	MaxAttemptsPerBranch   int           `json:"max_attempts_per_branch,omitempty" yaml:"max_attempts_per_branch,omitempty"`
 	MaxToolCallsPerAttempt int           `json:"max_tool_calls_per_attempt,omitempty" yaml:"max_tool_calls_per_attempt,omitempty"`
@@ -210,6 +211,7 @@ func DefaultExplorationPolicy() ExplorationPolicy {
 	return ExplorationPolicy{
 		MaxDepth:               4,
 		MaxNodes:               15,
+		MaxChildrenPerBranch:   2,
 		MaxActiveBranches:      2,
 		MaxAttemptsPerBranch:   3,
 		MaxToolCallsPerAttempt: 20,
@@ -226,6 +228,9 @@ func NormalizeExplorationPolicy(policy ExplorationPolicy) ExplorationPolicy {
 	}
 	if policy.MaxNodes <= 0 {
 		policy.MaxNodes = defaults.MaxNodes
+	}
+	if policy.MaxChildrenPerBranch <= 0 {
+		policy.MaxChildrenPerBranch = defaults.MaxChildrenPerBranch
 	}
 	if policy.MaxActiveBranches <= 0 {
 		policy.MaxActiveBranches = defaults.MaxActiveBranches

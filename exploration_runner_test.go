@@ -170,8 +170,12 @@ func TestRunnerDispatchesFreshFrontierSessions(t *testing.T) {
 		resets := session.resets
 		closed := session.closed
 		session.mu.Unlock()
-		if resets != 1 {
-			t.Fatalf("session %s resets = %d, want 1", session.role, resets)
+		wantResets := 1
+		if session.role == "planner" {
+			wantResets = 2
+		}
+		if resets != wantResets {
+			t.Fatalf("session %s resets = %d, want %d", session.role, resets, wantResets)
 		}
 		if !closed {
 			t.Fatalf("session %s was not closed", session.role)

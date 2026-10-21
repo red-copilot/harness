@@ -103,10 +103,16 @@ read-only Planner and fresh-context Executors:
 - `Branch` is the long-lived investigation unit. `Attempt` is one bounded
   execution. `Observation` is immutable evidence. `Knowledge` is a
   code-promoted, coarse-grained durable conclusion.
-- A successful branch expands into at most two children. A refuted or blocked
-  branch stops. Inconclusive attempts retry within the branch budget.
-- Default bounds are depth 4, 15 nodes, 2 active branches, 3 attempts per
-  branch, 20 tool calls and 10 minutes per attempt.
+- Expansion is executor-driven. Only an AttemptReport with `local_success` and
+  at least one Observation may propose children. `MaxChildrenPerBranch`
+  defaults to 2 and applies to depth >= 1 hypothesis branches. The depth-0
+  `root` is the task node, is bounded by `MaxNodes`, and is exempt from the
+  child cap. The Planner only seeds root-level branches.
+- Default bounds are depth 4, 15 nodes, 2 children per hypothesis branch, 2
+  active branches, 3 attempts per branch, 20 tool calls and 10 minutes per
+  attempt. `MaxDepth` counts `root` at depth 0, and `MaxNodes` is an
+  independent tighter budget: a full binary tree through depth 4 would have
+  31 nodes.
 - Local branch success only controls expansion; it never establishes run
   success. Only a Verifier or backend completion can produce an authoritative
   verdict.
@@ -121,6 +127,7 @@ The CLI enables this path by default for single-agent YAML/JSON runs:
 exploration:
   max_depth: 4
   max_nodes: 15
+  max_children_per_branch: 2
   max_active_branches: 2
   max_attempts_per_branch: 3
   max_tool_calls_per_attempt: 20

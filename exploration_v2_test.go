@@ -9,14 +9,18 @@ import (
 
 func TestDefaultExplorationPolicyUsesBinaryTreeDefaults(t *testing.T) {
 	p := DefaultExplorationPolicy()
-	if p.MaxDepth != 4 || p.MaxNodes != 15 || p.MaxActiveBranches != 2 {
-		t.Fatalf("tree defaults = depth %d nodes %d active %d, want 4/15/2", p.MaxDepth, p.MaxNodes, p.MaxActiveBranches)
+	if p.MaxDepth != 4 || p.MaxNodes != 15 || p.MaxChildrenPerBranch != 2 || p.MaxActiveBranches != 2 {
+		t.Fatalf("tree defaults = depth %d nodes %d children %d active %d, want 4/15/2/2", p.MaxDepth, p.MaxNodes, p.MaxChildrenPerBranch, p.MaxActiveBranches)
 	}
 	if p.MaxAttemptsPerBranch != 3 || p.MaxToolCallsPerAttempt != 20 || p.MaxWallTimePerAttempt != 10*time.Minute {
 		t.Fatalf("attempt defaults = attempts %d tools %d wall %s", p.MaxAttemptsPerBranch, p.MaxToolCallsPerAttempt, p.MaxWallTimePerAttempt)
 	}
 	if p.StagnationRounds != 3 {
 		t.Fatalf("stagnation rounds = %d, want 3", p.StagnationRounds)
+	}
+	normalized := NormalizeExplorationPolicy(ExplorationPolicy{MaxDepth: 4})
+	if normalized.MaxChildrenPerBranch != 2 {
+		t.Fatalf("normalized max children = %d, want 2", normalized.MaxChildrenPerBranch)
 	}
 }
 
@@ -90,6 +94,131 @@ func TestCanExpandBranchOnlyOnLocalSuccessWithEvidence(t *testing.T) {
 	}
 }
 
+type childExpansionExecutor struct {
+	outcome   AttemptOutcome
+	proposals []BranchProposal
+}
+
+func (e *childExpansionExecutor) ID() string                  { return "executor-1" }
+func (e *childExpansionExecutor) Reset(context.Context) error { return nil }
+func (e *childExpansionExecutor) Attempt(_ context.Context, branch Branch, _ BranchBrief) (AttemptReport, error) {
+	if branch.Depth == 1 {
+		return AttemptReport{
+			BranchID: branch.ID, Status: AttemptCompleted, Outcome: e.outcome,
+			Observations:  []Observation{{ID: "obs-1", Kind: "http", Summary: "parent evidence", EvidenceRefs: []string{"raw-1"}}},
+			ChildBranches: append([]BranchProposal(nil), e.proposals...),
+		}, nil
+	}
+	return AttemptReport{BranchID: branch.ID, Status: AttemptCompleted, Outcome: AttemptRefuted}, nil
+}
+
+func findBranchRejection(events []BranchEvent, reason string) (map[string]any, bool) {
+	for _, event := range events {
+		if event.Type != "exploration.branch.rejected" {
+			continue
+		}
+		data, ok := event.Data.(map[string]any)
+		if !ok || data["reason"] != reason {
+			continue
+		}
+		return data, true
+	}
+	return nil, false
+}
+
+func TestBranchEngineCapsExpansionAtTwoChildren(t *testing.T) {
+	target := Target{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}
+	proposals := []BranchProposal{
+		{ParentID: "parent", Topic: "web.oa.deep", Goal: "deep OA", Hypothesis: "deep OA exists", Target: "b-02", SuccessCondition: "deep page", FailureCondition: "no deep page"},
+		{ParentID: "parent", Topic: "web.oa.creds", Goal: "OA creds", Hypothesis: "creds exist", Target: "b-02", SuccessCondition: "credential path", FailureCondition: "no credential path"},
+		{ParentID: "parent", Topic: "web.oa.upload", Goal: "OA upload", Hypothesis: "upload exists", Target: "b-02", SuccessCondition: "upload page", FailureCondition: "no upload page"},
+	}
+	executor := &childExpansionExecutor{outcome: AttemptLocalSuccess, proposals: proposals}
+	var events []BranchEvent
+	engine := NewBranchEngine(BranchEngineConfig{
+		RunID: "run-1", Task: Task{ID: "task-1", Objective: "find flag"}, Targets: []Target{target},
+		Policy: DefaultExplorationPolicy(),
+		AcquireExecutors: func(context.Context, int) ([]BranchExecutor, error) {
+			return []BranchExecutor{executor}, nil
+		},
+	}, &singleBranchPlanner{}, func(event BranchEvent) { events = append(events, event) })
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var parent Branch
+	for _, branch := range engine.Branches() {
+		if branch.Depth == 1 && branch.Topic == "web.oa" {
+			parent = branch
+			break
+		}
+	}
+	if parent.ID == "" {
+		t.Fatalf("depth-1 parent branch missing: %+v", engine.Branches())
+	}
+	children := 0
+	for _, branch := range engine.Branches() {
+		if branch.ParentID == parent.ID {
+			children++
+		}
+	}
+	if children != 2 {
+		t.Fatalf("children = %d, want 2: %+v", children, engine.Branches())
+	}
+	data, ok := findBranchRejection(events, "child_limit_exceeded")
+	if !ok {
+		t.Fatalf("missing child_limit_exceeded rejection: %+v", events)
+	}
+	if data["parent_id"] != parent.ID {
+		t.Fatalf("rejection parent_id = %v, want %q", data["parent_id"], parent.ID)
+	}
+	if data["proposal"] != proposals[2] {
+		t.Fatalf("rejection proposal = %+v, want third proposal %+v", data["proposal"], proposals[2])
+	}
+}
+
+func TestBranchEngineIgnoresChildrenWithoutLocalSuccess(t *testing.T) {
+	target := Target{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}
+	proposals := []BranchProposal{
+		{ParentID: "parent", Topic: "web.oa.deep", Goal: "deep OA", Hypothesis: "deep OA exists", Target: "b-02", SuccessCondition: "deep page", FailureCondition: "no deep page"},
+		{ParentID: "parent", Topic: "web.oa.creds", Goal: "OA creds", Hypothesis: "creds exist", Target: "b-02", SuccessCondition: "credential path", FailureCondition: "no credential path"},
+		{ParentID: "parent", Topic: "web.oa.upload", Goal: "OA upload", Hypothesis: "upload exists", Target: "b-02", SuccessCondition: "upload page", FailureCondition: "no upload page"},
+	}
+	executor := &childExpansionExecutor{outcome: AttemptRefuted, proposals: proposals}
+	var events []BranchEvent
+	engine := NewBranchEngine(BranchEngineConfig{
+		RunID: "run-1", Task: Task{ID: "task-1", Objective: "find flag"}, Targets: []Target{target},
+		Policy: DefaultExplorationPolicy(),
+		AcquireExecutors: func(context.Context, int) ([]BranchExecutor, error) {
+			return []BranchExecutor{executor}, nil
+		},
+	}, &singleBranchPlanner{}, func(event BranchEvent) { events = append(events, event) })
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var parent Branch
+	for _, branch := range engine.Branches() {
+		if branch.Depth == 1 && branch.Topic == "web.oa" {
+			parent = branch
+			break
+		}
+	}
+	if parent.ID == "" {
+		t.Fatalf("depth-1 parent branch missing: %+v", engine.Branches())
+	}
+	for _, branch := range engine.Branches() {
+		if branch.ParentID == parent.ID {
+			t.Fatalf("unexpected child branch: %+v", branch)
+		}
+	}
+	data, ok := findBranchRejection(events, "expansion_not_allowed")
+	if !ok {
+		t.Fatalf("missing expansion_not_allowed rejection: %+v", events)
+	}
+	if data["parent_id"] != parent.ID || data["proposal"] != proposals[0] {
+		t.Fatalf("rejection data = %+v, want parent %q and first proposal", data, parent.ID)
+	}
+}
+
 type fakeBranchPlanner struct {
 	outputs []BranchPlanOutput
 	calls   int
@@ -113,7 +242,13 @@ func (e *fakeBranchExecutor) ID() string                  { return e.id }
 func (e *fakeBranchExecutor) Reset(context.Context) error { return nil }
 func (e *fakeBranchExecutor) Attempt(_ context.Context, branch Branch, _ BranchBrief) (AttemptReport, error) {
 	if branch.Topic == "web.oa" {
-		return AttemptReport{BranchID: branch.ID, Status: AttemptCompleted, Outcome: AttemptLocalSuccess, ObservationIDs: []string{"obs-1"}}, nil
+		return AttemptReport{
+			BranchID: branch.ID, Status: AttemptCompleted, Outcome: AttemptLocalSuccess, ObservationIDs: []string{"obs-1"},
+			ChildBranches: []BranchProposal{
+				{ParentID: branch.ID, Topic: "web.oa.deep", Goal: "deep OA", Hypothesis: "OA child exists", Target: "b-02", SuccessCondition: "child", FailureCondition: "no child"},
+				{ParentID: branch.ID, Topic: "web.oa.creds", Goal: "OA creds", Hypothesis: "creds exist", Target: "b-02", SuccessCondition: "cred", FailureCondition: "no cred"},
+			},
+		}, nil
 	}
 	return AttemptReport{BranchID: branch.ID, Status: AttemptCompleted, Outcome: AttemptRefuted}, nil
 }
@@ -142,21 +277,13 @@ func (s *memoryKnowledgeStore) UpdateKnowledge(_ context.Context, knowledge Know
 
 type treePlanner struct{ calls int }
 
-func (p *treePlanner) Plan(_ context.Context, req BranchPlanRequest) (BranchPlanOutput, error) {
+func (p *treePlanner) Plan(context.Context, BranchPlanRequest) (BranchPlanOutput, error) {
 	p.calls++
 	if p.calls == 1 {
 		return BranchPlanOutput{CreateBranches: []BranchProposal{
 			{ParentID: "root", Topic: "web.oa", Goal: "find OA", Hypothesis: "OA is exposed", Target: "b-02", SuccessCondition: "OA page", FailureCondition: "no OA page"},
 			{ParentID: "root", Topic: "web.alt", Goal: "find alternate", Hypothesis: "alternate path exists", Target: "b-02", SuccessCondition: "alternate page", FailureCondition: "no alternate page"},
 		}}, nil
-	}
-	for _, branch := range req.Branches {
-		if branch.Depth == 1 && branch.Status == BranchResolved {
-			return BranchPlanOutput{CreateBranches: []BranchProposal{
-				{ParentID: branch.ID, Topic: "web.oa.deep", Goal: "deep OA", Hypothesis: "OA child exists", Target: "b-02", SuccessCondition: "child", FailureCondition: "no child"},
-				{ParentID: branch.ID, Topic: "web.oa.creds", Goal: "OA creds", Hypothesis: "creds exist", Target: "b-02", SuccessCondition: "cred", FailureCondition: "no cred"},
-			}}, nil
-		}
 	}
 	return BranchPlanOutput{}, nil
 }

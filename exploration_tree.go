@@ -125,9 +125,7 @@ type BranchEngine struct {
 
 // NewBranchEngine creates a v2 tree engine.
 func NewBranchEngine(cfg BranchEngineConfig, planner BranchPlanner, emit func(BranchEvent)) *BranchEngine {
-	if cfg.Policy.MaxDepth <= 0 {
-		cfg.Policy = DefaultExplorationPolicy()
-	}
+	cfg.Policy = NormalizeExplorationPolicy(cfg.Policy)
 	if emit == nil {
 		emit = func(BranchEvent) {}
 	}
@@ -224,13 +222,21 @@ func (e *BranchEngine) plan(ctx context.Context, round int) error {
 		}
 	}
 	for _, proposal := range output.CreateBranches {
-		parent := e.findBranch(proposal.ParentID)
+		parentID := strings.TrimSpace(proposal.ParentID)
+		if parentID == "" {
+			parentID = "root"
+		}
+		if parentID != "root" {
+			e.rejectBranch(parentID, "planner_cannot_expand", proposal)
+			continue
+		}
+		parent := e.findBranch(parentID)
 		if parent == nil {
 			continue
 		}
 		branch, err := ValidateBranchProposal(proposal, parent, e.cfg.Targets, e.branches, e.cfg.Policy)
 		if err != nil {
-			e.emit(BranchEvent{Type: "branch.rejected", Data: map[string]any{"proposal": proposal, "error": err.Error()}})
+			e.rejectBranch(parent.ID, err.Error(), proposal)
 			continue
 		}
 		if parent.Status == BranchOpen {
@@ -322,11 +328,51 @@ func (e *BranchEngine) runBranches(ctx context.Context, round int, ready []Branc
 			e.promoteKnowledge(report, e.branches[branchIndex])
 		}
 		e.applyOutcome(branchIndex, attempt)
+		e.expandChildren(branchIndex, attempt, report.ChildBranches)
+		e.needPlan = true
 		e.saveBranch(e.branches[branchIndex])
 		e.saveAttempt(attempt)
 		e.emit(BranchEvent{Type: "attempt.completed", Data: attempt})
 	}
 	return nil
+}
+
+func (e *BranchEngine) expandChildren(parentIndex int, attempt Attempt, proposals []BranchProposal) {
+	if len(proposals) == 0 {
+		return
+	}
+	if parentIndex < 0 || parentIndex >= len(e.branches) {
+		return
+	}
+	parent := &e.branches[parentIndex]
+	if !CanExpandBranch(*parent, attempt) {
+		e.rejectBranch(parent.ID, "expansion_not_allowed", proposals[0])
+		return
+	}
+	created := 0
+	for _, proposal := range proposals {
+		if created >= e.cfg.Policy.MaxChildrenPerBranch {
+			e.rejectBranch(parent.ID, "child_limit_exceeded", proposal)
+			continue
+		}
+		branch, err := ValidateBranchProposal(proposal, parent, e.cfg.Targets, e.branches, e.cfg.Policy)
+		if err != nil {
+			e.rejectBranch(parent.ID, err.Error(), proposal)
+			continue
+		}
+		e.branches = append(e.branches, branch)
+		created++
+		e.saveBranch(branch)
+		e.emit(BranchEvent{Type: "branch.created", Data: branch})
+	}
+}
+
+func (e *BranchEngine) rejectBranch(parentID, reason string, proposal BranchProposal) {
+	e.emit(BranchEvent{Type: "exploration.branch.rejected", Data: map[string]any{
+		"parent_id": parentID,
+		"reason":    reason,
+		"proposal":  proposal,
+	}})
 }
 
 func (e *BranchEngine) recordObservations(attemptID string, observations []Observation, attempt *Attempt) {
@@ -385,7 +431,6 @@ func (e *BranchEngine) applyOutcome(index int, attempt Attempt) {
 	switch attempt.Outcome {
 	case AttemptLocalSuccess:
 		e.branches[index].Status = BranchResolved
-		e.needPlan = true
 	case AttemptRefuted:
 		e.branches[index].Status = BranchRefuted
 	case AttemptBlocked:
