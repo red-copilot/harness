@@ -141,3 +141,26 @@
 - [x] **Step 2: Implement the minimal timeline mapping and documentation updates.**
 - [x] **Step 3: Run `npm --prefix web run test`, `npm --prefix web run typecheck`, `npm --prefix web run lint`, `npm --prefix web run build`, `go test ./...`, `go test -race ./...`, `go vet ./...`, and `go build ./cmd/harness`.**
 - [x] **Step 4: Commit with `docs(exploration): document hypothesis frontier engine` and push.**
+
+### Task 7: Explicit Initialization Before Executor Dispatch
+
+**Files:**
+- Modify: `exploration_controller.go`
+- Modify: `exploration_runner.go`
+- Modify: `exploration_controller_test.go`
+- Modify: `exploration_runner_test.go`
+- Modify: `web/src/utils/exploration.ts`
+- Modify: `web/src/utils/exploration.test.ts`
+- Modify: `web/src/components/ExplorationTimeline.tsx`
+- Modify: `web/src/i18n/messages.ts`
+
+**Interfaces:**
+- Consumes: `ControllerConfig`, `ControllerEvent`, `FrontierItem`, `Explorer`, `Completion`.
+- Produces: `ControllerConfig.AcquireExplorers`, `exploration.initialized`, `exploration.frontiers.created`, `exploration.batch.ready`, `exploration.executor.started`, full item payloads, and `HypothesisView.phase/objective/targets/openFrontiers`.
+
+- [x] **Step 1: Write failing Controller tests for initialization event ordering, complete frontier publication, and lazy executor acquisition.**
+- [x] **Step 2: Implement explicit `initialized -> planning -> ready -> dispatching -> executing` events; publish full accepted frontiers and batch items before assignment.**
+- [x] **Step 3: Make Runner create executor sessions lazily through `AcquireExplorers`; synthesize non-started executor audit rows when planning yields no work.**
+- [x] **Step 4: Write failing frontend tests for restoring phase, goal, targets, open frontiers and current assignment before any report exists.**
+- [x] **Step 5: Implement the initialization view and run all Go/frontend verification commands.**
+- [x] **Step 6: Commit with `feat(exploration): initialize blackboard before executor dispatch` and push.**

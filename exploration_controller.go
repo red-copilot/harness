@@ -23,11 +23,12 @@ type ControllerEvent struct {
 
 // ControllerConfig defines one run-scoped blackboard.
 type ControllerConfig struct {
-	Rounds     int
-	Objective  string
-	Targets    []Target
-	MaxWorkers int
-	Progress   func() Completion
+	Rounds           int
+	Objective        string
+	Targets          []Target
+	MaxWorkers       int
+	Progress         func() Completion
+	AcquireExplorers func(context.Context) ([]Explorer, error)
 }
 
 // Controller is the deterministic state machine. It never establishes success.
@@ -59,9 +60,10 @@ func NewController(cfg ControllerConfig, planner Planner, explorers []Explorer, 
 // frontier space is exhausted; operational failures are returned separately so
 // the Runner can fail closed.
 func (c *Controller) Run(ctx context.Context) error {
-	if len(c.explorers) == 0 {
+	if len(c.explorers) == 0 && c.cfg.AcquireExplorers == nil {
 		return errors.New("exploration controller requires at least one executor")
 	}
+	c.emitInitialized()
 	for round := 0; round < c.cfg.Rounds; round++ {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -73,6 +75,16 @@ func (c *Controller) Run(ctx context.Context) error {
 		if len(indexes) == 0 {
 			return nil
 		}
+		if len(c.explorers) == 0 {
+			explorers, err := c.cfg.AcquireExplorers(ctx)
+			if err != nil {
+				return fmt.Errorf("acquire explorers: %w", err)
+			}
+			if len(explorers) == 0 {
+				return errors.New("no executors available after initialization")
+			}
+			c.explorers = append([]Explorer(nil), explorers...)
+		}
 		workers := c.cfg.MaxWorkers
 		if workers > len(c.explorers) {
 			workers = len(c.explorers)
@@ -80,6 +92,13 @@ func (c *Controller) Run(ctx context.Context) error {
 		if workers > len(indexes) {
 			workers = len(indexes)
 		}
+		batch := make([]FrontierItem, 0, workers)
+		for _, index := range indexes[:workers] {
+			batch = append(batch, copyFrontierItem(c.items[index]))
+		}
+		c.emitEvent("batch.ready", map[string]any{
+			"round": round + 1, "batch": batch, "max_workers": workers,
+		})
 		if err := c.runRound(ctx, round, indexes[:workers]); err != nil {
 			return err
 		}
@@ -102,6 +121,7 @@ func (c *Controller) Items() []FrontierItem {
 }
 
 func (c *Controller) plan(ctx context.Context, round int) {
+	c.emitEvent("phase.changed", map[string]any{"phase": "planning", "round": round + 1})
 	request := PlanRequest{
 		Round: round, Objective: c.cfg.Objective, Targets: append([]Target(nil), c.cfg.Targets...),
 		Facts: plannerFactDigest(c.ledger.Facts(), MaxDigestFacts), OpenItems: c.itemsAtStatus(FrontierOpen),
@@ -152,6 +172,7 @@ func (c *Controller) addSeeds(round int) {
 }
 
 func (c *Controller) addValidated(validation PlanValidation, round int, parentID string) {
+	created := make([]FrontierItem, 0, len(validation.Accepted))
 	for _, item := range validation.Accepted {
 		item.Round = round + 1
 		if item.Fingerprint == "" {
@@ -163,7 +184,9 @@ func (c *Controller) addValidated(validation PlanValidation, round int, parentID
 		item.ParentID = parentID
 		item.Status = FrontierOpen
 		c.items = append(c.items, item)
+		created = append(created, copyFrontierItem(item))
 	}
+	c.emitEvent("frontiers.created", map[string]any{"round": round + 1, "items": created})
 	c.emitEvent("items.planned", map[string]any{
 		"round": round + 1, "accepted": len(validation.Accepted), "dropped": len(validation.Dropped),
 	})
@@ -176,6 +199,9 @@ func (c *Controller) addValidated(validation PlanValidation, round int, parentID
 		}
 		c.emitEvent("items.dropped", map[string]any{"round": round + 1, "items": dropped})
 	}
+	if len(c.itemsAtStatus(FrontierOpen)) > 0 {
+		c.emitEvent("phase.changed", map[string]any{"phase": "ready", "round": round + 1})
+	}
 }
 
 func (c *Controller) runRound(ctx context.Context, round int, indexes []int) error {
@@ -187,6 +213,7 @@ func (c *Controller) runRound(ctx context.Context, round int, indexes []int) err
 	}
 
 	c.emitEvent("round.started", map[string]any{"round": round + 1, "batch_size": len(indexes)})
+	c.emitEvent("phase.changed", map[string]any{"phase": "dispatching", "round": round + 1})
 	results := make(chan result, len(indexes))
 	var wg sync.WaitGroup
 	for position, index := range indexes {
@@ -195,7 +222,7 @@ func (c *Controller) runRound(ctx context.Context, round int, indexes []int) err
 		c.items[index].AssignedTo = explorer.ID()
 		item := copyFrontierItem(c.items[index])
 		c.emitEvent("item.assigned", map[string]any{
-			"round": round + 1, "item_id": item.ID, "executor_id": explorer.ID(),
+			"round": round + 1, "item_id": item.ID, "executor_id": explorer.ID(), "item": item,
 		})
 		brief := BuildExplorerBrief(c.cfg.Objective, c.cfg.Targets, item, DigestFacts(item, c.ledger.Facts()))
 		wg.Add(1)
@@ -205,6 +232,10 @@ func (c *Controller) runRound(ctx context.Context, round int, indexes []int) err
 				results <- result{index: index, explorer: explorer, err: fmt.Errorf("reset executor: %w", err)}
 				return
 			}
+			c.emitEvent("executor.started", map[string]any{
+				"round": round + 1, "item_id": item.ID, "executor_id": explorer.ID(), "fresh_context": true,
+			})
+			c.emitEvent("phase.changed", map[string]any{"phase": "executing", "round": round + 1})
 			report, err := explorer.Investigate(ctx, item, brief)
 			results <- result{index: index, explorer: explorer, report: report, err: err}
 		}()
@@ -260,6 +291,7 @@ func (c *Controller) runRound(ctx context.Context, round int, indexes []int) err
 		}
 	}
 	c.emitEvent("round.completed", map[string]any{"round": round + 1})
+	c.emitEvent("phase.changed", map[string]any{"phase": "planning", "round": round + 1})
 	return nil
 }
 
@@ -307,6 +339,19 @@ func (c *Controller) emitEvent(eventType string, data map[string]any) {
 	if c.emit != nil {
 		c.emit(ControllerEvent{Type: eventType, Data: data})
 	}
+}
+
+func (c *Controller) emitInitialized() {
+	progress := Completion{}
+	if c.cfg.Progress != nil {
+		progress = c.cfg.Progress()
+	}
+	c.emitEvent("initialized", map[string]any{
+		"phase": "initialized", "objective": c.cfg.Objective,
+		"targets":  append([]Target(nil), c.cfg.Targets...),
+		"progress": progress, "facts": []Fact{}, "frontiers": []FrontierItem{},
+		"policy": map[string]any{"rounds": c.cfg.Rounds, "max_workers": c.cfg.MaxWorkers},
+	})
 }
 
 func validExplorerVerdict(verdict string) bool {

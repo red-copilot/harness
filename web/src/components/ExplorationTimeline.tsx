@@ -10,6 +10,7 @@ import type {
   ExplorationObservation,
   FrontierItem,
   HypothesisAttempt,
+  HypothesisFrontier,
   HypothesisView,
 } from '@/utils/exploration'
 
@@ -62,6 +63,7 @@ function HypothesisTimeline({ view }: { view: HypothesisView }) {
   const { t } = useI18n()
   const failed = view.attempts.filter((attempt) => attempt.status === 'failed').length
   const facts = view.attempts.reduce((total, attempt) => total + (attempt.facts?.added.length ?? 0), 0)
+  const activeFrontiers = view.frontiers.filter((frontier) => frontier.status !== 'done' && frontier.status !== 'failed')
   return (
     <div className="page-stack">
       <Row gutter={[16, 16]}>
@@ -69,7 +71,7 @@ function HypothesisTimeline({ view }: { view: HypothesisView }) {
           title={t('run.hypothesis.progress')}
           value={view.progress ? view.progress.current : 0}
         />
-        <Metric title={t('run.hypothesis.attempts')} value={view.attempts.length} />
+        <Metric title={t('run.hypothesis.activeFrontiers')} value={activeFrontiers.length} />
         <Metric title={t('run.hypothesis.facts')} value={facts} />
         <Metric title={t('run.hypothesis.failed')} value={failed} />
       </Row>
@@ -82,6 +84,42 @@ function HypothesisTimeline({ view }: { view: HypothesisView }) {
               })
             : t('run.hypothesis.note')}
         </Typography.Paragraph>
+        <div className="exploration-cycle-grid">
+          <div>
+            <Typography.Text strong>{t('run.hypothesis.objective')}</Typography.Text>
+            <Typography.Paragraph>{view.objective || '—'}</Typography.Paragraph>
+          </div>
+          <div>
+            <Typography.Text strong>{t('run.hypothesis.phase')}</Typography.Text>
+            <Typography.Paragraph>{view.phase || '—'}</Typography.Paragraph>
+          </div>
+        </div>
+        {view.targets?.length ? (
+          <div className="exploration-focus">
+            <Typography.Text strong>{t('run.hypothesis.targets')}</Typography.Text>
+            <Space wrap size={[4, 4]}>
+              {view.targets.map((target) => (
+                <Tag key={target.id}>{target.id} · {target.addresses.join(', ')}</Tag>
+              ))}
+            </Space>
+          </div>
+        ) : null}
+        <div className="exploration-focus">
+          <Typography.Text strong>{t('run.hypothesis.frontiers')}</Typography.Text>
+          {view.frontiers.length ? (
+            <div className="exploration-cycles">
+              {view.frontiers.slice(0, 20).map((frontier) => (
+                <HypothesisFrontierCard
+                  key={frontier.id}
+                  frontier={frontier}
+                  current={view.current === frontier.id}
+                />
+              ))}
+            </div>
+          ) : (
+            <Typography.Text type="secondary">{t('run.hypothesis.waitingForPlan')}</Typography.Text>
+          )}
+        </div>
         <div className="exploration-cycles">
           {view.attempts.slice(0, 20).map((attempt) => (
             <HypothesisAttemptCard key={attempt.itemId} attempt={attempt} />
@@ -89,6 +127,42 @@ function HypothesisTimeline({ view }: { view: HypothesisView }) {
         </div>
       </Card>
     </div>
+  )
+}
+
+function HypothesisFrontierCard({ frontier, current }: { frontier: HypothesisFrontier; current: boolean }) {
+  const { t } = useI18n()
+  const tone =
+    frontier.status === 'failed'
+      ? 'error'
+      : frontier.status === 'done'
+        ? 'success'
+        : frontier.status === 'assigned'
+          ? 'processing'
+          : 'default'
+  return (
+    <article className={`exploration-cycle${current ? ' exploration-cycle-latest' : ''}`}>
+      <div className="exploration-cycle-head">
+        <Space wrap size="small">
+          <Tag color={tone}>{frontier.status}</Tag>
+          {frontier.round ? <Tag>{t('run.hypothesis.round', { round: frontier.round })}</Tag> : null}
+          <Typography.Text code>{frontier.id}</Typography.Text>
+          {frontier.executorId ? <Typography.Text>{frontier.executorId}</Typography.Text> : null}
+          {current ? <Tag color="processing">{t('run.hypothesis.current')}</Tag> : null}
+        </Space>
+      </div>
+      <Typography.Paragraph strong>{frontier.question}</Typography.Paragraph>
+      <div className="exploration-cycle-grid">
+        <div>
+          <Typography.Text strong>{t('common.target')}</Typography.Text>
+          <Typography.Paragraph>{frontier.targetHint || '—'}</Typography.Paragraph>
+        </div>
+        <div>
+          <Typography.Text strong>{t('run.hypothesis.expectedEvidence')}</Typography.Text>
+          <Typography.Paragraph>{frontier.expectedEvidence || '—'}</Typography.Paragraph>
+        </div>
+      </div>
+    </article>
   )
 }
 

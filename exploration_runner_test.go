@@ -19,12 +19,15 @@ type frontierFactory struct {
 	roles          []string
 	sessions       []*frontierSession
 	blockExecutors bool
+	plannerStarted chan struct{}
+	plannerGate    <-chan struct{}
 }
 
 func (f *frontierFactory) NewSession(_ context.Context, req harness.SessionRequest) (harness.AgentSession, error) {
 	session := &frontierSession{
 		role: req.SessionID, workspace: req.WorkspaceDir,
 		events: make(chan harness.AgentEvent, 8), blockPrompt: f.blockExecutors && req.SessionID != "planner",
+		plannerStarted: f.plannerStarted, plannerGate: f.plannerGate,
 	}
 	f.mu.Lock()
 	f.roles = append(f.roles, req.SessionID)
@@ -34,15 +37,18 @@ func (f *frontierFactory) NewSession(_ context.Context, req harness.SessionReque
 }
 
 type frontierSession struct {
-	role        string
-	workspace   string
-	events      chan harness.AgentEvent
-	mu          sync.Mutex
-	resets      int
-	closed      bool
-	closeOnce   sync.Once
-	blockPrompt bool
-	prompts     []string
+	role             string
+	workspace        string
+	events           chan harness.AgentEvent
+	mu               sync.Mutex
+	resets           int
+	closed           bool
+	closeOnce        sync.Once
+	blockPrompt      bool
+	prompts          []string
+	plannerStarted   chan struct{}
+	plannerGate      <-chan struct{}
+	plannerStartOnce sync.Once
 }
 
 func (s *frontierSession) Prompt(ctx context.Context, message string) error {
@@ -54,6 +60,14 @@ func (s *frontierSession) Prompt(ctx context.Context, message string) error {
 		return ctx.Err()
 	}
 	if strings.HasPrefix(s.role, "planner") {
+		s.plannerStartOnce.Do(func() {
+			if s.plannerStarted != nil {
+				close(s.plannerStarted)
+			}
+		})
+		if s.plannerGate != nil {
+			<-s.plannerGate
+		}
 		payload := `{"next_items":[{"question":"Inspect the HTTP root","target":"web","expected_evidence":"HTTP status and headers"}]}`
 		data, _ := json.Marshal(map[string]any{
 			"type": "turn_end",
@@ -168,6 +182,65 @@ func TestRunnerDispatchesFreshFrontierSessions(t *testing.T) {
 	}
 	if !sawAssign || !sawFacts {
 		t.Fatalf("missing exploration events assign=%v facts=%v", sawAssign, sawFacts)
+	}
+}
+
+func TestRunnerStartsExecutorOnlyAfterPlannerProducesFrontier(t *testing.T) {
+	store := newMemoryStore()
+	gate := make(chan struct{})
+	factory := &frontierFactory{
+		plannerStarted: make(chan struct{}),
+		plannerGate:    gate,
+	}
+	runner, err := harness.NewRunner(harness.Config{
+		Store: store, DefaultFactory: factory, WorkspaceRoot: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	type outcome struct {
+		result harness.Result
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, runErr := runner.Run(context.Background(), harness.RunSpec{
+			Task:        harness.Task{ID: "lazy-executor", Objective: "find the flag"},
+			Target:      harness.Target{ID: "web", Addresses: []string{"10.0.0.5:80"}},
+			Agents:      []harness.AgentSpec{{ID: "base"}},
+			Exploration: &harness.ExplorationSpec{Rounds: 1},
+			Verifier:    fakeVerifier{verdict: harness.Verdict{Success: true}},
+		})
+		done <- outcome{result: result, err: runErr}
+	}()
+	select {
+	case <-factory.plannerStarted:
+	case <-time.After(time.Second):
+		t.Fatal("planner did not start")
+	}
+	factory.mu.Lock()
+	rolesBeforePlan := append([]string(nil), factory.roles...)
+	factory.mu.Unlock()
+	if len(rolesBeforePlan) != 1 || rolesBeforePlan[0] != "planner" {
+		t.Fatalf("executor started before frontiers were ready: %v", rolesBeforePlan)
+	}
+	close(gate)
+	select {
+	case result := <-done:
+		if result.err != nil {
+			t.Fatalf("Run: %v", result.err)
+		}
+		if result.result.Status != harness.StatusSucceeded {
+			t.Fatalf("status = %q", result.result.Status)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("run did not finish")
+	}
+	factory.mu.Lock()
+	rolesAfterPlan := append([]string(nil), factory.roles...)
+	factory.mu.Unlock()
+	if len(rolesAfterPlan) != 2 || rolesAfterPlan[1] != "executor-1" {
+		t.Fatalf("executor was not created after plan: %v", rolesAfterPlan)
 	}
 }
 

@@ -122,31 +122,42 @@ func (r *Runner) runExplorationSessions(
 
 	explorers := make([]Explorer, 0, len(executorSpecs))
 	failedResults := make([]SessionResult, 0)
-	for _, executorSpec := range executorSpecs {
-		handle, startErr := r.startExplorationSession(ctx, run, redactor, spec, executorSpec, target, runRoot, taskDir, skillsDir)
-		if startErr != nil {
-			failedResults = append(failedResults, SessionResult{
-				ID: executorSpec.ID, Status: StatusFailed, Error: redactor.Redact(startErr.Error()),
-			})
-			r.emitEvent(run, redactor, Event{
-				RunID: run.ID, SessionID: executorSpec.ID, Source: "harness", Type: "session.failed",
-				Time: time.Now().UTC(), Data: mustJSON(map[string]string{"error": redactor.Redact(startErr.Error())}),
-			})
-			continue
+	executorsAcquired := false
+	acquireExplorers := func(acquireCtx context.Context) ([]Explorer, error) {
+		if executorsAcquired {
+			return explorers, nil
 		}
-		handles = append(handles, handle)
-		explorers = append(explorers, &SessionExplorer{
-			Session: handle.session, IDValue: handle.id, WorkspaceDir: sessionWorkspace(runRoot, handle.id),
-			ToolLimit: 40, Sink: r.sessionEventSink(run, redactor, handle, spec.Budget),
-		})
+		executorsAcquired = true
+		for _, executorSpec := range executorSpecs {
+			handle, startErr := r.startExplorationSession(acquireCtx, run, redactor, spec, executorSpec, target, runRoot, taskDir, skillsDir)
+			if startErr != nil {
+				failedResults = append(failedResults, SessionResult{
+					ID: executorSpec.ID, Status: StatusFailed, Error: redactor.Redact(startErr.Error()),
+				})
+				r.emitEvent(run, redactor, Event{
+					RunID: run.ID, SessionID: executorSpec.ID, Source: "harness", Type: "session.failed",
+					Time: time.Now().UTC(), Data: mustJSON(map[string]string{"error": redactor.Redact(startErr.Error())}),
+				})
+				continue
+			}
+			handles = append(handles, handle)
+			explorers = append(explorers, &SessionExplorer{
+				Session: handle.session, IDValue: handle.id, WorkspaceDir: sessionWorkspace(runRoot, handle.id),
+				ToolLimit: 40, Sink: r.sessionEventSink(run, redactor, handle, spec.Budget),
+			})
+		}
+		if len(explorers) == 0 {
+			return nil, fmt.Errorf("no explorer sessions could be started")
+		}
+		return explorers, nil
 	}
 
 	controllerCfg := ControllerConfig{
 		Rounds: spec.Exploration.Rounds, Objective: spec.Task.Objective,
 		Targets: taskTargets(spec.Task, target), MaxWorkers: spec.Exploration.MaxWorkers,
-		Progress: progress.Snapshot,
+		Progress: progress.Snapshot, AcquireExplorers: acquireExplorers,
 	}
-	controller := NewController(controllerCfg, planner, explorers, func(event ControllerEvent) {
+	controller := NewController(controllerCfg, planner, nil, func(event ControllerEvent) {
 		r.emitEvent(run, redactor, Event{
 			RunID: run.ID, Source: "control", Type: "exploration." + event.Type,
 			Time: time.Now().UTC(), Data: mustJSON(event.Data),
@@ -164,6 +175,14 @@ func (r *Runner) runExplorationSessions(
 	}
 	for _, handle := range handles {
 		results = append(results, r.finishExplorationSession(ctx, run, redactor, handle, controllerErr))
+	}
+	if !executorsAcquired {
+		for _, executorSpec := range executorSpecs {
+			results = append(results, SessionResult{
+				ID: executorSpec.ID, Status: StatusCancelled,
+				Error: "executor not started: no ready frontier",
+			})
+		}
 	}
 	results = append(results, failedResults...)
 	return results

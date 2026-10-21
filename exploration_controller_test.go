@@ -247,6 +247,77 @@ func TestControllerFailsResetWithoutInvestigation(t *testing.T) {
 	}
 }
 
+func TestControllerPublishesInitializationBeforeDispatch(t *testing.T) {
+	target := Target{ID: "web", Addresses: []string{"10.0.0.5:80"}}
+	planner := &sequencePlanner{plans: []PlanOutput{{NextItems: []ExplorerProposal{{
+		Question: "Inspect the HTTP root", Target: "web", ExpectedEvidence: "status and headers",
+	}}}}}
+	explorer := &recordingExplorer{id: "executor", reportFn: func(item FrontierItem) (ExplorerReport, error) {
+		return ExplorerReport{ItemID: item.ID, Verdict: VerdictInconclusive}, nil
+	}}
+	recorder := &controllerEventRecorder{}
+	controller := NewController(ControllerConfig{
+		Rounds: 1, Objective: "find the flag", Targets: []Target{target},
+		Progress: func() Completion { return Completion{Progress: 0, Total: 1} },
+	}, planner, []Explorer{explorer}, recorder.emit)
+	if err := controller.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	events := recorder.snapshot()
+	initialized := eventIndex(events, "initialized")
+	created := eventIndex(events, "frontiers.created")
+	ready := eventIndex(events, "batch.ready")
+	assigned := eventIndex(events, "item.assigned")
+	started := eventIndex(events, "executor.started")
+	if initialized < 0 || created < initialized || ready < created || assigned < ready || started < assigned {
+		t.Fatalf("initialization order invalid: %+v", events)
+	}
+	initialData := events[initialized].Data
+	if initialData["phase"] != "initialized" || initialData["objective"] != "find the flag" {
+		t.Fatalf("initial data = %+v", initialData)
+	}
+	createdItems, ok := events[created].Data["items"].([]FrontierItem)
+	if !ok || len(createdItems) != 1 || createdItems[0].Question != "Inspect the HTTP root" {
+		t.Fatalf("created data = %+v", events[created].Data)
+	}
+	assignedItem, ok := events[assigned].Data["item"].(FrontierItem)
+	if !ok || assignedItem.Question != "Inspect the HTTP root" {
+		t.Fatalf("assigned data = %+v", events[assigned].Data)
+	}
+}
+
+func TestControllerAcquiresExecutorOnlyAfterFrontiersReady(t *testing.T) {
+	target := Target{ID: "web", Addresses: []string{"10.0.0.5:80"}}
+	planner := &sequencePlanner{plans: []PlanOutput{{NextItems: []ExplorerProposal{{
+		Question: "Inspect the HTTP root", Target: "web", ExpectedEvidence: "status and headers",
+	}}}}}
+	recorder := &controllerEventRecorder{}
+	acquired := 0
+	explorer := &recordingExplorer{id: "executor", reportFn: func(item FrontierItem) (ExplorerReport, error) {
+		return ExplorerReport{ItemID: item.ID, Verdict: VerdictInconclusive}, nil
+	}}
+	controller := NewController(ControllerConfig{
+		Rounds: 1, Objective: "find the flag", Targets: []Target{target},
+		AcquireExplorers: func(context.Context) ([]Explorer, error) {
+			acquired++
+			events := recorder.snapshot()
+			if eventIndex(events, "frontiers.created") < 0 {
+				t.Fatal("executor acquired before frontiers were published")
+			}
+			if eventIndex(events, "item.assigned") >= 0 {
+				t.Fatal("executor acquired after assignment")
+			}
+			return []Explorer{explorer}, nil
+		},
+	}, planner, nil, recorder.emit)
+	if err := controller.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if acquired != 1 || explorer.investigations != 1 {
+		t.Fatalf("acquired=%d investigations=%d", acquired, explorer.investigations)
+	}
+}
+
 type roundPlanner struct {
 	mu sync.Mutex
 }
@@ -268,4 +339,30 @@ func hasControllerEvent(events []ControllerEvent, want string) bool {
 		}
 	}
 	return false
+}
+
+type controllerEventRecorder struct {
+	mu     sync.Mutex
+	events []ControllerEvent
+}
+
+func (r *controllerEventRecorder) emit(event ControllerEvent) {
+	r.mu.Lock()
+	r.events = append(r.events, event)
+	r.mu.Unlock()
+}
+
+func (r *controllerEventRecorder) snapshot() []ControllerEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]ControllerEvent(nil), r.events...)
+}
+
+func eventIndex(events []ControllerEvent, eventType string) int {
+	for index, event := range events {
+		if event.Type == eventType {
+			return index
+		}
+	}
+	return -1
 }

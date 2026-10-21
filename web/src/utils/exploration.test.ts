@@ -109,4 +109,65 @@ describe('extractHypothesisView', () => {
     expect(view.attempts).toEqual([])
     expect(view.progress).toBeUndefined()
   })
+
+  it('restores initialized blackboard state before a report exists', () => {
+    const view = extractHypothesisView([
+      event(1, 'exploration.initialized', '', {
+        phase: 'initialized',
+        objective: 'find the flag',
+        targets: [{ id: 'web', addresses: ['10.0.0.5:80'] }],
+        progress: { progress: 0, total: 1 },
+        facts: [],
+        frontiers: [],
+        policy: { rounds: 6, max_workers: 1 },
+      }),
+      event(2, 'exploration.frontiers.created', '', {
+        round: 1,
+        items: [{
+          id: 'frontier-a',
+          question: 'Inspect the HTTP root',
+          target_hint: 'web',
+          expected_evidence: 'status and headers',
+          status: 'open',
+          round: 1,
+          fingerprint: 'abc',
+        }],
+      }),
+      event(3, 'exploration.item.assigned', '', {
+        round: 1,
+        item_id: 'frontier-a',
+        executor_id: 'executor-1',
+        item: {
+          id: 'frontier-a',
+          question: 'Inspect the HTTP root',
+          target_hint: 'web',
+          expected_evidence: 'status and headers',
+          status: 'assigned',
+          round: 1,
+          fingerprint: 'abc',
+        },
+      }),
+      event(4, 'exploration.executor.started', '', {
+        round: 1,
+        item_id: 'frontier-a',
+        executor_id: 'executor-1',
+        fresh_context: true,
+      }),
+    ])
+
+    expect(view.phase).toBe('executing')
+    expect(view.objective).toBe('find the flag')
+    expect(view.targets).toEqual([{ id: 'web', addresses: ['10.0.0.5:80'] }])
+    expect(view.progress).toEqual({ current: 0, total: 1 })
+    expect(view.frontiers).toHaveLength(1)
+    expect(view.frontiers[0]).toMatchObject({
+      id: 'frontier-a',
+      question: 'Inspect the HTTP root',
+      targetHint: 'web',
+      expectedEvidence: 'status and headers',
+      status: 'assigned',
+      executorId: 'executor-1',
+    })
+    expect(view.current).toBe('frontier-a')
+  })
 })

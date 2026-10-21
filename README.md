@@ -102,6 +102,8 @@ read-only Planner and a fresh-context Executor:
 
 - The Planner sees only objective, authoritative progress, bounded facts,
   recent frontier outcomes and authorized targets.
+- Goal, targets, progress and the complete validated frontier batch are
+  published before Executor sessions are created or assigned work.
 - The Controller validates and deduplicates frontiers, then assigns exactly one
   frontier per Executor turn.
 - The Executor writes `/workspace/report.json` as its structured output.

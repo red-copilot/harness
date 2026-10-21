@@ -17,19 +17,22 @@ The SDK is a Go modular monolith:
 2. When exploration is enabled, one ordinary `AgentSpec` expands into a
    read-only Planner and one fresh-context Executor. Custom multi-session runs
    without `Exploration` retain the direct session path.
-3. The backend is observed before planning starts. Its authoritative progress,
+3. Initialization publishes the Goal, authorized targets, backend progress,
+   policy and empty blackboard before any Executor process is created.
+4. The backend is observed before planning starts. Its authoritative progress,
    such as `2/6` flags, is injected into every Planner snapshot.
-4. The Planner proposes bounded frontiers from `Goal + Facts + Frontiers`; it
+5. The Planner proposes bounded frontiers from `Goal + Facts + Frontiers`; it
    never dispatches work or establishes success.
-5. The deterministic Controller validates authorization, deduplicates exact
-   frontier fingerprints, leases one frontier to each Executor, validates the
-   structured report, and merges facts through `FactLedger`.
-6. Each Executor resets Pi with `new_session`, receives one frontier and a
+6. Complete validated frontiers are published before dispatch. Only then are
+   Executor sessions created lazily and leased exactly one frontier each.
+7. The deterministic Controller deduplicates exact frontier fingerprints,
+   validates the structured report and merges facts through `FactLedger`.
+8. Each Executor resets Pi with `new_session`, receives one frontier and a
    bounded fact digest, then returns `report.json`. `agent_settled` ends a Pi
    turn; `agent_end` is only an intermediate observation.
-7. A backend completion or a caller-provided verifier produces the only
+9. A backend completion or a caller-provided verifier produces the only
    authoritative verdict.
-8. Target, session processes and labeled Docker resources are closed in all
+10. Target, session processes and labeled Docker resources are closed in all
    outcomes.
 
 ## Exploration control
@@ -51,6 +54,7 @@ The exploration state is a run-scoped blackboard:
   frontiers. A blocked or inconclusive result therefore cannot silently loop on
   the same action.
 - The Runner records `exploration.items.planned`, `item.assigned`,
+  `initialized`, `frontiers.created`, `batch.ready`, `executor.started`,
   `report.received`, `facts.merged`, `item.failed`, `round.started`,
   `round.completed` and `backend.progress` events as the audit trail.
 

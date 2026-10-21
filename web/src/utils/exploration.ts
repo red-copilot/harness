@@ -68,9 +68,30 @@ export interface HypothesisProgress {
   total: number
 }
 
+export interface HypothesisTarget {
+  id: string
+  addresses: string[]
+}
+
+export interface HypothesisFrontier {
+  id: string
+  question: string
+  targetHint: string
+  expectedEvidence: string
+  status: string
+  round?: number
+  fingerprint?: string
+  executorId?: string
+}
+
 export interface HypothesisView {
   attempts: HypothesisAttempt[]
   progress?: HypothesisProgress
+  phase?: string
+  objective?: string
+  targets?: HypothesisTarget[]
+  frontiers: HypothesisFrontier[]
+  current?: string
 }
 
 interface PendingCycle {
@@ -81,11 +102,40 @@ interface PendingCycle {
 
 export function extractHypothesisView(events: EventRecord[]): HypothesisView {
   const attempts = new Map<string, HypothesisAttempt>()
+  const frontiers = new Map<string, HypothesisFrontier>()
   let progress: HypothesisProgress | undefined
+  let phase: string | undefined
+  let objective: string | undefined
+  let targets: HypothesisTarget[] | undefined
+  let current: string | undefined
 
   for (const event of [...events].sort((a, b) => a.seq - b.seq)) {
     const record = asRecord(event.data)
     if (!record) continue
+    if (event.type === 'exploration.initialized') {
+      if (typeof record.phase === 'string') phase = record.phase
+      if (typeof record.objective === 'string') objective = record.objective
+      targets = asArray(record.targets).map(asHypothesisTarget).filter(isDefined)
+      const initialProgress = asRecord(record.progress)
+      if (initialProgress && typeof initialProgress.progress === 'number' && typeof initialProgress.total === 'number') {
+        progress = { current: initialProgress.progress, total: initialProgress.total }
+      }
+      for (const item of asArray(record.frontiers).map(asHypothesisFrontier).filter(isDefined)) {
+        frontiers.set(item.id, item)
+      }
+      continue
+    }
+    if (event.type === 'exploration.phase.changed') {
+      if (typeof record.phase === 'string') phase = record.phase
+      continue
+    }
+    if (event.type === 'exploration.frontiers.created') {
+      for (const item of asArray(record.items).map(asHypothesisFrontier).filter(isDefined)) {
+        const existing = frontiers.get(item.id)
+        frontiers.set(item.id, { ...existing, ...item })
+      }
+      continue
+    }
     if (event.type === 'backend.progress') {
       if (typeof record.progress === 'number' && typeof record.total === 'number') {
         progress = { current: record.progress, total: record.total }
@@ -94,17 +144,31 @@ export function extractHypothesisView(events: EventRecord[]): HypothesisView {
     }
     const itemId = typeof record.item_id === 'string' ? record.item_id : undefined
     if (!itemId) continue
+    const frontier = frontiers.get(itemId) ?? { id: itemId, question: '', targetHint: '', expectedEvidence: '', status: 'open' }
+    const fullItem = asHypothesisFrontier(record.item)
+    if (fullItem) Object.assign(frontier, fullItem)
     const attempt = attempts.get(itemId) ?? { seq: event.seq, itemId, status: 'assigned' }
     if (typeof record.round === 'number') attempt.round = record.round
     switch (event.type) {
       case 'exploration.item.assigned':
-        if (typeof record.executor_id === 'string') attempt.executorId = record.executor_id
+        if (typeof record.executor_id === 'string') {
+          attempt.executorId = record.executor_id
+          frontier.executorId = record.executor_id
+        }
+        frontier.status = 'assigned'
+        current = itemId
+        break
+      case 'exploration.executor.started':
+        phase = 'executing'
+        current = itemId
+        frontier.status = 'assigned'
         break
       case 'exploration.report.received':
         if (typeof record.verdict === 'string') attempt.verdict = record.verdict
         break
       case 'exploration.facts.merged':
         attempt.status = 'done'
+        frontier.status = 'done'
         attempt.facts = {
           added: stringArray(record.added),
           corroborated: stringArray(record.corroborated),
@@ -113,17 +177,24 @@ export function extractHypothesisView(events: EventRecord[]): HypothesisView {
         break
       case 'exploration.item.failed':
         attempt.status = 'failed'
+        frontier.status = 'failed'
         if (typeof record.error === 'string') attempt.error = record.error
         break
       default:
         continue
     }
     attempts.set(itemId, attempt)
+    frontiers.set(itemId, frontier)
   }
 
   return {
     attempts: [...attempts.values()].sort((a, b) => b.seq - a.seq),
     progress,
+    phase,
+    objective,
+    targets,
+    frontiers: [...frontiers.values()].sort((a, b) => (a.round ?? 0) - (b.round ?? 0) || a.id.localeCompare(b.id)),
+    current,
   }
 }
 
@@ -236,6 +307,27 @@ function pairArray(value: unknown): string[][] {
   return asArray(value)
     .map((item) => stringArray(item))
     .filter((item) => item.length === 2)
+}
+
+function asHypothesisTarget(value: unknown): HypothesisTarget | undefined {
+  const record = asRecord(value)
+  if (!record || typeof record.id !== 'string') return undefined
+  return { id: record.id, addresses: stringArray(record.addresses) }
+}
+
+function asHypothesisFrontier(value: unknown): HypothesisFrontier | undefined {
+  const record = asRecord(value)
+  if (!record || typeof record.id !== 'string' || typeof record.question !== 'string') return undefined
+  return {
+    id: record.id,
+    question: record.question,
+    targetHint: typeof record.target_hint === 'string' ? record.target_hint : '',
+    expectedEvidence: typeof record.expected_evidence === 'string' ? record.expected_evidence : '',
+    status: typeof record.status === 'string' ? record.status : 'open',
+    round: typeof record.round === 'number' ? record.round : undefined,
+    fingerprint: typeof record.fingerprint === 'string' ? record.fingerprint : undefined,
+    executorId: typeof record.executor_id === 'string' ? record.executor_id : undefined,
+  }
 }
 
 function isDefined<T>(value: T | undefined): value is T {
