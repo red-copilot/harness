@@ -165,7 +165,7 @@ func TestDeclaredStatesAreReachable(t *testing.T) {
 	store = newMemoryStore()
 	spec = integrationSpec(t, store)
 	spec.Verifier = nil
-	spec.Backend = &fakeBackend{}
+	attachBackend(&spec, &fakeBackend{})
 	spec.Policy.StagnationRounds = 1
 	spec.PlannerStrategy = staticPlannerStrategy{proposal: harness.PlanProposal{CreateBranches: []harness.BranchProposal{{ParentID: "root", Topic: "web", Goal: "web", Hypothesis: "web", Target: "target-1", SuccessCondition: "yes", FailureCondition: "no"}}}}
 	spec.Executors[0].Runtime = &fakeRuntime{new: func(harness.RuntimeRequest) harness.AgentSession {

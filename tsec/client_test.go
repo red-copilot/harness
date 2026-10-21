@@ -154,8 +154,8 @@ func TestBackendProvisionsAndObservesCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
-	if target.Metadata["network"] != "host" || target.Metadata["challenge_code"] != "web_1" {
-		t.Fatalf("target metadata = %#v", target.Metadata)
+	if target.Runtime == nil || target.Runtime.Network != "host" || target.Runtime.ChallengeCode != "web_1" {
+		t.Fatalf("target runtime = %#v", target.Runtime)
 	}
 	completion, err := backend.Observe(context.Background(), target)
 	if err != nil {

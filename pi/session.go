@@ -87,8 +87,10 @@ func (f *Factory) NewSession(ctx context.Context, req harness.RuntimeRequest) (h
 	if network == "" {
 		network = "bridge"
 	}
-	if value := req.Target.Metadata["network"]; value != "" {
-		network = value
+	if req.Target.Runtime != nil {
+		if value := req.Target.Runtime.Network; value != "" {
+			network = value
+		}
 	}
 	caps := append([]string(nil), req.Agent.CapAdd...)
 	if len(caps) == 0 && req.Role == harness.AgentRoleExecutor {

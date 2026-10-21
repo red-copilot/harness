@@ -19,9 +19,15 @@ import (
 // swap the implementation without changing Pi or the runner.
 type Runner struct {
 	Docker string
+	// Owner scopes orphan cleanup to this harness deployment. Two processes
+	// sharing one Docker daemon must not reclaim each other's live Targets.
+	// Empty means every labeled resource, which is only safe in tests.
+	Owner string
 }
 
-func New() *Runner { return &Runner{Docker: "docker"} }
+// New returns the production starter and cleaner. The owner defaults to the
+// host name so backends constructed elsewhere agree on the same label.
+func New() *Runner { return &Runner{Docker: "docker", Owner: defaultOwner()} }
 
 func (r *Runner) docker() string {
 	if r != nil && r.Docker != "" {
@@ -206,11 +212,17 @@ func (p *process) Kill(ctx context.Context) error {
 	return err
 }
 
-// CleanupOrphans removes labeled containers and networks from interrupted runs.
+// CleanupOrphans removes labeled containers and networks from interrupted runs
+// of this deployment. Resources owned by another harness process are left
+// alone even when it is still running.
 func (r *Runner) CleanupOrphans(ctx context.Context) error {
+	filters := []string{"--filter", "label=harness.managed=true"}
+	if r != nil && r.Owner != "" {
+		filters = append(filters, "--filter", "label=harness.owner="+safeName(r.Owner))
+	}
 	commands := [][]string{
-		{"ps", "-aq", "--filter", "label=harness.managed=true"},
-		{"network", "ls", "-q", "--filter", "label=harness.managed=true"},
+		append([]string{"ps", "-aq"}, filters...),
+		append([]string{"network", "ls", "-q"}, filters...),
 	}
 	var ids []string
 	for _, args := range commands[:1] {

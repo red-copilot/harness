@@ -38,11 +38,37 @@ func TestDockerCloseIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	backend := ImageBackend{Docker: script}
-	target := harness.Target{Metadata: map[string]string{"container_name": "c", "network": "n"}}
+	target := harness.Target{Runtime: &harness.TargetRuntime{ContainerName: "c", Network: "n"}}
 	if err := backend.Close(context.Background(), target); err != nil {
 		t.Fatal(err)
 	}
 	if err := backend.Close(context.Background(), target); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestCleanupOrphansIsOwnerScoped: a second harness process sharing the Docker
+// daemon must not reclaim resources that belong to a live deployment.
+func TestCleanupOrphansIsOwnerScoped(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "docker.log")
+	t.Setenv("FAKE_DOCKER_LOG", logPath)
+	script := filepath.Join(dir, "docker")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$FAKE_DOCKER_LOG\"\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runner := &Runner{Docker: script, Owner: "node-a"}
+	if err := runner.CleanupOrphans(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "label=harness.managed=true") {
+		t.Fatalf("cleanup no longer selects managed resources:\n%s", data)
+	}
+	if !strings.Contains(string(data), "label=harness.owner=node-a") {
+		t.Fatalf("cleanup is not owner-scoped:\n%s", data)
 	}
 }

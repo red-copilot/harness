@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,9 +23,6 @@ type ExternalBackend struct {
 func (b ExternalBackend) Provision(context.Context, harness.ProvisionRequest) (harness.Target, error) {
 	return b.Target, nil
 }
-func (b ExternalBackend) Observe(context.Context, harness.Target) (harness.Completion, error) {
-	return harness.Completion{}, nil
-}
 func (b ExternalBackend) Close(context.Context, harness.Target) error { return nil }
 
 // ImageBackend provisions a one-shot Docker target for local offensive work.
@@ -37,6 +35,9 @@ type ImageBackend struct {
 	Network   string
 	Addresses []string
 	Name      string
+	// Owner scopes orphan cleanup to this deployment. Empty means the host
+	// name, matching docker.New.
+	Owner string
 }
 
 func (b ImageBackend) Provision(ctx context.Context, req harness.ProvisionRequest) (harness.Target, error) {
@@ -55,14 +56,14 @@ func (b ImageBackend) Provision(ctx context.Context, req harness.ProvisionReques
 	createdNetwork := false
 	if network == "" {
 		network = "harness_net_" + safeName(req.RunID)
-		if err := run(ctx, docker, "network", "create",
-			"--label", "harness.managed=true", "--label", "harness.run_id="+req.RunID, network); err != nil {
+		if err := run(ctx, docker, "network", "create", "--label", "harness.managed=true", "--label", "harness.run_id="+req.RunID, "--label", "harness.owner="+ownerLabel(b.Owner), network); err != nil {
 			return harness.Target{}, fmt.Errorf("create target network: %w", err)
 		}
 		createdNetwork = true
 	}
 	args := []string{"run", "-d", "--name", name, "--network", network,
-		"--label", "harness.managed=true", "--label", "harness.run_id=" + req.RunID}
+		"--label", "harness.managed=true", "--label", "harness.run_id=" + req.RunID,
+		"--label", "harness.owner=" + ownerLabel(b.Owner)}
 	for _, port := range b.Ports {
 		args = append(args, "-p", port)
 	}
@@ -104,15 +105,8 @@ func (b ImageBackend) Provision(ctx context.Context, req harness.ProvisionReques
 	}
 	return harness.Target{
 		ID: name, Addresses: addresses, Isolation: harness.IsolationCallerManaged,
-		Metadata: map[string]string{
-			"container_name": name, "network": network,
-			"target_addresses": strings.Join(addresses, ","),
-		},
+		Runtime: &harness.TargetRuntime{ContainerName: name, Network: network},
 	}, nil
-}
-
-func (b ImageBackend) Observe(context.Context, harness.Target) (harness.Completion, error) {
-	return harness.Completion{}, nil
 }
 
 func (b ImageBackend) Close(ctx context.Context, target harness.Target) error {
@@ -120,10 +114,13 @@ func (b ImageBackend) Close(ctx context.Context, target harness.Target) error {
 	if docker == "" {
 		docker = "docker"
 	}
-	if name := target.Metadata["container_name"]; name != "" {
+	if target.Runtime == nil {
+		return nil
+	}
+	if name := target.Runtime.ContainerName; name != "" {
 		_ = exec.CommandContext(ctx, docker, "rm", "-f", name).Run()
 	}
-	if network := target.Metadata["network"]; network != "" && b.Network == "" {
+	if network := target.Runtime.Network; network != "" && b.Network == "" {
 		_ = exec.CommandContext(ctx, docker, "network", "rm", network).Run()
 	}
 	return nil
@@ -138,6 +135,9 @@ type ComposeBackend struct {
 	Service     string
 	Port        string
 	Addresses   []string
+	// Owner scopes orphan cleanup to this deployment. Empty means the host
+	// name, matching docker.New.
+	Owner string
 }
 
 func (b ComposeBackend) Provision(ctx context.Context, req harness.ProvisionRequest) (harness.Target, error) {
@@ -149,9 +149,28 @@ func (b ComposeBackend) Provision(ctx context.Context, req harness.ProvisionRequ
 	if project == "" {
 		project = "harness_" + safeName(req.RunID)
 	}
-	args := []string{"compose", "-p", project, "-f", filepath.Clean(b.File), "up", "-d"}
+	composeFile := filepath.Clean(b.File)
+	// Compose has no per-invocation label flag, so a generated override adds
+	// the harness labels to every service. Without them a crashed project is
+	// invisible to orphan cleanup.
+	services, err := composeServices(ctx, docker, composeFile)
+	if err != nil {
+		return harness.Target{}, err
+	}
+	files := []string{"-f", composeFile}
+	override, err := writeComposeOverride(services, map[string]string{
+		"harness.managed": "true",
+		"harness.run_id":  req.RunID,
+		"harness.owner":   ownerLabel(b.Owner),
+	})
+	if err != nil {
+		return harness.Target{}, err
+	}
+	files = append(files, "-f", override)
+	args := append([]string{"compose", "-p", project}, append(files, "up", "-d")...)
 	if err := run(ctx, docker, args...); err != nil {
-		_ = run(ctx, docker, "compose", "-p", project, "-f", filepath.Clean(b.File), "down", "-v", "--remove-orphans")
+		_ = run(ctx, docker, append([]string{"compose", "-p", project}, append(files, "down", "-v", "--remove-orphans")...)...)
+		_ = os.Remove(override)
 		return harness.Target{}, fmt.Errorf("compose up: %w", err)
 	}
 	addresses := append([]string(nil), b.Addresses...)
@@ -169,15 +188,8 @@ func (b ComposeBackend) Provision(ctx context.Context, req harness.ProvisionRequ
 	}
 	return harness.Target{
 		ID: project, Addresses: addresses, Isolation: harness.IsolationCallerManaged,
-		Metadata: map[string]string{
-			"compose_project": project, "compose_file": b.File,
-			"network": project + "_default",
-		},
+		Runtime: &harness.TargetRuntime{ComposeProject: project, ComposeFile: composeFile, ComposeOverride: override, Network: project + "_default"},
 	}, nil
-}
-
-func (b ComposeBackend) Observe(context.Context, harness.Target) (harness.Completion, error) {
-	return harness.Completion{}, nil
 }
 
 func (b ComposeBackend) Close(ctx context.Context, target harness.Target) error {
@@ -185,12 +197,21 @@ func (b ComposeBackend) Close(ctx context.Context, target harness.Target) error 
 	if docker == "" {
 		docker = "docker"
 	}
-	project := target.Metadata["compose_project"]
-	if project == "" {
+	if target.Runtime == nil || target.Runtime.ComposeProject == "" {
 		return nil
 	}
-	return run(ctx, docker, "compose", "-p", project, "-f", filepath.Clean(b.File),
-		"down", "-v", "--remove-orphans")
+	project := target.Runtime.ComposeProject
+	file := target.Runtime.ComposeFile
+	if file == "" {
+		file = filepath.Clean(b.File)
+	}
+	files := []string{"-f", file}
+	if target.Runtime.ComposeOverride != "" {
+		files = append(files, "-f", target.Runtime.ComposeOverride)
+		defer os.Remove(target.Runtime.ComposeOverride)
+	}
+	args := append([]string{"compose", "-p", project}, append(files, "down", "-v", "--remove-orphans")...)
+	return run(ctx, docker, args...)
 }
 
 func run(ctx context.Context, docker string, args ...string) error {
@@ -228,6 +249,71 @@ func runWithEnv(ctx context.Context, docker string, extraEnv []string, args ...s
 	return nil
 }
 
+// composeServices lists the services a compose file declares, so the label
+// override covers every one of them.
+func composeServices(ctx context.Context, docker, file string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, docker, "compose", "-f", file, "config", "--services").Output()
+	if err != nil {
+		return nil, fmt.Errorf("list compose services: %w", err)
+	}
+	return strings.Fields(string(out)), nil
+}
+
+// writeComposeOverride writes a temporary compose file that adds labels to
+// each service. The caller removes it after the project is torn down.
+func writeComposeOverride(services []string, labels map[string]string) (string, error) {
+	if len(services) == 0 {
+		return "", nil
+	}
+	keys := make([]string, 0, len(labels))
+	for key := range labels {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var body strings.Builder
+	body.WriteString("services:\n")
+	for _, service := range services {
+		fmt.Fprintf(&body, "  %s:\n    labels:\n", strconv.Quote(service))
+		for _, key := range keys {
+			fmt.Fprintf(&body, "      %s: %s\n", strconv.Quote(key), strconv.Quote(labels[key]))
+		}
+	}
+	file, err := os.CreateTemp("", "harness-compose-*.yaml")
+	if err != nil {
+		return "", fmt.Errorf("write compose override: %w", err)
+	}
+	if _, err := file.WriteString(body.String()); err != nil {
+		_ = file.Close()
+		_ = os.Remove(file.Name())
+		return "", fmt.Errorf("write compose override: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(file.Name())
+		return "", fmt.Errorf("write compose override: %w", err)
+	}
+	return file.Name(), nil
+}
+
+// ownerLabel identifies the harness deployment that owns a Docker resource.
+// A cleaner and a backend constructed separately must agree on it, so both
+// default to the host name.
+func ownerLabel(owner string) string {
+	if owner == "" {
+		return defaultOwner()
+	}
+	return safeName(owner)
+}
+
+func defaultOwner() string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		return "harness"
+	}
+	return safeName(host)
+}
+
 func safeName(value string) string {
 	var b strings.Builder
 	for _, r := range value {
@@ -243,6 +329,8 @@ func safeName(value string) string {
 	return b.String()
 }
 
-var _ harness.Backend = ExternalBackend{}
-var _ harness.Backend = ImageBackend{}
-var _ harness.Backend = ComposeBackend{}
+// These adapters own a Target's lifecycle only. Only TSec or an external
+// CompletionSource is an authority for the security outcome.
+var _ harness.TargetProvisioner = ExternalBackend{}
+var _ harness.TargetProvisioner = ImageBackend{}
+var _ harness.TargetProvisioner = ComposeBackend{}

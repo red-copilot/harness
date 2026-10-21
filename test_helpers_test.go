@@ -37,6 +37,13 @@ type memoryStore struct {
 	statusLog            []harness.Status
 }
 
+// attachBackend binds one adapter as both the Target provisioner and the
+// authoritative completion source, matching what the composition root does.
+func attachBackend(spec *harness.RunSpec, backend harness.Backend) {
+	spec.Provisioner = backend
+	spec.Backend = backend
+}
+
 func newMemoryStore() *memoryStore {
 	return &memoryStore{runs: map[string]harness.RunRecord{}, verdicts: map[string]harness.VerdictRecord{}}
 }

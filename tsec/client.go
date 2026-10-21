@@ -422,19 +422,19 @@ func (b *Backend) Provision(ctx context.Context, req harness.ProvisionRequest) (
 	if err != nil {
 		return harness.Target{}, err
 	}
-	metadata := map[string]string{
-		"challenge_code":     b.Code,
-		"benchmark_base_url": b.Client.BaseURL(),
-		"network":            b.Network,
+	runtime := &harness.TargetRuntime{
+		ChallengeCode: b.Code,
+		BenchmarkURL:  b.Client.BaseURL(),
+		Network:       b.Network,
 	}
 	if b.UseHint {
 		hint, err := b.Client.GetHint(ctx, b.Code)
 		if err == nil && hint.Hint != "" {
-			metadata["hint"] = hint.Hint
-			metadata["hint_used"] = "true"
+			runtime.Hint = hint.Hint
+			runtime.HintUsed = true
 		}
 	}
-	return harness.Target{ID: b.Code, Addresses: started.ContainerAddr, Metadata: metadata}, nil
+	return harness.Target{ID: b.Code, Addresses: started.ContainerAddr, Runtime: runtime}, nil
 }
 
 func (b *Backend) Observe(ctx context.Context, target harness.Target) (harness.Completion, error) {

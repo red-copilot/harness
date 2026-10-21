@@ -171,8 +171,8 @@ func (r *Runner) execute(run *Run, spec RunSpec, redactor *Redactor) {
 		return
 	}
 	target := spec.Target
-	if spec.Backend != nil {
-		provisioned, err := spec.Backend.Provision(run.ctx, ProvisionRequest{RunID: run.ID, Task: spec.Task, Target: spec.Target})
+	if spec.Provisioner != nil {
+		provisioned, err := spec.Provisioner.Provision(run.ctx, ProvisionRequest{RunID: run.ID, Task: spec.Task, Target: spec.Target})
 		if err != nil {
 			finalErr = err
 			run.finishExecution(terminalStatus, finalErr, verdict, state)
@@ -260,9 +260,9 @@ func (r *Runner) execute(run *Run, spec RunSpec, redactor *Redactor) {
 	} else {
 		finalErr = errors.New("run has no authoritative verdict")
 	}
-	if spec.Backend != nil {
+	if spec.Provisioner != nil {
 		closeCtx, cancel := context.WithTimeout(context.Background(), r.closeTimeout)
-		if closeErr := spec.Backend.Close(closeCtx, target); closeErr != nil && terminalStatus == StatusSucceeded {
+		if closeErr := spec.Provisioner.Close(closeCtx, target); closeErr != nil && terminalStatus == StatusSucceeded {
 			terminalStatus = StatusFailed
 			finalErr = fmt.Errorf("close backend: %w", closeErr)
 		}
@@ -274,7 +274,7 @@ func (r *Runner) execute(run *Run, spec RunSpec, redactor *Redactor) {
 	r.mu.Unlock()
 }
 
-func (r *Runner) watchBackend(run *Run, backend Backend, target Target, redactor *Redactor) {
+func (r *Runner) watchBackend(run *Run, backend CompletionSource, target Target, redactor *Redactor) {
 	ticker := time.NewTicker(r.pollInterval)
 	defer ticker.Stop()
 	for {

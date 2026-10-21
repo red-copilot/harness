@@ -41,10 +41,23 @@ type ResourceCleaner interface {
 	CleanupOrphans(context.Context) error
 }
 
-type Backend interface {
+// TargetProvisioner creates and tears down the per-Run Target. Provisioning is
+// not an authority: a started target says nothing about the security outcome.
+type TargetProvisioner interface {
 	Provision(context.Context, ProvisionRequest) (Target, error)
-	Observe(context.Context, Target) (Completion, error)
 	Close(context.Context, Target) error
+}
+
+// CompletionSource is an authoritative external completion. Only a source that
+// reports Done && Success can establish a successful Run.
+type CompletionSource interface {
+	Observe(context.Context, Target) (Completion, error)
+}
+
+// Backend is a provisioner that is also the authority for its Target.
+type Backend interface {
+	TargetProvisioner
+	CompletionSource
 }
 
 type Verifier interface {

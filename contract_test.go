@@ -92,6 +92,7 @@ func TestValidateRunSpecRequiresAuthority(t *testing.T) {
 	spec := validRunSpec()
 	spec.Verifier = nil
 	spec.Backend = nil
+	spec.Provisioner = nil
 	err := harness.ValidateRunSpec(spec)
 	if err == nil || !strings.Contains(err.Error(), "authority") {
 		t.Fatalf("err = %v, want authority", err)
@@ -253,5 +254,16 @@ func TestStorePortHasNoCampaignSurface(t *testing.T) {
 	}
 	if _, ok := reflect.TypeOf(harness.RunRecord{}).FieldByName("SweepID"); ok {
 		t.Fatal("RunRecord carries a campaign identifier")
+	}
+}
+
+// TestTargetRuntimeIsNotIdentity: two Runs that realize the same logical Target
+// with different containers still share one identity, so per-Run execution
+// detail must never enter the fingerprint.
+func TestTargetRuntimeIsNotIdentity(t *testing.T) {
+	first := harness.Target{ID: "target-1", Runtime: &harness.TargetRuntime{ContainerName: "run-a-container"}}
+	second := harness.Target{ID: "target-1", Runtime: &harness.TargetRuntime{ComposeProject: "run-b-project"}}
+	if harness.TargetFingerprint(first) != harness.TargetFingerprint(second) {
+		t.Fatalf("runtime detail changed target identity: %q vs %q", harness.TargetFingerprint(first), harness.TargetFingerprint(second))
 	}
 }

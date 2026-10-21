@@ -148,9 +148,9 @@ func (c *FileConfig) ToRunSpec(artifacts harness.ArtifactStore) (harness.RunSpec
 	switch c.Target.Kind {
 	case "", "external":
 	case "image":
-		spec.Backend = docker.ImageBackend{Image: c.Target.Image, Command: c.Target.Command, Ports: c.Target.Ports, Network: c.Target.Network, Addresses: c.Target.Addresses}
+		spec.Provisioner = docker.ImageBackend{Image: c.Target.Image, Command: c.Target.Command, Ports: c.Target.Ports, Network: c.Target.Network, Addresses: c.Target.Addresses}
 	case "compose":
-		spec.Backend = docker.ComposeBackend{File: c.Target.ComposeFile, ProjectName: c.Target.ProjectName, Service: c.Target.Service, Port: c.Target.Port, Addresses: c.Target.Addresses}
+		spec.Provisioner = docker.ComposeBackend{File: c.Target.ComposeFile, ProjectName: c.Target.ProjectName, Service: c.Target.Service, Port: c.Target.Port, Addresses: c.Target.Addresses}
 	case "tsec":
 		if c.TSec == nil {
 			return harness.RunSpec{}, errors.New("tsec configuration is required for target.kind tsec")
@@ -170,6 +170,8 @@ func (c *FileConfig) ToRunSpec(artifacts harness.ArtifactStore) (harness.RunSpec
 		backend := tsec.NewBackend(client, c.Target.ID)
 		backend.CheckVPN = c.TSec.CheckVPN
 		backend.UseHint = c.TSec.UseHint
+		// TSec both provisions the challenge instance and is its authority.
+		spec.Provisioner = backend
 		spec.Backend = backend
 		spec.SecretEnv = appendUniqueString(spec.SecretEnv, c.TSec.TokenEnv)
 		for i := range spec.Executors {

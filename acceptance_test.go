@@ -89,7 +89,7 @@ func TestBackendSuccessRacesInflightAttempt(t *testing.T) {
 	}
 	spec := acceptanceSpec(store)
 	spec.Verifier = nil
-	spec.Backend = &fakeBackend{completion: harness.Completion{Done: true, Success: true, Score: 11}}
+	attachBackend(&spec, &fakeBackend{completion: harness.Completion{Done: true, Success: true, Score: 11}})
 	spec.Planner.Runtime = &fakeRuntime{new: func(harness.RuntimeRequest) harness.AgentSession {
 		return &fakeSession{events: make(chan harness.AgentEvent), prompt: func(ctx context.Context, _ string) error { <-ctx.Done(); return ctx.Err() }}
 	}}
@@ -178,7 +178,7 @@ func TestTSecTokenNeverPersisted(t *testing.T) {
 	}
 	spec := acceptanceSpec(store)
 	spec.Verifier = nil
-	spec.Backend = backend
+	attachBackend(&spec, backend)
 	spec.Target = harness.Target{ID: "web-1", Isolation: harness.IsolationCallerManaged}
 	spec.SecretEnv = []string{"BENCHMARK_TOKEN"}
 	spec.Executors[0].EnvFrom = []string{"BENCHMARK_TOKEN", "BENCHMARK_BASE_URL"}

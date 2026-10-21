@@ -40,7 +40,7 @@ func TestBackendCompletionWinsAndCancelsWork(t *testing.T) {
 	store := newMemoryStore()
 	spec := integrationSpec(t, store)
 	spec.Verifier = nil
-	spec.Backend = &fakeBackend{completion: harness.Completion{Done: true, Success: true, Score: 9}}
+	attachBackend(&spec, &fakeBackend{completion: harness.Completion{Done: true, Success: true, Score: 9}})
 	spec.Planner.Runtime = &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
 		return &fakeSession{events: make(chan harness.AgentEvent), usage: harness.Usage{}}
 	}}
@@ -73,7 +73,7 @@ func TestRunnerCancelClosesSessionsAndTarget(t *testing.T) {
 	store := newMemoryStore()
 	spec := integrationSpec(t, store)
 	backend := &fakeBackend{completion: harness.Completion{}}
-	spec.Backend = backend
+	attachBackend(&spec, backend)
 	closed := make(chan struct{}, 1)
 	spec.ExecutorStrategy = blockingExecutorStrategy{onPrompt: func(harness.AttemptRequest) {
 		select {
@@ -112,6 +112,7 @@ func TestRunnerMarksNoAuthoritativeVerdictAsFailed(t *testing.T) {
 	spec := validRunSpec()
 	spec.Verifier = nil
 	spec.Backend = nil
+	spec.Provisioner = nil
 	if err := harness.ValidateRunSpec(spec); err == nil || !strings.Contains(err.Error(), "authority") {
 		t.Fatalf("err = %v, want authority validation", err)
 	}
@@ -132,7 +133,7 @@ func TestBackendCompletionConsultedAfterExplorationEnds(t *testing.T) {
 	store := newMemoryStore()
 	spec := integrationSpec(t, store)
 	spec.Verifier = nil
-	spec.Backend = &fakeBackend{completion: harness.Completion{Done: true, Success: true, Score: 7}}
+	attachBackend(&spec, &fakeBackend{completion: harness.Completion{Done: true, Success: true, Score: 7}})
 	spec.PlannerStrategy = staticPlannerStrategy{proposal: harness.PlanProposal{CreateBranches: []harness.BranchProposal{{ParentID: "root", Topic: "web", Goal: "web", Hypothesis: "web", Target: "target-1", SuccessCondition: "yes", FailureCondition: "no"}}}}
 	runner, err := harness.NewRunner(harness.Config{Store: store, Starter: noopStarter{}, WorkspaceRoot: t.TempDir(), PollInterval: time.Hour, SkipRecovery: true})
 	if err != nil {
@@ -339,5 +340,48 @@ func TestCloseWaitsForLiveRuns(t *testing.T) {
 	defer cancel()
 	if err := runner.Close(closeCtx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Close err = %v, want deadline exceeded", err)
+	}
+}
+
+type provisionOnlyBackend struct {
+	provisioned int
+	closed      int
+}
+
+func (b *provisionOnlyBackend) Provision(context.Context, harness.ProvisionRequest) (harness.Target, error) {
+	b.provisioned++
+	return harness.Target{ID: "target-1", Isolation: harness.IsolationCallerManaged}, nil
+}
+func (b *provisionOnlyBackend) Close(context.Context, harness.Target) error {
+	b.closed++
+	return nil
+}
+
+// TestProvisionerIsNotAnAuthority: owning a Target lifecycle must never be
+// mistaken for proving the outcome, and a Run with only a provisioner is
+// rejected without a verifier.
+func TestProvisionerIsNotAnAuthority(t *testing.T) {
+	store := newMemoryStore()
+	spec := integrationSpec(t, store)
+	spec.Verifier = nil
+	spec.Provisioner = &provisionOnlyBackend{}
+	if err := harness.ValidateRunSpec(spec); err == nil || !strings.Contains(err.Error(), "authority") {
+		t.Fatalf("ValidateRunSpec err = %v, want authority requirement", err)
+	}
+
+	store = newMemoryStore()
+	spec = integrationSpec(t, store)
+	backend := &provisionOnlyBackend{}
+	spec.Provisioner = backend
+	spec.Verifier = fakeVerifier{verdict: harness.Verdict{Success: true, Message: "verified"}}
+	result, err := newTestRunner(t, store).Run(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != harness.StatusSucceeded {
+		t.Fatalf("status = %q, want succeeded", result.Status)
+	}
+	if backend.provisioned != 1 || backend.closed != 1 {
+		t.Fatalf("provisioned=%d closed=%d, want 1/1", backend.provisioned, backend.closed)
 	}
 }
