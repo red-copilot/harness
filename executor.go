@@ -116,7 +116,8 @@ func ParseAttemptReport(data []byte, branchID string) (AttemptReport, error) {
 	return report, nil
 }
 
-// RunAgentTurn sends one prompt and consumes events until agent_settled.
+// RunAgentTurn sends one prompt and consumes normalized events until the
+// adapter reports settlement.
 func RunAgentTurn(ctx context.Context, session AgentSession, prompt string, limits TurnLimits, sink EventSink) (TurnResult, error) {
 	if session == nil {
 		return TurnResult{}, errors.New("agent session is required")
@@ -151,7 +152,7 @@ func RunAgentTurn(ctx context.Context, session AgentSession, prompt string, limi
 			return TurnResult{}, fmt.Errorf("tool timeout after %s", limits.ToolTimeout)
 		case event, ok := <-session.Events():
 			if !ok {
-				return TurnResult{}, errors.New("agent event stream closed before agent_settled")
+				return TurnResult{}, errors.New("agent event stream closed before settlement")
 			}
 			if sink != nil {
 				if err := sink(Event{SchemaVersion: 1, Source: "agent", Type: event.Type, Data: event.Data, Raw: event.Data, Time: time.Now().UTC()}); err != nil {
@@ -159,9 +160,9 @@ func RunAgentTurn(ctx context.Context, session AgentSession, prompt string, limi
 					return TurnResult{}, err
 				}
 			}
-			switch event.Type {
-			case "tool_execution_start":
-				if !isReportWrite(event.Data) {
+			switch event.Kind {
+			case AgentEventToolStart:
+				if !event.WritesFile || !isReportPath(event.ToolPath) {
 					liveTools++
 					if limits.MaxToolCalls > 0 && liveTools > limits.MaxToolCalls {
 						_ = abortSession(session)
@@ -173,15 +174,14 @@ func RunAgentTurn(ctx context.Context, session AgentSession, prompt string, limi
 					timer = time.NewTimer(limits.ToolTimeout)
 					deadline = timer.C
 				}
-			case "tool_execution_end":
+			case AgentEventToolEnd:
 				stopTimer()
-			case "turn_end", "message_end":
-				text, tools := parseAgentTurnEvent(event.Data)
-				if text != "" {
-					result.AssistantText = text
+			case AgentEventMessage:
+				if event.Text != "" {
+					result.AssistantText = event.Text
 				}
-				result.ToolCalls = append(result.ToolCalls, tools...)
-			case "agent_settled":
+				result.ToolCalls = append(result.ToolCalls, event.Tools...)
+			case AgentEventSettled:
 				result.Usage = session.Usage()
 				return result, nil
 			}
@@ -195,52 +195,10 @@ func abortSession(session AgentSession) error {
 	return session.Abort(ctx)
 }
 
-func isReportWrite(data json.RawMessage) bool {
-	var payload struct {
-		ToolName string `json:"toolName"`
-		Args     struct {
-			Path string `json:"path"`
-		} `json:"args"`
-	}
-	if json.Unmarshal(data, &payload) != nil || payload.ToolName != "write" {
-		return false
-	}
-	path := filepath.Clean(payload.Args.Path)
-	return path == ReportFileName || path == filepath.Join(string(filepath.Separator), "workspace", ReportFileName)
-}
-
-func parseAgentTurnEvent(data json.RawMessage) (string, []string) {
-	var payload struct {
-		Message struct {
-			Content []struct{ Type, Text, Name string } `json:"content"`
-		} `json:"message"`
-		ToolResults []struct {
-			ToolName string `json:"toolName"`
-		} `json:"toolResults"`
-	}
-	if json.Unmarshal(data, &payload) != nil {
-		return "", nil
-	}
-	var text []string
-	var tools []string
-	for _, part := range payload.Message.Content {
-		switch part.Type {
-		case "text":
-			if strings.TrimSpace(part.Text) != "" {
-				text = append(text, part.Text)
-			}
-		case "toolCall":
-			if part.Name != "" {
-				tools = append(tools, part.Name)
-			}
-		}
-	}
-	if len(tools) == 0 {
-		for _, tool := range payload.ToolResults {
-			if tool.ToolName != "" {
-				tools = append(tools, tool.ToolName)
-			}
-		}
-	}
-	return strings.Join(text, "\n"), tools
+// isReportPath reports whether a write targets the one file the executor
+// protocol requires. Writing the report is part of the contract, not a
+// discretionary tool call, so it does not consume the tool budget.
+func isReportPath(path string) bool {
+	cleaned := filepath.Clean(path)
+	return cleaned == ReportFileName || cleaned == filepath.Join(string(filepath.Separator), "workspace", ReportFileName)
 }

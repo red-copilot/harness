@@ -664,10 +664,33 @@ type VerdictRecord struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 
-// AgentEvent is the normalized runtime event consumed by the turn protocol.
+// AgentEventKind is the runtime-neutral signal the turn protocol consumes.
+// Adapters translate their own wire records into these signals; the control
+// plane never inspects Type or Data, which exist for the audit trail only.
+type AgentEventKind string
+
+const (
+	AgentEventMessage   AgentEventKind = "message"
+	AgentEventToolStart AgentEventKind = "tool_start"
+	AgentEventToolEnd   AgentEventKind = "tool_end"
+	AgentEventSettled   AgentEventKind = "settled"
+	AgentEventEnd       AgentEventKind = "end"
+)
+
+// AgentEvent is one runtime event: the adapter's native record for audit
+// (`Type`, `Data`) plus the normalized signal the core acts on (`Kind` and its
+// detail fields). An empty Kind is audit-only.
 type AgentEvent struct {
 	Type string          `json:"type"`
 	Data json.RawMessage `json:"data,omitempty"`
+
+	Kind  AgentEventKind `json:"-"`
+	Text  string         `json:"-"`
+	Tools []string       `json:"-"`
+
+	Tool       string `json:"-"`
+	ToolPath   string `json:"-"`
+	WritesFile bool   `json:"-"`
 }
 
 type LogEvent struct {

@@ -125,8 +125,8 @@ func TestAgentEndDoesNotCompleteTurn(t *testing.T) {
 	spec.Executors[0].Runtime = &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
 		session := &fakeSession{events: make(chan harness.AgentEvent, 4)}
 		session.prompt = func(context.Context, string) error {
-			session.events <- harness.AgentEvent{Type: "turn_end", Data: []byte(`{"type":"turn_end"}`)}
-			session.events <- harness.AgentEvent{Type: "agent_end", Data: []byte(`{"type":"agent_end"}`)}
+			session.events <- harness.AgentEvent{Type: "turn_end", Kind: harness.AgentEventMessage, Data: []byte(`{"type":"turn_end"}`)}
+			session.events <- harness.AgentEvent{Type: "agent_end", Kind: harness.AgentEventEnd, Data: []byte(`{"type":"agent_end"}`)}
 			close(session.events)
 			return nil
 		}

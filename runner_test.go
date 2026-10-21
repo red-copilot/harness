@@ -162,7 +162,7 @@ func (s *fakeSession) Prompt(ctx context.Context, prompt string) error {
 		return s.prompt(ctx, prompt)
 	}
 	select {
-	case s.events <- harness.AgentEvent{Type: "agent_settled", Data: json.RawMessage(`{"type":"agent_settled"}`)}:
+	case s.events <- harness.AgentEvent{Type: "agent_settled", Kind: harness.AgentEventSettled, Data: json.RawMessage(`{"type":"agent_settled"}`)}:
 	case <-ctx.Done():
 		return ctx.Err()
 	}

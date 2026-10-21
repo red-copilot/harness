@@ -117,7 +117,7 @@ type noopSession struct{ events chan harness.AgentEvent }
 
 func (s *noopSession) Prompt(ctx context.Context, _ string) error {
 	select {
-	case s.events <- harness.AgentEvent{Type: "agent_settled", Data: json.RawMessage(`{"type":"agent_settled"}`)}:
+	case s.events <- harness.AgentEvent{Type: "agent_settled", Kind: harness.AgentEventSettled, Data: json.RawMessage(`{"type":"agent_settled"}`)}:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()

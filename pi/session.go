@@ -459,7 +459,7 @@ func (s *session) handleStdoutLine(line []byte) {
 		}
 	}
 	s.account(recordType, record)
-	s.emitEvent(harness.AgentEvent{Type: recordType, Data: append([]byte(nil), line...)})
+	s.emitEvent(normalizeEvent(recordType, line))
 }
 
 func (s *session) readStderr() {
@@ -599,6 +599,79 @@ func rawString(raw json.RawMessage) string {
 	var value string
 	_ = json.Unmarshal(raw, &value)
 	return value
+}
+
+// normalizeEvent translates one Pi RPC record into the runtime-neutral signal
+// the control plane consumes. The native type and payload are kept verbatim
+// for the audit trail; everything the core acts on is resolved here.
+func normalizeEvent(recordType string, line []byte) harness.AgentEvent {
+	event := harness.AgentEvent{Type: recordType, Data: append([]byte(nil), line...)}
+	switch recordType {
+	case "turn_end", "message_end":
+		event.Kind = harness.AgentEventMessage
+		event.Text, event.Tools = parseTurnMessage(line)
+	case "tool_execution_start":
+		event.Kind = harness.AgentEventToolStart
+		event.Tool, event.ToolPath, event.WritesFile = parseToolStart(line)
+	case "tool_execution_end":
+		event.Kind = harness.AgentEventToolEnd
+	case "agent_settled":
+		event.Kind = harness.AgentEventSettled
+	case "agent_end":
+		event.Kind = harness.AgentEventEnd
+	}
+	return event
+}
+
+func parseTurnMessage(line []byte) (string, []string) {
+	var payload struct {
+		Message struct {
+			Content []struct{ Type, Text, Name string } `json:"content"`
+		} `json:"message"`
+		ToolResults []struct {
+			ToolName string `json:"toolName"`
+		} `json:"toolResults"`
+	}
+	if json.Unmarshal(line, &payload) != nil {
+		return "", nil
+	}
+	var text []string
+	var tools []string
+	for _, part := range payload.Message.Content {
+		switch part.Type {
+		case "text":
+			if strings.TrimSpace(part.Text) != "" {
+				text = append(text, part.Text)
+			}
+		case "toolCall":
+			if part.Name != "" {
+				tools = append(tools, part.Name)
+			}
+		}
+	}
+	if len(tools) == 0 {
+		for _, tool := range payload.ToolResults {
+			if tool.ToolName != "" {
+				tools = append(tools, tool.ToolName)
+			}
+		}
+	}
+	return strings.Join(text, "\n"), tools
+}
+
+// parseToolStart extracts the tool name and, for Pi's write tool, the target
+// path. WritesFile marks the protocol-mandated report write for the core.
+func parseToolStart(line []byte) (tool, path string, writesFile bool) {
+	var payload struct {
+		ToolName string `json:"toolName"`
+		Args     struct {
+			Path string `json:"path"`
+		} `json:"args"`
+	}
+	if json.Unmarshal(line, &payload) != nil {
+		return "", "", false
+	}
+	return payload.ToolName, payload.Args.Path, payload.ToolName == "write"
 }
 
 func safeName(value string) string {
