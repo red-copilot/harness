@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"sort"
@@ -460,6 +461,10 @@ func (e *explorationEngine) mergeAttempt(ctx context.Context, execution attemptE
 		MaxFiles: state.policy.MaxEvidenceFilesPerAttempt, MaxFileBytes: state.policy.MaxArtifactBytes, MaxTotalBytes: state.policy.MaxAttemptArtifactBytes,
 	})
 	if err != nil {
+		var storeErr *ArtifactStoreError
+		if errors.As(err, &storeErr) {
+			return storeErr
+		}
 		attempt.Status = AttemptFailed
 		attempt.Outcome = AttemptFailure
 		attempt.Error = e.live.redactor().Redact(err.Error())
@@ -485,14 +490,14 @@ func (e *explorationEngine) mergeAttempt(ctx context.Context, execution attemptE
 		attempt.ObservationIDs = append(attempt.ObservationIDs, observation.ID)
 		for _, artifact := range observation.Evidence {
 			state.artifacts = append(state.artifacts, artifact)
-			if err := e.runner.persistArtifact(ctx, artifact); err != nil {
+			if err := e.runner.persistArtifact(ctx, e.live.redactor(), artifact); err != nil {
 				return err
 			}
 			if err := e.emit("artifact.stored", artifact); err != nil {
 				return err
 			}
 		}
-		if err := e.runner.persistObservation(ctx, observation); err != nil {
+		if err := e.runner.persistObservation(ctx, e.live.redactor(), observation); err != nil {
 			return err
 		}
 		if err := e.emit("exploration.observation.created", observation); err != nil {
@@ -514,7 +519,7 @@ func (e *explorationEngine) mergeAttempt(ctx context.Context, execution attemptE
 			continue
 		}
 		state.knowledge = appendOrReplaceKnowledge(state.knowledge, promoted)
-		if err := e.runner.persistKnowledge(ctx, promoted); err != nil {
+		if err := e.runner.persistKnowledge(ctx, e.live.redactor(), promoted); err != nil {
 			return err
 		}
 		for _, event := range events {
@@ -534,7 +539,7 @@ func (e *explorationEngine) mergeAttempt(ctx context.Context, execution attemptE
 					updated.Contradicts = uniqueSorted(append(updated.Contradicts, promoted.ID))
 					updated.Version++
 					state.knowledge = appendOrReplaceKnowledge(state.knowledge, updated)
-					if err := e.runner.persistKnowledge(ctx, updated); err != nil {
+					if err := e.runner.persistKnowledge(ctx, e.live.redactor(), updated); err != nil {
 						return err
 					}
 					if err := e.emit("knowledge.contested", updated); err != nil {
@@ -653,10 +658,10 @@ func (e *explorationEngine) emit(eventType string, data any) error {
 	return e.runner.emitEvent(e.live, e.live.redactor(), Event{RunID: e.state.runID, Source: "harness", Type: eventType, Time: time.Now().UTC(), Data: mustJSON(data)})
 }
 func (e *explorationEngine) persistBranch(branch Branch) error {
-	return e.runner.persistBranch(context.Background(), branch)
+	return e.runner.persistBranch(context.Background(), e.live.redactor(), branch)
 }
 func (e *explorationEngine) persistAttempt(attempt Attempt) error {
-	return e.runner.persistAttempt(context.Background(), attempt)
+	return e.runner.persistAttempt(context.Background(), e.live.redactor(), attempt)
 }
 
 func authorizedTarget(value string, target Target) bool {

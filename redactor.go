@@ -127,3 +127,92 @@ func containsSecretLikeValue(value string) bool {
 	}
 	return false
 }
+
+func redactBranch(r *Redactor, branch Branch) Branch {
+	branch.ID = r.Redact(branch.ID)
+	branch.ParentID = r.Redact(branch.ParentID)
+	branch.RunID = r.Redact(branch.RunID)
+	branch.TaskID = r.Redact(branch.TaskID)
+	branch.Topic = r.Redact(branch.Topic)
+	branch.Goal = r.Redact(branch.Goal)
+	branch.Hypothesis = r.Redact(branch.Hypothesis)
+	branch.SuccessCondition = r.Redact(branch.SuccessCondition)
+	branch.FailureCondition = r.Redact(branch.FailureCondition)
+	branch.Scope = r.Redact(branch.Scope)
+	for i := range branch.ReviewOf {
+		branch.ReviewOf[i] = r.Redact(branch.ReviewOf[i])
+	}
+	return branch
+}
+func redactAttempt(r *Redactor, attempt Attempt) Attempt {
+	attempt.ID = r.Redact(attempt.ID)
+	attempt.RunID = r.Redact(attempt.RunID)
+	attempt.BranchID = r.Redact(attempt.BranchID)
+	attempt.SessionID = r.Redact(attempt.SessionID)
+	attempt.Error = r.Redact(attempt.Error)
+	for i := range attempt.ObservationIDs {
+		attempt.ObservationIDs[i] = r.Redact(attempt.ObservationIDs[i])
+	}
+	return attempt
+}
+func redactObservation(r *Redactor, observation Observation) Observation {
+	observation.ID = r.Redact(observation.ID)
+	observation.RunID = r.Redact(observation.RunID)
+	observation.BranchID = r.Redact(observation.BranchID)
+	observation.AttemptID = r.Redact(observation.AttemptID)
+	observation.Kind = r.Redact(observation.Kind)
+	observation.Summary = r.Redact(observation.Summary)
+	observation.Target = r.Redact(observation.Target)
+	for i := range observation.Evidence {
+		observation.Evidence[i] = redactArtifact(r, observation.Evidence[i])
+	}
+	return observation
+}
+func redactArtifact(r *Redactor, artifact Artifact) Artifact {
+	artifact.RunID = r.Redact(artifact.RunID)
+	artifact.AttemptID = r.Redact(artifact.AttemptID)
+	artifact.SessionID = r.Redact(artifact.SessionID)
+	artifact.Name = r.Redact(artifact.Name)
+	artifact.MediaType = r.Redact(artifact.MediaType)
+	return artifact
+}
+func redactKnowledge(r *Redactor, knowledge Knowledge) Knowledge {
+	knowledge.TaskID = r.Redact(knowledge.TaskID)
+	knowledge.RunID = r.Redact(knowledge.RunID)
+	knowledge.Topic = r.Redact(knowledge.Topic)
+	knowledge.Statement = r.Redact(knowledge.Statement)
+	knowledge.Target = r.Redact(knowledge.Target)
+	for i := range knowledge.Sources {
+		knowledge.Sources[i].RunID = r.Redact(knowledge.Sources[i].RunID)
+		knowledge.Sources[i].AttemptID = r.Redact(knowledge.Sources[i].AttemptID)
+		knowledge.Sources[i].SessionID = r.Redact(knowledge.Sources[i].SessionID)
+		knowledge.Sources[i].Observation = r.Redact(knowledge.Sources[i].Observation)
+	}
+	return knowledge
+}
+func redactResult(r *Redactor, result Result) Result {
+	result.Error = r.Redact(result.Error)
+	if result.Verdict != nil {
+		result.Verdict.Message = r.Redact(result.Verdict.Message)
+		result.Verdict.Evidence = redactJSONPreserve(r, result.Verdict.Evidence)
+	}
+	for i := range result.Branches {
+		result.Branches[i] = redactBranch(r, result.Branches[i])
+	}
+	for i := range result.Attempts {
+		result.Attempts[i] = redactAttempt(r, result.Attempts[i])
+	}
+	for i := range result.Observations {
+		result.Observations[i] = redactObservation(r, result.Observations[i])
+	}
+	for i := range result.Knowledge {
+		result.Knowledge[i] = redactKnowledge(r, result.Knowledge[i])
+	}
+	for i := range result.Artifacts {
+		result.Artifacts[i] = redactArtifact(r, result.Artifacts[i])
+	}
+	for i := range result.Sessions {
+		result.Sessions[i].Error = r.Redact(result.Sessions[i].Error)
+	}
+	return result
+}

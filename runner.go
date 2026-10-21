@@ -84,6 +84,7 @@ func (r *Runner) Start(ctx context.Context, spec RunSpec) (*Run, error) {
 	run.startedAt = &now
 	descriptor := RunDescriptor{SchemaVersion: 1, Task: spec.Task, Target: spec.Target, Planner: spec.Planner, Executors: spec.Executors, Policy: NormalizeExplorationPolicy(spec.Policy), Budget: spec.Budget}
 	specJSON, _ := json.Marshal(descriptor)
+	specJSON = redactJSONPreserve(redactorForSpec(spec), specJSON)
 	if err := r.store.CreateRun(ctx, RunRecord{ID: runID, Status: StatusQueued, Spec: specJSON, CreatedAt: now}); err != nil {
 		return nil, fmt.Errorf("create run: %w", err)
 	}
@@ -269,6 +270,9 @@ func (r *Runner) updateStatus(run *Run, status Status, err error) error {
 	record.Status = status
 	if err != nil {
 		record.Error = run.redactor().Redact(err.Error())
+		if len(record.Result) > 0 {
+			record.Result = redactJSONPreserve(run.redactor(), record.Result)
+		}
 	}
 	now := time.Now().UTC()
 	if status == StatusProvisioning {
@@ -330,19 +334,20 @@ func (r *Runner) appendLog(run *Run, redactor *Redactor, record LogRecord) error
 	return nil
 }
 
-func (r *Runner) persistBranch(ctx context.Context, branch Branch) error {
-	return r.store.SaveBranch(ctx, branch)
+func (r *Runner) persistBranch(ctx context.Context, redactor *Redactor, branch Branch) error {
+	return r.store.SaveBranch(ctx, redactBranch(redactor, branch))
 }
-func (r *Runner) persistAttempt(ctx context.Context, attempt Attempt) error {
-	return r.store.SaveAttempt(ctx, attempt)
+func (r *Runner) persistAttempt(ctx context.Context, redactor *Redactor, attempt Attempt) error {
+	return r.store.SaveAttempt(ctx, redactAttempt(redactor, attempt))
 }
-func (r *Runner) persistObservation(ctx context.Context, observation Observation) error {
-	return r.store.SaveObservation(ctx, observation)
+func (r *Runner) persistObservation(ctx context.Context, redactor *Redactor, observation Observation) error {
+	return r.store.SaveObservation(ctx, redactObservation(redactor, observation))
 }
-func (r *Runner) persistArtifact(ctx context.Context, artifact Artifact) error {
-	return r.store.SaveArtifact(ctx, artifact)
+func (r *Runner) persistArtifact(ctx context.Context, redactor *Redactor, artifact Artifact) error {
+	return r.store.SaveArtifact(ctx, redactArtifact(redactor, artifact))
 }
-func (r *Runner) persistKnowledge(ctx context.Context, knowledge Knowledge) error {
+func (r *Runner) persistKnowledge(ctx context.Context, redactor *Redactor, knowledge Knowledge) error {
+	knowledge = redactKnowledge(redactor, knowledge)
 	if knowledge.Version <= 1 {
 		return r.store.SaveKnowledge(ctx, knowledge)
 	}

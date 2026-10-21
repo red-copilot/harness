@@ -15,6 +15,13 @@ import (
 	"unicode/utf8"
 )
 
+// ArtifactStoreError identifies canonical evidence-store failures, which must
+// terminate the Run rather than being treated as a retryable report error.
+type ArtifactStoreError struct{ Err error }
+
+func (e *ArtifactStoreError) Error() string { return "artifact store: " + e.Err.Error() }
+func (e *ArtifactStoreError) Unwrap() error { return e.Err }
+
 // ValidateEvidencePath resolves a workspace-relative regular file and rejects
 // traversal, symlink escape and directories.
 func ValidateEvidencePath(root, candidate string) (string, error) {
@@ -127,7 +134,7 @@ func ArchiveAttemptEvidence(ctx context.Context, store ArtifactStore, redactor R
 			expectedID := hex.EncodeToString(sum[:])
 			artifact, err := store.Put(ctx, ArtifactInput{RunID: req.RunID, AttemptID: req.AttemptID, SessionID: req.SessionID, Name: file.name, MediaType: file.mediaType, Size: int64(len(file.content)), Content: bytes.NewReader(file.content)})
 			if err != nil {
-				return nil, fmt.Errorf("store artifact %q: %w", file.name, err)
+				return nil, &ArtifactStoreError{Err: fmt.Errorf("store artifact %q: %w", file.name, err)}
 			}
 			if artifact.ID == "" {
 				artifact.ID = expectedID
