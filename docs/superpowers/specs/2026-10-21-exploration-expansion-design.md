@@ -155,9 +155,11 @@ Controller 本身就是一个**只规划、不探测**的 LLM session，它既�
 | D8 | 存储 | 全部走事件流，不新增 SQLite 表 | SQLite `events` 表已是唯一审计源 |
 | D9 | Explorer 产出通道 | 写 `/workspace/report.json`，Controller 从宿主读文件 | 比解析聊天文本稳健；也便于人工排查 |
 | D10 | 每轮 item 数 | 恰好 2（不可配置） | "扩散"的核心节拍；可配置会引出"到底该几个"的争论 |
-| D11 | 角色配置表达 | `RunSpec.Agents` 继续作为 agent spec 池；新增 `RunSpec.Exploration{Rounds, ControllerAgentID, ExplorerAgentIDs}`，按 ID 引用其中 3 个 spec | 不改动 `Agents` 既有语义；未引用的 spec 不启动容器；角色身份显式可校验 |
+| D11 | 角色配置表达 | `RunSpec.Agents` 继续作为 agent spec 池；新增 `RunSpec.Exploration{Rounds, ControllerAgentID, ExplorerAgentIDs}`，按 ID 引用其中 3 个 spec。**只有一个 agent spec 时，由 harness 展开成 3 个角色**（Controller + 2 Explorer，ID 加角色后缀，Controller 工具强制只读） | 不改动 `Agents` 既有语义；未引用的 spec 不启动容器；角色身份显式可校验；单 agent 的旧配置无需改写即可跑 |
 | D12 | Controller 权限 | Controller 只读：`PiSpec.Tools = ["read"]`（无 bash、无写）；Explorer 保留 bash/write | "Controller 不自己探测"必须由容器权限强制，不能只靠 prompt |
 | D13 | Verifier 调用时机 | 每轮结束后调用一次（非 backend Verifier）；成功即终止并取消在跑的 Explorer | 让"成功即停"有明确执行点；成本可控 |
+| D15 | TSec 提交权威 | Explorer **可以直接**调用 `tsec-submit` 提交 flag；harness 仍只认 backend completion 判成功 | 沿用现状、零额外工程；提交动作本就在 Explorer 的信任边界内（它有 bash 与网络） |
+| D16 | 公开 API | **批准**删除 `ExplorationState`/`ReduceExploration`/`Frontier`/`BuildExplorationContext`/`FormatExplorationContext` | 仓库只保留一套控制语义，代码量最小；使用者需迁移 |
 | D14 | 授权目标边界 | item 的 target 必须匹配 `Task.Targets` 的 id/address，或由其派生的 host/port/path；越界 item 在校验阶段丢弃并记诊断 | Controller 输出与账本文本都不可信，必须由代码兜住安全边界 |
 
 ---
@@ -370,7 +372,9 @@ Your assigned item:
 
 Rules:
   1. Investigate ONLY the assigned question. One question, one investigation.
-  2. You may use the tools. Do not attempt to submit or claim task success.
+  2. You may use the tools. If the assigned question is answered by a flag for this authorized
+     target, you may submit it with the tsec-submit skill. You may never claim task success:
+     only the benchmark backend or the harness verifier can do that.
   3. Write your final report to /workspace/report.json using exactly this schema: {...}
   4. "not_found" and "inconclusive" are valid and useful results. Do not invent findings.
   5. Write nothing else to /workspace/report.json.
@@ -390,7 +394,8 @@ Controller **没有工具**，它的输出只能是 §6.4 的 JSON。
 
 - `Verifier` 或 backend completion 判定成功 → 立即停（唯一成功路径）。
   非 backend 的 `Verifier` 在**每轮结束后**调用一次（D13）；一旦成功，取消仍在运行的 Explorer 并结束 run。
-  TSec 场景的成功来源是 backend completion：Explorer 提交 flag 后由 backend observe 观察到完成。
+  TSec 场景的成功来源是 backend completion：Explorer 自行提交 flag（D15），由 backend observe 观察到完成；
+  harness 不解析报告里的 flag、也不代替提交。
 - `MaxRounds`（默认 6，可配置）用尽。
 - 全局预算耗尽：`WallTime` / `MaxTokens` / `MaxModelCalls` / `MaxToolCalls` / `MaxCostUSD`。
 - 连续 2 轮两条 item 全部 failed（避免格式问题导致的空转）。
@@ -473,7 +478,7 @@ type Explorer interface {
 | S4 | 3 个 Pi 进程的资源开销 | 启动前检查宿主机 CPU/内存；容器限额沿用现有值；`MaxRounds` 默认 6 控制总成本 |
 | S5 | 两个 Explorer 撞同一条路 | item 全局唯一认领；简报里给出"已排除清单"；Controller 的 next_items 去重 |
 | S6 | 事实账本膨胀导致简报超长 | 账本硬上限 + 摘要上限 8 条 + 每条截断 |
-| S7 | 公开 API 破坏（删除 `ExplorationState` 等） | 需维护者明确批准（见 §14 待确认项 B）；`docs/architecture.md` 与 README 同步更新；`go vet`/编译即验证 |
+| S7 | 公开 API 破坏（删除 `ExplorationState` 等） | 已获批准（D16）；`docs/architecture.md` 与 README 同步更新；`go vet`/编译即验证 |
 | S8 | Controller 零工具是否被 Pi 接受（`pi --tools` 传空） | 若不接受，用只读 `read` 兜底（D12 已按"只读"定义权限，安全性不受影响） |
 
 ---
@@ -489,21 +494,11 @@ type Explorer interface {
 
 ---
 
-## 14. 待维护者确认（builder check 提出的问题中，只有这两项需要人来定）
+## 14. builder check 结论（已全部落定）
 
-**A. TSec 提交权威**：Explorer 是否可以直接调用 `tsec-submit` 提交 flag？
-
-- 选项 1（本文默认，推荐）：允许 Explorer 直接提交，harness 仍只认 backend completion 判定成功。
-  沿用现状，零额外工程；提交动作留在 Explorer 的信任边界内（Explorer 已经持有 bash 与网络权限，
-  收不收它其实收不回来）。
-- 选项 2：Explorer 只在报告里给出 flag，由 harness 抽取并提交。
-  提交权收归 harness，但需要 flag 抽取与校验逻辑（工程量大、易错、需要额外的 flag 格式知识）。
-
-**B. 破坏性公开 API 删除是否批准**：删除 `ExplorationState`、`ReduceExploration`、`Frontier`、
-`BuildExplorationContext`、`FormatExplorationContext`（D5 选择的"替换"路线）。
-
-- 批准：仓库保持单一控制语义，代码量最小；SDK 使用者需要迁移。
-- 不批准：需要保留 deprecated 兼容包装，等于两套概念并存。
+builder check 提出的 8 个问题中，6 个由本文档自行裁决（D11–D14 及 §5/§7 的修订），
+2 个由维护者确认：**A. TSec 提交权威 = 选项 1（Explorer 直接提交，harness 只认 backend completion）**、
+**B. 批准破坏性删除旧公开探索 API**。文档已无待确认项。
 
 ---
 
