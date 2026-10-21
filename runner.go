@@ -37,6 +37,9 @@ func NewRunner(cfg Config) (*Runner, error) {
 	if cfg.Store == nil {
 		return nil, errors.New("runner store is required")
 	}
+	if cfg.Starter == nil {
+		return nil, errors.New("runner process starter is required")
+	}
 	if cfg.MaxSessions < 0 || cfg.PollInterval < 0 || cfg.CloseTimeout < 0 {
 		return nil, errors.New("runner durations and MaxSessions must not be negative")
 	}
@@ -55,7 +58,7 @@ func NewRunner(cfg Config) (*Runner, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	}
-	runner := &Runner{store: cfg.Store, workspaceRoot: cfg.WorkspaceRoot, maxSessions: cfg.MaxSessions, pollInterval: cfg.PollInterval, closeTimeout: cfg.CloseTimeout, cleaner: cfg.Cleaner, logger: cfg.Logger, runs: map[string]*Run{}}
+	runner := &Runner{store: cfg.Store, starter: cfg.Starter, workspaceRoot: cfg.WorkspaceRoot, maxSessions: cfg.MaxSessions, pollInterval: cfg.PollInterval, closeTimeout: cfg.CloseTimeout, cleaner: cfg.Cleaner, logger: cfg.Logger, runs: map[string]*Run{}}
 	if !cfg.SkipRecovery {
 		if err := cfg.Store.MarkInterrupted(context.Background()); err != nil {
 			return nil, fmt.Errorf("mark interrupted runs: %w", err)
@@ -74,17 +77,32 @@ func (r *Runner) Start(ctx context.Context, spec RunSpec) (*Run, error) {
 	if err := ValidateRunSpec(spec); err != nil {
 		return nil, err
 	}
+	// The planner and every executor hold a live session for the whole Run, so
+	// MaxSessions is enforced here rather than by prompting the model.
+	if required := 1 + len(spec.Executors); required > r.maxSessions {
+		return nil, fmt.Errorf("run requires %d sessions but runner allows %d", required, r.maxSessions)
+	}
 	runID, err := randomID()
 	if err != nil {
 		return nil, err
 	}
 	now := time.Now().UTC()
-	runCtx, cancel := context.WithCancel(context.Background())
+	baseCtx := context.Background()
+	var timeoutCancel context.CancelFunc
+	if spec.Budget.WallTime > 0 {
+		baseCtx, timeoutCancel = context.WithTimeout(baseCtx, spec.Budget.WallTime)
+	}
+	runCtx, cancel := context.WithCancel(baseCtx)
+	if timeoutCancel != nil {
+		inner := cancel
+		cancel = func() { inner(); timeoutCancel() }
+	}
 	run := newRun(r, runID, runCtx, cancel)
+	run.budget = spec.Budget
 	redactor := redactorForSpec(spec)
 	run.redaction = redactor
 	run.startedAt = &now
-	descriptor := RunDescriptor{SchemaVersion: 1, Task: spec.Task, Target: spec.Target, Planner: spec.Planner, Executors: spec.Executors, Policy: NormalizeExplorationPolicy(spec.Policy), Budget: spec.Budget}
+	descriptor := RunDescriptor{SchemaVersion: CurrentSchemaVersion, Task: spec.Task, Target: spec.Target, Planner: spec.Planner, Executors: spec.Executors, Policy: NormalizeExplorationPolicy(spec.Policy), Budget: spec.Budget}
 	specJSON, _ := json.Marshal(descriptor)
 	specJSON = redactJSONPreserve(redactor, specJSON)
 	if err := r.store.CreateRun(ctx, RunRecord{ID: runID, Status: StatusQueued, Spec: specJSON, CreatedAt: now}); err != nil {
@@ -180,7 +198,18 @@ func (r *Runner) execute(run *Run, spec RunSpec, redactor *Redactor) {
 	state.target = target
 	engine := &explorationEngine{runner: r, live: run, spec: spec, state: state}
 	err := engine.run(run.ctx)
-	if completion := run.backendCompletion(); completion != nil {
+	// The concurrent watcher may not have ticked before a short exploration
+	// ended. The backend is still the authority, so consult it once before the
+	// Run declares that no verdict exists.
+	if spec.Backend != nil && run.ctx.Err() == nil && run.backendCompletion() == nil {
+		if completion, observeErr := spec.Backend.Observe(run.ctx, target); observeErr == nil && completion.Done {
+			run.setBackendCompletion(completion)
+		}
+	}
+	if breach := run.budgetExceeded(); breach != nil {
+		terminalStatus = StatusFailed
+		finalErr = breach
+	} else if completion := run.backendCompletion(); completion != nil {
 		verdict = &Verdict{Success: completion.Success, Score: completion.Score, Message: completion.Message, Evidence: mustJSON(completion.Metadata)}
 		if completion.Success {
 			terminalStatus = StatusSucceeded
@@ -364,7 +393,13 @@ func (r *Runner) queryReusableKnowledge(ctx context.Context, spec RunSpec) ([]Kn
 	return FilterKnowledge(items, KnowledgeQuery{TaskID: spec.Task.ID, TargetFingerprint: spec.Target.ID, AllowCrossRun: true, Now: time.Now().UTC()}), nil
 }
 
+// Close cancels live Runs and waits for them to finish persisting before the
+// store is closed. Closing a canonical store under a live Run would break the
+// audit, so a run that refuses to stop within CloseTimeout is reported instead.
 func (r *Runner) Close(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	r.mu.Lock()
 	runs := make([]*Run, 0, len(r.runs))
 	for _, run := range r.runs {
@@ -373,6 +408,19 @@ func (r *Runner) Close(ctx context.Context) error {
 	r.mu.Unlock()
 	for _, run := range runs {
 		_ = run.Cancel(ctx)
+	}
+	waitCtx := ctx
+	if r.closeTimeout > 0 {
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithTimeout(ctx, r.closeTimeout)
+		defer cancel()
+	}
+	for _, run := range runs {
+		select {
+		case <-run.done:
+		case <-waitCtx.Done():
+			return fmt.Errorf("close runner: run %s did not finish: %w", run.ID, waitCtx.Err())
+		}
 	}
 	return r.store.Close()
 }

@@ -4,18 +4,19 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/red-copilot/harness"
 	"github.com/red-copilot/harness/store/sqlite"
+	"github.com/red-copilot/harness/tsec"
 )
 
 func TestEndToEndPlannerExecutorEvidenceKnowledgeVerdict(t *testing.T) {
@@ -24,7 +25,7 @@ func TestEndToEndPlannerExecutorEvidenceKnowledgeVerdict(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	runner, err := harness.NewRunner(harness.Config{Store: store, WorkspaceRoot: t.TempDir(), SkipRecovery: true})
+	runner, err := harness.NewRunner(harness.Config{Store: store, Starter: noopStarter{}, WorkspaceRoot: t.TempDir(), SkipRecovery: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +53,7 @@ func TestMalformedExecutorReportRetriesThenBlocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	runner, err := harness.NewRunner(harness.Config{Store: store, WorkspaceRoot: t.TempDir(), SkipRecovery: true})
+	runner, err := harness.NewRunner(harness.Config{Store: store, Starter: noopStarter{}, WorkspaceRoot: t.TempDir(), SkipRecovery: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +83,7 @@ func TestBackendSuccessRacesInflightAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	runner, err := harness.NewRunner(harness.Config{Store: store, WorkspaceRoot: t.TempDir(), SkipRecovery: true, PollInterval: 5 * time.Millisecond})
+	runner, err := harness.NewRunner(harness.Config{Store: store, Starter: noopStarter{}, WorkspaceRoot: t.TempDir(), SkipRecovery: true, PollInterval: 5 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +112,7 @@ func TestSQLiteContainsNoKnownSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	runner, err := harness.NewRunner(harness.Config{Store: store, WorkspaceRoot: filepath.Join(dir, "workspaces"), SkipRecovery: true})
+	runner, err := harness.NewRunner(harness.Config{Store: store, Starter: noopStarter{}, WorkspaceRoot: filepath.Join(dir, "workspaces"), SkipRecovery: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,6 +128,78 @@ func TestSQLiteContainsNoKnownSecrets(t *testing.T) {
 	if strings.Contains(fmt.Sprint(result), secret) {
 		t.Fatalf("secret leaked in result: %+v", result)
 	}
+	assertSecretAbsentFromStore(t, dbPath, filepath.Join(dir, "artifacts"), secret)
+}
+
+// TestTSecTokenNeverPersisted proves the documented BENCHMARK_TOKEN boundary:
+// the token authenticates the challenge API and may reach the agent, but no
+// canonical table, artifact or result may contain it in plaintext.
+func TestTSecTokenNeverPersisted(t *testing.T) {
+	secret := "tsec-token-8f4d2b7c"
+	t.Setenv("BENCHMARK_TOKEN", secret)
+	t.Setenv("BENCHMARK_BASE_URL", "https://tsec.example")
+	var authSeen bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("BENCHMARK_TOKEN") == secret {
+			authSeen = true
+		}
+		switch r.URL.Path {
+		case "/openapi/v1/challenges/start":
+			writeJSONBody(w, map[string]any{"unique_code": "web-1", "container_addr": []string{"10.0.0.1:8080"}})
+		case "/openapi/v1/challenges":
+			writeJSONBody(w, []map[string]any{{
+				"unique_code": "web-1", "description": "demo", "flag_count": 1, "correct_flag_count": 1,
+				"is_completed": true, "total_score": 100, "container_status": "available",
+				"container_addr": []string{"10.0.0.1:8080"},
+			}})
+		case "/openapi/v1/challenges/close":
+			writeJSONBody(w, map[string]any{"unique_code": "web-1", "closed": true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client, err := tsec.New(tsec.Config{BaseURL: server.URL, Token: secret, CheckVPN: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := tsec.NewBackend(client, "web-1")
+	backend.CheckVPN = false
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "harness.db")
+	store, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	runner, err := harness.NewRunner(harness.Config{Store: store, Starter: noopStarter{}, WorkspaceRoot: filepath.Join(dir, "workspaces"), PollInterval: 10 * time.Millisecond, SkipRecovery: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := acceptanceSpec(store)
+	spec.Verifier = nil
+	spec.Backend = backend
+	spec.Target = harness.Target{ID: "web-1", Isolation: harness.IsolationCallerManaged}
+	spec.SecretEnv = []string{"BENCHMARK_TOKEN"}
+	spec.Executors[0].EnvFrom = []string{"BENCHMARK_TOKEN", "BENCHMARK_BASE_URL"}
+	result, err := runner.Run(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !authSeen {
+		t.Fatal("challenge API never received the token")
+	}
+	if result.Status != harness.StatusSucceeded {
+		t.Fatalf("status = %q, want succeeded", result.Status)
+	}
+	if strings.Contains(fmt.Sprint(result), secret) {
+		t.Fatalf("token leaked in result: %+v", result)
+	}
+	assertSecretAbsentFromStore(t, dbPath, filepath.Join(dir, "artifacts"), secret)
+}
+
+func assertSecretAbsentFromStore(t *testing.T, dbPath, artifactRoot, secret string) {
+	t.Helper()
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatal(err)
@@ -167,9 +240,12 @@ func TestSQLiteContainsNoKnownSecrets(t *testing.T) {
 		}
 		_ = data.Close()
 	}
-	_ = filepath.WalkDir(filepath.Join(dir, "artifacts"), func(path string, entry fs.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
+	err = filepath.WalkDir(artifactRoot, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
 			return err
+		}
+		if entry.IsDir() {
+			return nil
 		}
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
@@ -180,15 +256,14 @@ func TestSQLiteContainsNoKnownSecrets(t *testing.T) {
 		}
 		return nil
 	})
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
 }
 
-func TestNoDeclaredUnreachableState(t *testing.T) {
-	statuses := []harness.Status{harness.StatusQueued, harness.StatusProvisioning, harness.StatusRunning, harness.StatusFinalizing, harness.StatusVerifying, harness.StatusSucceeded, harness.StatusFailed, harness.StatusCancelled, harness.StatusTimedOut, harness.StatusInterrupted, harness.StatusStagnated}
-	branchStatuses := []harness.BranchStatus{harness.BranchOpen, harness.BranchActive, harness.BranchPaused, harness.BranchResolved, harness.BranchRefuted, harness.BranchBlocked, harness.BranchAbandoned}
-	attemptStatuses := []harness.AttemptStatus{harness.AttemptRunning, harness.AttemptCompleted, harness.AttemptTruncated, harness.AttemptFailed, harness.AttemptCancelled}
-	outcomes := []harness.AttemptOutcome{harness.AttemptLocalSuccess, harness.AttemptRefuted, harness.AttemptBlocked, harness.AttemptInconclusive, harness.AttemptFailure}
-	trusts := []harness.KnowledgeTrust{harness.KnowledgeObserved, harness.KnowledgeCorroborated, harness.KnowledgeContested, harness.KnowledgeRefuted}
-	assertReachable(t, statuses, branchStatuses, attemptStatuses, outcomes, trusts)
+func writeJSONBody(w http.ResponseWriter, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(value)
 }
 
 func acceptanceSpec(store harness.ArtifactStore) harness.RunSpec {
@@ -225,15 +300,3 @@ func (s secretExecutorStrategy) Parse(req harness.AttemptRequest, _ harness.Turn
 	}
 	return harness.AttemptReport{BranchID: req.Branch.ID, Status: harness.AttemptCompleted, Outcome: harness.AttemptLocalSuccess, Observations: []harness.ObservationProposal{{LocalID: "obs", Kind: "adapter.test", Summary: "redacted evidence", Target: "target-1", EvidenceFiles: []string{"proof.txt"}}}}, nil
 }
-
-func assertReachable(t *testing.T, groups ...any) {
-	t.Helper()
-	for _, group := range groups {
-		if fmt.Sprint(group) == "" {
-			t.Fatal("empty enum fixture")
-		}
-	}
-}
-
-var _ = errors.Is
-var _ = sync.Mutex{}

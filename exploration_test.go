@@ -177,7 +177,7 @@ func integrationSpec(t *testing.T, store *memoryStore) harness.RunSpec {
 
 func newTestRunner(t *testing.T, store *memoryStore) *harness.Runner {
 	t.Helper()
-	runner, err := harness.NewRunner(harness.Config{Store: store, WorkspaceRoot: t.TempDir(), SkipRecovery: true, PollInterval: 5 * time.Millisecond})
+	runner, err := harness.NewRunner(harness.Config{Store: store, Starter: noopStarter{}, WorkspaceRoot: t.TempDir(), SkipRecovery: true, PollInterval: 5 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -78,6 +78,10 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid run request: "+err.Error())
 			return
 		}
+		if err := harness.ValidateDescriptor(request.Descriptor); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		spec, err := s.builder(request.Descriptor)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())

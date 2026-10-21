@@ -83,9 +83,9 @@ func PromoteKnowledge(req KnowledgePromotionRequest) (Knowledge, []KnowledgeEven
 		events = append(events, KnowledgeEvent{Type: "knowledge.refuted", Data: map[string]any{"knowledge_id": candidate.ID, "refutes": existing.ID}})
 	}
 	if len(candidate.Contradicts) > 0 {
-		candidate.Contradicts = uniqueSorted(append(candidate.Contradicts, candidate.ID))
+		candidate.Contradicts = uniqueSorted(candidate.Contradicts)
 		candidate.Trust = KnowledgeContested
-		events = append(events, KnowledgeEvent{Type: "knowledge.review_required", Data: map[string]any{"review_of": candidate.Contradicts}})
+		events = append(events, KnowledgeEvent{Type: "knowledge.review_required", Data: map[string]any{"review_of": append([]string{candidate.ID}, candidate.Contradicts...)}})
 	}
 	events = append(events, KnowledgeEvent{Type: "knowledge.promoted", Data: candidate})
 	return candidate, events, nil

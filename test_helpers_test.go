@@ -23,17 +23,18 @@ func ioReadAllLimit(reader io.Reader, limit int64) ([]byte, error) {
 }
 
 type memoryStore struct {
-	mu                  sync.Mutex
-	runs                map[string]harness.RunRecord
-	events              []harness.Event
-	logs                []harness.LogRecord
-	verdicts            map[string]harness.VerdictRecord
-	branches            []harness.Branch
-	attempts            []harness.Attempt
-	observations        []harness.Observation
-	artifacts           []harness.Artifact
-	knowledge           []harness.Knowledge
+	mu                   sync.Mutex
+	runs                 map[string]harness.RunRecord
+	events               []harness.Event
+	logs                 []harness.LogRecord
+	verdicts             map[string]harness.VerdictRecord
+	branches             []harness.Branch
+	attempts             []harness.Attempt
+	observations         []harness.Observation
+	artifacts            []harness.Artifact
+	knowledge            []harness.Knowledge
 	markInterruptedCalls int
+	statusLog            []harness.Status
 }
 
 func newMemoryStore() *memoryStore {
@@ -44,12 +45,14 @@ func (s *memoryStore) CreateRun(_ context.Context, record harness.RunRecord) err
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.runs[record.ID] = record
+	s.statusLog = append(s.statusLog, record.Status)
 	return nil
 }
 func (s *memoryStore) UpdateRun(_ context.Context, record harness.RunRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.runs[record.ID] = record
+	s.statusLog = append(s.statusLog, record.Status)
 	return nil
 }
 func (s *memoryStore) GetRun(_ context.Context, id string) (harness.RunRecord, error) {
@@ -206,7 +209,9 @@ func (s *memoryStore) SaveSweep(context.Context, harness.SweepRecord) error { re
 func (s *memoryStore) GetSweep(context.Context, string) (harness.SweepRecord, error) {
 	return harness.SweepRecord{}, nil
 }
-func (s *memoryStore) ListSweeps(context.Context, int) ([]harness.SweepRecord, error) { return nil, nil }
+func (s *memoryStore) ListSweeps(context.Context, int) ([]harness.SweepRecord, error) {
+	return nil, nil
+}
 func (s *memoryStore) MarkInterrupted(context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

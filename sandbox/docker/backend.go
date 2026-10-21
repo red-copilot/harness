@@ -3,8 +3,10 @@ package docker
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -64,12 +66,21 @@ func (b ImageBackend) Provision(ctx context.Context, req harness.ProvisionReques
 	for _, port := range b.Ports {
 		args = append(args, "-p", port)
 	}
-	for key, value := range b.Env {
-		args = append(args, "-e", key+"="+value)
+	// Secret values reach the container through the Docker client environment,
+	// never argv: argv is world-readable through process listings.
+	keys := make([]string, 0, len(b.Env))
+	for key := range b.Env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	env := make([]string, 0, len(keys))
+	for _, key := range keys {
+		args = append(args, "-e", key)
+		env = append(env, key+"="+b.Env[key])
 	}
 	args = append(args, b.Image)
 	args = append(args, b.Command...)
-	if err := run(ctx, docker, args...); err != nil {
+	if err := runWithEnv(ctx, docker, env, args...); err != nil {
 		_ = run(ctx, docker, "rm", "-f", name)
 		if createdNetwork {
 			_ = run(ctx, docker, "network", "rm", network)
@@ -183,9 +194,33 @@ func (b ComposeBackend) Close(ctx context.Context, target harness.Target) error 
 }
 
 func run(ctx context.Context, docker string, args ...string) error {
+	return runWithEnv(ctx, docker, nil, args...)
+}
+
+// runWithEnv runs the docker client with extra environment entries. Secret
+// values travel here so they never appear in the process argument list.
+func runWithEnv(ctx context.Context, docker string, extraEnv []string, args ...string) error {
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, docker, args...)
+	if len(extraEnv) > 0 {
+		// Drop inherited duplicates first so the value we supply is the one the
+		// docker client resolves for `-e NAME`.
+		names := map[string]bool{}
+		for _, entry := range extraEnv {
+			if index := strings.IndexByte(entry, '='); index > 0 {
+				names[entry[:index]] = true
+			}
+		}
+		inherited := make([]string, 0, len(os.Environ()))
+		for _, entry := range os.Environ() {
+			if index := strings.IndexByte(entry, '='); index > 0 && names[entry[:index]] {
+				continue
+			}
+			inherited = append(inherited, entry)
+		}
+		cmd.Env = append(inherited, extraEnv...)
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s: %s", err, strings.TrimSpace(string(out)))

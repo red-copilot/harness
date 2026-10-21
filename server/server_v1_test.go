@@ -63,6 +63,7 @@ func TestServerRejectsUnknownFieldsAndUnsupportedIsolation(t *testing.T) {
 	}).Handler()
 	for _, body := range []string{
 		`{"schema_version":1,"unknown":true}`,
+		`{"schema_version":2,"task":{"id":"task","objective":"x"},"target":{"id":"target","isolation":"caller_managed"},"planner":{"id":"planner"},"executors":[{"id":"exec"}]}`,
 		`{"schema_version":1,"task":{"id":"task","objective":"x"},"target":{"id":"target","isolation":"network_isolated"},"planner":{"id":"planner"},"executors":[{"id":"exec"}]}`,
 	} {
 		req := httptest.NewRequest(http.MethodPost, "/v1/runs", strings.NewReader(body))
@@ -99,7 +100,7 @@ func testServerRunner(t *testing.T) (*sqlite.Store, *harness.Runner) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runner, err := harness.NewRunner(harness.Config{Store: store, WorkspaceRoot: t.TempDir(), SkipRecovery: true})
+	runner, err := harness.NewRunner(harness.Config{Store: store, Starter: noopStarter{}, WorkspaceRoot: t.TempDir(), SkipRecovery: true})
 	if err != nil {
 		t.Fatal(err)
 	}

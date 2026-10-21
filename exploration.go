@@ -2,6 +2,8 @@ package harness
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/url"
@@ -10,6 +12,10 @@ import (
 	"sync"
 	"time"
 )
+
+// ErrBranchRejected marks a branch proposal refused by tree limits. It is a
+// bounded-tree outcome, not a canonical failure.
+var ErrBranchRejected = errors.New("branch rejected")
 
 type explorationState struct {
 	runID        string
@@ -290,24 +296,24 @@ func (e *explorationEngine) plan(ctx context.Context, root Branch) (int, error) 
 func (e *explorationEngine) addBranch(proposal BranchProposal, parent Branch, kind BranchKind, reviewOf []string) error {
 	state := e.state
 	if len(state.branches) >= state.policy.MaxNodes {
-		return fmt.Errorf("max nodes reached")
+		return fmt.Errorf("%w: max nodes reached", ErrBranchRejected)
 	}
 	if parent.Depth+1 > state.policy.MaxDepth {
-		return fmt.Errorf("max depth reached")
+		return fmt.Errorf("%w: max depth reached", ErrBranchRejected)
 	}
 	if proposal.Topic == "" {
-		return fmt.Errorf("topic is required")
+		return fmt.Errorf("%w: topic is required", ErrBranchRejected)
 	}
 	if !authorizedTarget(proposal.Target, state.target) {
-		return fmt.Errorf("target is not authorized")
+		return fmt.Errorf("%w: target is not authorized", ErrBranchRejected)
 	}
 	for _, branch := range state.branches {
 		if strings.EqualFold(strings.TrimSpace(branch.Topic), strings.TrimSpace(proposal.Topic)) && branch.Scope == proposal.Target && branch.Kind == kind {
-			return fmt.Errorf("duplicate branch topic and scope")
+			return fmt.Errorf("%w: duplicate branch topic and scope", ErrBranchRejected)
 		}
 	}
 	if kind == BranchHypothesis && parent.Kind == BranchHypothesis && state.childCount(parent.ID) >= state.policy.MaxChildrenPerBranch {
-		return fmt.Errorf("child_limit_exceeded")
+		return fmt.Errorf("%w: child_limit_exceeded", ErrBranchRejected)
 	}
 	now := time.Now().UTC()
 	branch := Branch{
@@ -341,6 +347,9 @@ func (e *explorationEngine) runBatch(ctx context.Context, branches []Branch) ([]
 		if index := state.findBranch(branch.ID); index != nil {
 			index.Status = BranchActive
 			index.UpdatedAt = time.Now().UTC()
+			if err := e.persistBranch(*index); err != nil {
+				return nil, err
+			}
 		}
 		if err := e.persistAttempt(attempt); err != nil {
 			return nil, err
@@ -459,30 +468,37 @@ func (e *explorationEngine) mergeAttempt(ctx context.Context, execution attemptE
 			return err
 		}
 	}
-	for _, proposal := range report.Knowledge {
-		if len(state.knowledge) >= state.policy.MaxKnowledgeItems {
-			if err := e.emit("knowledge.rejected", map[string]any{"attempt_id": attempt.ID, "reason": "knowledge_limit_exceeded"}); err != nil {
-				return err
-			}
-			break
-		}
-		promoted, events, err := PromoteKnowledge(KnowledgePromotionRequest{RunID: state.runID, AttemptID: attempt.ID, SessionID: execution.sessionID, Task: state.task, Target: state.target, Branch: *branch, Proposal: proposal, Observations: observationMap, Existing: state.knowledge, Now: time.Now().UTC()})
+	reviewResolved := false
+	if branch.Kind == BranchReview {
+		resolved, err := e.resolveReview(ctx, branch, attempt, report, observationMap)
 		if err != nil {
-			if err := e.emit("knowledge.rejected", map[string]any{"attempt_id": attempt.ID, "error": err.Error()}); err != nil {
-				return err
-			}
-			continue
-		}
-		state.knowledge = appendOrReplaceKnowledge(state.knowledge, promoted)
-		if err := e.runner.persistKnowledge(ctx, e.live.redactor(), promoted); err != nil {
 			return err
 		}
-		for _, event := range events {
-			if err := e.emit(event.Type, event.Data); err != nil {
+		reviewResolved = resolved
+	} else {
+		for _, proposal := range report.Knowledge {
+			if len(state.knowledge) >= state.policy.MaxKnowledgeItems {
+				if err := e.emit("knowledge.rejected", map[string]any{"attempt_id": attempt.ID, "reason": "knowledge_limit_exceeded"}); err != nil {
+					return err
+				}
+				break
+			}
+			promoted, events, err := PromoteKnowledge(KnowledgePromotionRequest{RunID: state.runID, AttemptID: attempt.ID, SessionID: execution.sessionID, Task: state.task, Target: state.target, Branch: *branch, Proposal: proposal, Observations: observationMap, Existing: state.knowledge, Now: time.Now().UTC()})
+			if err != nil {
+				if err := e.emit("knowledge.rejected", map[string]any{"attempt_id": attempt.ID, "error": err.Error()}); err != nil {
+					return err
+				}
+				continue
+			}
+			state.knowledge = appendOrReplaceKnowledge(state.knowledge, promoted)
+			if err := e.runner.persistKnowledge(ctx, e.live.redactor(), promoted); err != nil {
 				return err
 			}
-		}
-		if promoted.Trust == KnowledgeContested {
+			for _, event := range events {
+				if err := e.emit(event.Type, event.Data); err != nil {
+					return err
+				}
+			}
 			for _, conflictID := range promoted.Contradicts {
 				if conflictID == promoted.ID {
 					continue
@@ -501,10 +517,15 @@ func (e *explorationEngine) mergeAttempt(ctx context.Context, execution attemptE
 						return err
 					}
 				}
+				if err := e.addReviewBranch(*branch, promoted, conflictID); err != nil {
+					if !errors.Is(err, ErrBranchRejected) {
+						return err
+					}
+					if emitErr := e.emit("knowledge.review_rejected", map[string]any{"knowledge_id": promoted.ID, "conflict_id": conflictID, "reason": err.Error()}); emitErr != nil {
+						return emitErr
+					}
+				}
 			}
-		}
-		if len(promoted.Contradicts) >= 2 {
-			_ = e.addReviewBranch(*branch, promoted)
 		}
 	}
 	switch {
@@ -525,6 +546,9 @@ func (e *explorationEngine) mergeAttempt(ctx context.Context, execution attemptE
 		branch.Status = BranchBlocked
 	default:
 		branch.Status = BranchOpen
+	}
+	if branch.Kind == BranchReview && reviewResolved {
+		branch.Status = BranchResolved
 	}
 	branch.UpdatedAt = time.Now().UTC()
 	if err := e.persistAttempt(attempt); err != nil {
@@ -574,17 +598,119 @@ func appendOrReplaceKnowledge(items []Knowledge, knowledge Knowledge) []Knowledg
 	return append(items, knowledge)
 }
 
-func (e *explorationEngine) addReviewBranch(parent Branch, knowledge Knowledge) error {
-	if len(knowledge.Contradicts) < 2 {
+// addReviewBranch opens one review branch per conflicting pair. A review binds
+// exactly two knowledge IDs, so multi-way contradictions become several
+// independent reviews instead of one oversized binding.
+func (e *explorationEngine) addReviewBranch(parent Branch, knowledge Knowledge, conflictID string) error {
+	reviewOf := uniqueSorted([]string{knowledge.ID, conflictID})
+	if len(reviewOf) != 2 {
 		return nil
 	}
-	reviewOf := append([]string(nil), knowledge.Contradicts...)
-	sort.Strings(reviewOf)
-	proposal := BranchProposal{ParentID: parent.ID, Topic: "review." + normalizeKnowledgeTopic(knowledge.Topic), Goal: "Review conflicting knowledge", Hypothesis: "One conflicting claim is supportable", Target: e.state.target.ID, SuccessCondition: "Resolve the bound conflict pair", FailureCondition: "Cannot resolve the conflict"}
+	for _, branch := range e.state.branches {
+		if branch.Kind == BranchReview && equalStringSet(branch.ReviewOf, reviewOf) {
+			return nil
+		}
+	}
+	topic := "review." + normalizeKnowledgeTopic(knowledge.Topic) + "." + reviewPairSuffix(reviewOf)
+	proposal := BranchProposal{ParentID: parent.ID, Topic: topic, Goal: "Review conflicting knowledge " + strings.Join(reviewOf, " vs "), Hypothesis: "One conflicting claim is supportable", Target: e.state.target.ID, SuccessCondition: "Resolve the bound conflict pair", FailureCondition: "Cannot resolve the conflict"}
 	if err := e.addBranch(proposal, parent, BranchReview, reviewOf); err != nil {
 		return err
 	}
 	return e.emit("knowledge.review_required", map[string]any{"review_of": reviewOf})
+}
+
+// resolveReview applies one review attempt's verdict to its bound pair. It
+// returns true only when the attempt adjudicated both sides of the pair;
+// an inconclusive review leaves both items contested for a later attempt.
+func (e *explorationEngine) resolveReview(ctx context.Context, branch *Branch, attempt Attempt, report AttemptReport, observations map[string]Observation) (bool, error) {
+	winnerID, loserID, err := ResolveReview(branch.ReviewOf, report.Knowledge)
+	if err != nil {
+		if emitErr := e.emit("knowledge.review_unresolved", map[string]any{"branch_id": branch.ID, "review_of": branch.ReviewOf, "error": err.Error()}); emitErr != nil {
+			return false, emitErr
+		}
+		return false, nil
+	}
+	winner := findKnowledge(e.state.knowledge, winnerID)
+	loser := findKnowledge(e.state.knowledge, loserID)
+	if winner == nil || loser == nil {
+		if emitErr := e.emit("knowledge.review_unresolved", map[string]any{"branch_id": branch.ID, "review_of": branch.ReviewOf, "error": "bound knowledge is not present"}); emitErr != nil {
+			return false, emitErr
+		}
+		return false, nil
+	}
+	now := time.Now().UTC()
+	updatedWinner := *winner
+	updatedWinner.Trust = KnowledgeCorroborated
+	updatedWinner.LastValidated = now
+	updatedWinner.Sources = appendUniqueSource(updatedWinner.Sources, reviewSources(e.state.runID, attempt, report, winnerID, observations)...)
+	updatedWinner.Contradicts = removeString(updatedWinner.Contradicts, loserID)
+	updatedWinner.Version++
+	updatedLoser := *loser
+	updatedLoser.Trust = KnowledgeRefuted
+	updatedLoser.LastValidated = now
+	updatedLoser.Version++
+	e.state.knowledge = appendOrReplaceKnowledge(e.state.knowledge, updatedWinner)
+	if err := e.runner.persistKnowledge(ctx, e.live.redactor(), updatedWinner); err != nil {
+		return false, err
+	}
+	e.state.knowledge = appendOrReplaceKnowledge(e.state.knowledge, updatedLoser)
+	if err := e.runner.persistKnowledge(ctx, e.live.redactor(), updatedLoser); err != nil {
+		return false, err
+	}
+	if err := e.emit("knowledge.refuted", updatedLoser); err != nil {
+		return false, err
+	}
+	if err := e.emit("knowledge.review_resolved", map[string]any{"branch_id": branch.ID, "winner": updatedWinner.ID, "loser": updatedLoser.ID}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func reviewSources(runID string, attempt Attempt, report AttemptReport, winnerID string, observations map[string]Observation) []KnowledgeSource {
+	for _, item := range report.Knowledge {
+		if len(item.Supports) != 1 || len(item.Refutes) != 1 || item.Supports[0] != winnerID {
+			continue
+		}
+		sources := make([]KnowledgeSource, 0, len(item.ObservationRefs))
+		for _, ref := range item.ObservationRefs {
+			if observation, ok := observations[ref]; ok {
+				sources = append(sources, KnowledgeSource{RunID: runID, AttemptID: attempt.ID, SessionID: attempt.SessionID, Observation: observation.ID})
+			}
+		}
+		return sources
+	}
+	return nil
+}
+
+func reviewPairSuffix(pair []string) string {
+	sum := sha256.Sum256([]byte(strings.Join(pair, "\x00")))
+	return hex.EncodeToString(sum[:4])
+}
+
+func equalStringSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]struct{}, len(a))
+	for _, value := range a {
+		seen[value] = struct{}{}
+	}
+	for _, value := range b {
+		if _, ok := seen[value]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func removeString(values []string, target string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != target {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func (e *explorationEngine) startSession(ctx context.Context, role AgentRole, spec AgentSpec, sessionID string) (AgentSession, error) {

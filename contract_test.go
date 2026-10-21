@@ -190,3 +190,14 @@ func (f *fakeArtifactStore) Put(_ context.Context, in harness.ArtifactInput) (ha
 func (f *fakeArtifactStore) Open(context.Context, string) (io.ReadCloser, error) {
 	return nil, errors.New("not implemented")
 }
+
+func TestUnknownSchemaVersionRejected(t *testing.T) {
+	for _, version := range []int{0, 2, 999} {
+		if err := harness.ValidateDescriptor(harness.RunDescriptor{SchemaVersion: version}); err == nil || !strings.Contains(err.Error(), "schema_version") {
+			t.Fatalf("version %d err = %v, want schema_version error", version, err)
+		}
+	}
+	if err := harness.ValidateDescriptor(harness.RunDescriptor{SchemaVersion: harness.CurrentSchemaVersion}); err != nil {
+		t.Fatal(err)
+	}
+}

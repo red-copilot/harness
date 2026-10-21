@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -27,6 +28,7 @@ type Run struct {
 	skillsDir string
 	startedAt *time.Time
 	redaction *Redactor
+	budget    Budget
 
 	eventMu      sync.Mutex
 	eventsClosed bool
@@ -39,6 +41,7 @@ type Run struct {
 	backendResult *Completion
 	progressValue Completion
 	stagnatedFlag bool
+	budgetErr     error
 }
 
 func newRun(runner *Runner, id string, ctx context.Context, cancel context.CancelFunc) *Run {
@@ -96,7 +99,40 @@ func (r *Run) addUsage(usage Usage) {
 	r.usage.ModelCalls += usage.ModelCalls
 	r.usage.ToolCalls += usage.ToolCalls
 	r.usage.CostUSD += usage.CostUSD
+	breach := budgetBreach(r.budget, r.usage)
+	if breach != nil && r.budgetErr == nil {
+		r.budgetErr = breach
+	}
 	r.mu.Unlock()
+	if breach != nil {
+		r.cancel()
+	}
+}
+
+func (r *Run) budgetExceeded() error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.budgetErr
+}
+
+// budgetBreach returns the first run-level budget the accumulated usage
+// exceeds. A zero budget field means the dimension is unbounded.
+func budgetBreach(budget Budget, used Usage) error {
+	totalTokens := used.TotalTokens
+	if totalTokens == 0 {
+		totalTokens = used.InputTokens + used.OutputTokens
+	}
+	switch {
+	case budget.MaxTokens > 0 && totalTokens > budget.MaxTokens:
+		return fmt.Errorf("token budget exceeded: %d > %d", totalTokens, budget.MaxTokens)
+	case budget.MaxModelCalls > 0 && used.ModelCalls > budget.MaxModelCalls:
+		return fmt.Errorf("model call budget exceeded: %d > %d", used.ModelCalls, budget.MaxModelCalls)
+	case budget.MaxToolCalls > 0 && used.ToolCalls > budget.MaxToolCalls:
+		return fmt.Errorf("tool call budget exceeded: %d > %d", used.ToolCalls, budget.MaxToolCalls)
+	case budget.MaxCostUSD > 0 && used.CostUSD > budget.MaxCostUSD:
+		return fmt.Errorf("cost budget exceeded: %.4f > %.4f", used.CostUSD, budget.MaxCostUSD)
+	}
+	return nil
 }
 func (r *Run) progress() Completion { r.mu.RLock(); defer r.mu.RUnlock(); return r.progressValue }
 func (r *Run) setProgress(completion Completion) {
@@ -167,9 +203,25 @@ func (r *Run) finishExecution(status Status, err error, verdict *Verdict, state 
 	if verdict != nil {
 		verdict.Message = redactor.Redact(verdict.Message)
 		verdict.Evidence = redactJSONPreserve(redactor, verdict.Evidence)
+		if saveErr := r.runner.store.SaveVerdict(context.Background(), VerdictRecord{RunID: r.ID, Success: verdict.Success, Score: verdict.Score, Message: verdict.Message, Evidence: verdict.Evidence, CreatedAt: now}); saveErr != nil {
+			status = StatusFailed
+			result.Status = StatusFailed
+			err = saveErr
+			errorText = redactError(redactor, saveErr)
+			result.Error = errorText
+		}
 	}
-	if verdict != nil {
-		_ = r.runner.store.SaveVerdict(context.Background(), VerdictRecord{RunID: r.ID, Success: verdict.Success, Score: verdict.Score, Message: verdict.Message, Evidence: verdict.Evidence, CreatedAt: now})
+	r.mu.RLock()
+	controlErr := r.err
+	r.mu.RUnlock()
+	if err == nil && controlErr != nil {
+		err = controlErr
+		if status == StatusSucceeded {
+			status = StatusFailed
+			result.Status = StatusFailed
+			errorText = redactError(redactor, controlErr)
+			result.Error = errorText
+		}
 	}
 	result = redactResult(redactor, result)
 	resultJSON := mustJSON(result)
@@ -191,7 +243,18 @@ func (r *Run) finishExecution(status Status, err error, verdict *Verdict, state 
 		result.Error = redactError(redactor, getErr)
 		err = getErr
 	}
-	_ = r.runner.emitEvent(r, redactor, Event{RunID: r.ID, Source: "harness", Type: "run.finalized", Time: now, Data: mustJSON(map[string]string{"status": string(status), "error": result.Error})})
+	if emitErr := r.runner.emitEvent(r, redactor, Event{RunID: r.ID, Source: "harness", Type: "run.finalized", Time: now, Data: mustJSON(map[string]string{"status": string(status), "error": result.Error})}); emitErr != nil {
+		status = StatusFailed
+		result.Status = StatusFailed
+		result.Error = redactError(redactor, emitErr)
+		err = emitErr
+		if record, getErr := r.runner.store.GetRun(context.Background(), r.ID); getErr == nil {
+			record.Status = status
+			record.Error = result.Error
+			record.Result = mustJSON(result)
+			_ = r.runner.store.UpdateRun(context.Background(), record)
+		}
+	}
 	r.eventMu.Lock()
 	if !r.eventsClosed {
 		r.eventsClosed = true

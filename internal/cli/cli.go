@@ -87,7 +87,7 @@ func serve(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	starter := docker.New()
-	runner, err := harness.NewRunner(harness.Config{Store: store, Cleaner: starter, WorkspaceRoot: base.WorkspaceRoot})
+	runner, err := harness.NewRunner(harness.Config{Store: store, Starter: starter, Cleaner: starter, WorkspaceRoot: base.WorkspaceRoot})
 	if err != nil {
 		return err
 	}
@@ -129,7 +129,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	starter := docker.New()
-	runner, err := harness.NewRunner(harness.Config{Store: store, Cleaner: starter, WorkspaceRoot: cfg.WorkspaceRoot})
+	runner, err := harness.NewRunner(harness.Config{Store: store, Starter: starter, Cleaner: starter, WorkspaceRoot: cfg.WorkspaceRoot})
 	if err != nil {
 		return err
 	}
@@ -143,6 +143,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 }
 
 func composeDescriptor(base *FileConfig, descriptor harness.RunDescriptor, store harness.ArtifactStore) (harness.RunSpec, error) {
+	if err := harness.ValidateDescriptor(descriptor); err != nil {
+		return harness.RunSpec{}, err
+	}
 	cfg := *base
 	cfg.Task = descriptor.Task
 	cfg.Target.ID = descriptor.Target.ID

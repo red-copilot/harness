@@ -12,8 +12,11 @@ import (
 	"testing"
 )
 
+// modulePath is the import prefix every package in this repository shares.
+const modulePath = "github.com/red-copilot/harness"
+
 func TestRootPackageImportsStdlibOnly(t *testing.T) {
-	entries, err := osReadDir(".")
+	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,7 +24,11 @@ func TestRootPackageImportsStdlibOnly(t *testing.T) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
 			continue
 		}
-		for _, path := range fileImports(filepath.Join(".", entry.Name())) {
+		imports, err := fileImports(entry.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range imports {
 			if strings.Contains(strings.Split(path, "/")[0], ".") {
 				t.Fatalf("root file %s imports non-stdlib %q", entry.Name(), path)
 			}
@@ -29,27 +36,51 @@ func TestRootPackageImportsStdlibOnly(t *testing.T) {
 	}
 }
 
+// TestAdapterPackagesDoNotImportControlLoop proves adapter packages cannot
+// reach the control surface. Import paths are compared against the full module
+// prefix so the check cannot silently stop matching.
 func TestAdapterPackagesDoNotImportControlLoop(t *testing.T) {
+	forbidden := []string{
+		modulePath + "/server",
+		modulePath + "/internal/cli",
+		modulePath + "/webui",
+		modulePath + "/exploration",
+	}
+	checked := 0
 	for _, root := range []string{"pi", "sandbox/docker", "tsec", "verify", "store/sqlite"} {
-		_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-			if err != nil || entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
 				return err
 			}
-			for _, imported := range fileImports(path) {
-				for _, forbidden := range []string{"harness/server", "harness/internal/cli", "harness/webui", "harness/exploration"} {
-					if imported == forbidden {
+			if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			checked++
+			imports, err := fileImports(path)
+			if err != nil {
+				return err
+			}
+			for _, imported := range imports {
+				for _, forbiddenPath := range forbidden {
+					if imported == forbiddenPath || strings.HasPrefix(imported, forbiddenPath+"/") {
 						t.Fatalf("%s imports forbidden control surface %q", path, imported)
 					}
 				}
 			}
 			return nil
 		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no adapter files were inspected")
 	}
 }
 
 func TestNoLegacyControlSymbols(t *testing.T) {
 	forbidden := map[string]bool{"Workflow": true, "WorkflowRuntime": true, "PiSpec": true, "KnowledgeVerified": true, "AgentResult": true, "SessionFactory": true, "DefaultFactory": true}
-	_ = filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
+	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -68,7 +99,7 @@ func TestNoLegacyControlSymbols(t *testing.T) {
 		}
 		for _, imported := range file.Imports {
 			value, _ := strconv.Unquote(imported.Path.Value)
-			if value == "github.com/red-copilot/harness/exploration" {
+			if value == modulePath+"/exploration" {
 				t.Fatalf("%s imports removed exploration package", path)
 			}
 		}
@@ -81,19 +112,23 @@ func TestNoLegacyControlSymbols(t *testing.T) {
 		})
 		return nil
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
-func fileImports(path string) []string {
+func fileImports(path string) ([]string, error) {
 	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var imports []string
 	for _, spec := range file.Imports {
-		value, _ := strconv.Unquote(spec.Path.Value)
+		value, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			return nil, err
+		}
 		imports = append(imports, value)
 	}
-	return imports
+	return imports, nil
 }
-
-func osReadDir(path string) ([]fs.DirEntry, error) { return os.ReadDir(path) }

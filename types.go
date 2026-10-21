@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"time"
 )
@@ -61,9 +62,11 @@ type Completion struct {
 	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
-// Config configures a Runner.
+// Config configures a Runner. Starter is required: session runtimes receive it
+// through RuntimeRequest and the sandboxed Pi runtime fails closed without it.
 type Config struct {
 	Store         Store
+	Starter       ProcessStarter
 	WorkspaceRoot string
 	MaxSessions   int
 	PollInterval  time.Duration
@@ -256,6 +259,17 @@ type RunSpec struct {
 	ExecutorStrategy ExecutorStrategy
 }
 
+// CurrentSchemaVersion is the only descriptor schema this build accepts.
+const CurrentSchemaVersion = 1
+
+// ValidateDescriptor rejects descriptors from unknown schema generations.
+func ValidateDescriptor(descriptor RunDescriptor) error {
+	if descriptor.SchemaVersion != CurrentSchemaVersion {
+		return fmt.Errorf("unsupported descriptor schema_version %d (want %d)", descriptor.SchemaVersion, CurrentSchemaVersion)
+	}
+	return nil
+}
+
 // RunDescriptor is the serializable portion of a Run.
 type RunDescriptor struct {
 	SchemaVersion int               `json:"schema_version" yaml:"schema_version"`
@@ -302,7 +316,6 @@ type BranchStatus string
 const (
 	BranchOpen      BranchStatus = "open"
 	BranchActive    BranchStatus = "active"
-	BranchPaused    BranchStatus = "paused"
 	BranchResolved  BranchStatus = "resolved"
 	BranchRefuted   BranchStatus = "refuted"
 	BranchBlocked   BranchStatus = "blocked"

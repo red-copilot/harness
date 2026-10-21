@@ -51,12 +51,16 @@ func TestRefuteCreatesContestedPairAndReviewBranch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Trust != harness.KnowledgeContested || len(got.Contradicts) != 2 || !contains(got.Contradicts, "k1") || !contains(got.Contradicts, got.ID) {
+	if got.Trust != harness.KnowledgeContested || len(got.Contradicts) != 1 || !contains(got.Contradicts, "k1") || contains(got.Contradicts, got.ID) {
 		t.Fatalf("contested pair = %+v", got)
 	}
 	found := false
 	for _, event := range events {
 		if event.Type == "knowledge.review_required" {
+			reviewOf, _ := event.Data.(map[string]any)["review_of"].([]string)
+			if len(reviewOf) != 2 || !contains(reviewOf, "k1") || !contains(reviewOf, got.ID) {
+				t.Fatalf("review pair = %v", reviewOf)
+			}
 			found = true
 		}
 	}

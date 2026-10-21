@@ -56,7 +56,7 @@ func TestBackendCompletionWinsAndCancelsWork(t *testing.T) {
 func TestRunnerPersistsFailureWhenAuditWriteFails(t *testing.T) {
 	store := &failingEventStore{memoryStore: newMemoryStore(), failType: "agent_settled"}
 	spec := integrationSpec(t, store.memoryStore)
-	runner, err := harness.NewRunner(harness.Config{Store: store, WorkspaceRoot: t.TempDir(), SkipRecovery: true})
+	runner, err := harness.NewRunner(harness.Config{Store: store, Starter: noopStarter{}, WorkspaceRoot: t.TempDir(), SkipRecovery: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,12 +119,31 @@ func TestRunnerMarksNoAuthoritativeVerdictAsFailed(t *testing.T) {
 
 func TestRunnerMarksUnfinishedRunsInterrupted(t *testing.T) {
 	store := newMemoryStore()
-	_, err := harness.NewRunner(harness.Config{Store: store, WorkspaceRoot: t.TempDir()})
+	_, err := harness.NewRunner(harness.Config{Store: store, Starter: noopStarter{}, WorkspaceRoot: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if store.markInterruptedCalls != 1 {
 		t.Fatalf("MarkInterrupted calls = %d, want 1", store.markInterruptedCalls)
+	}
+}
+
+func TestBackendCompletionConsultedAfterExplorationEnds(t *testing.T) {
+	store := newMemoryStore()
+	spec := integrationSpec(t, store)
+	spec.Verifier = nil
+	spec.Backend = &fakeBackend{completion: harness.Completion{Done: true, Success: true, Score: 7}}
+	spec.PlannerStrategy = staticPlannerStrategy{proposal: harness.PlanProposal{CreateBranches: []harness.BranchProposal{{ParentID: "root", Topic: "web", Goal: "web", Hypothesis: "web", Target: "target-1", SuccessCondition: "yes", FailureCondition: "no"}}}}
+	runner, err := harness.NewRunner(harness.Config{Store: store, Starter: noopStarter{}, WorkspaceRoot: t.TempDir(), PollInterval: time.Hour, SkipRecovery: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runner.Run(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != harness.StatusSucceeded || result.Verdict == nil || result.Verdict.Score != 7 {
+		t.Fatalf("result = %#v, want authoritative backend completion", result)
 	}
 }
 
@@ -206,4 +225,111 @@ func (s *failingEventStore) AppendEvent(ctx context.Context, event harness.Event
 		return harness.Event{}, errors.New("event store unavailable")
 	}
 	return s.memoryStore.AppendEvent(ctx, event)
+}
+
+func TestConfigWiresProcessStarter(t *testing.T) {
+	store := newMemoryStore()
+	if _, err := harness.NewRunner(harness.Config{Store: store, WorkspaceRoot: t.TempDir(), SkipRecovery: true}); err == nil || !strings.Contains(err.Error(), "starter") {
+		t.Fatalf("NewRunner without starter error = %v, want process starter error", err)
+	}
+
+	spec := integrationSpec(t, store)
+	runtime := spec.Planner.Runtime.(*fakeRuntime)
+	if _, err := newTestRunner(t, store).Run(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if len(runtime.requests) == 0 || runtime.requests[0].Starter == nil {
+		t.Fatalf("planner session did not receive the runner process starter: %#v", runtime.requests)
+	}
+}
+
+func TestRunWallTimeBudgetTerminates(t *testing.T) {
+	store := newMemoryStore()
+	spec := integrationSpec(t, store)
+	spec.Budget = harness.Budget{WallTime: 100 * time.Millisecond}
+	spec.PlannerStrategy = staticPlannerStrategy{proposal: harness.PlanProposal{CreateBranches: []harness.BranchProposal{{ParentID: "root", Topic: "web", Goal: "web", Hypothesis: "web", Target: "target-1", SuccessCondition: "yes", FailureCondition: "no"}}}}
+	spec.Executors[0].Runtime = &fakeRuntime{new: func(harness.RuntimeRequest) harness.AgentSession {
+		return &fakeSession{events: make(chan harness.AgentEvent), prompt: func(ctx context.Context, _ string) error {
+			<-ctx.Done()
+			return ctx.Err()
+		}}
+	}}
+	result, err := newTestRunner(t, store).Run(context.Background(), spec)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want deadline exceeded", err)
+	}
+	if result.Status != harness.StatusTimedOut {
+		t.Fatalf("status = %q, want timed_out", result.Status)
+	}
+}
+
+func TestTokenBudgetStopsRun(t *testing.T) {
+	store := newMemoryStore()
+	spec := integrationSpec(t, store)
+	spec.Budget = harness.Budget{MaxTokens: 10}
+	spec.Planner.Runtime = &fakeRuntime{new: func(harness.RuntimeRequest) harness.AgentSession {
+		return &fakeSession{events: make(chan harness.AgentEvent, 4), usage: harness.Usage{TotalTokens: 1000}}
+	}}
+	result, err := newTestRunner(t, store).Run(context.Background(), spec)
+	if err == nil || !strings.Contains(err.Error(), "token budget") {
+		t.Fatalf("err = %v, want token budget error", err)
+	}
+	if result.Status != harness.StatusFailed {
+		t.Fatalf("status = %q, want failed", result.Status)
+	}
+}
+
+func TestMaxSessionsCapsConcurrentAttempts(t *testing.T) {
+	store := newMemoryStore()
+	capped, err := harness.NewRunner(harness.Config{Store: store, Starter: noopStarter{}, MaxSessions: 2, WorkspaceRoot: t.TempDir(), SkipRecovery: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := integrationSpec(t, store)
+	spec.Executors = append(spec.Executors, harness.AgentSpec{ID: "exec-2", Runtime: &fakeRuntime{}})
+	if _, err := capped.Start(context.Background(), spec); err == nil || !strings.Contains(err.Error(), "sessions") {
+		t.Fatalf("Start err = %v, want session cap error", err)
+	}
+
+	allowed, err := harness.NewRunner(harness.Config{Store: store, Starter: noopStarter{}, MaxSessions: 2, WorkspaceRoot: t.TempDir(), SkipRecovery: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := allowed.Run(context.Background(), integrationSpec(t, store)); err != nil {
+		t.Fatalf("run within session cap failed: %v", err)
+	}
+}
+
+func TestCloseWaitsForLiveRuns(t *testing.T) {
+	store := newMemoryStore()
+	spec := integrationSpec(t, store)
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	defer close(release)
+	spec.Executors[0].Runtime = &fakeRuntime{new: func(harness.RuntimeRequest) harness.AgentSession {
+		return &fakeSession{events: make(chan harness.AgentEvent), prompt: func(context.Context, string) error {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-release
+			return nil
+		}}
+	}}
+	runner := newTestRunner(t, store)
+	if _, err := runner.Start(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("executor session never started")
+	}
+	closeCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := runner.Close(closeCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Close err = %v, want deadline exceeded", err)
+	}
 }
