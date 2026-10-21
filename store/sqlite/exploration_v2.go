@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/red-copilot/harness"
+	"github.com/red-copilot/harness/exploration"
 )
 
 // ListKnowledge returns all durable knowledge for one task.
-func (s *Store) ListKnowledge(ctx context.Context, taskID string) ([]harness.Knowledge, error) {
+func (s *Store) ListKnowledge(ctx context.Context, taskID string) ([]exploration.Knowledge, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, task_id, run_id, topic, kind, statement, scope, target, trust, reuse,
 		       evidence_refs, sources, contradicts, valid_from, last_validated_at, expires_at, version
@@ -20,9 +20,9 @@ func (s *Store) ListKnowledge(ctx context.Context, taskID string) ([]harness.Kno
 		return nil, fmt.Errorf("list knowledge: %w", err)
 	}
 	defer rows.Close()
-	out := make([]harness.Knowledge, 0)
+	out := make([]exploration.Knowledge, 0)
 	for rows.Next() {
-		var item harness.Knowledge
+		var item exploration.Knowledge
 		var evidence, sources, contradicts []byte
 		var validFrom, lastValidated, expiresAt sql.NullString
 		if err := rows.Scan(
@@ -51,7 +51,7 @@ func (s *Store) ListKnowledge(ctx context.Context, taskID string) ([]harness.Kno
 }
 
 // SaveKnowledge inserts or updates one durable knowledge item.
-func (s *Store) SaveKnowledge(ctx context.Context, item harness.Knowledge) error {
+func (s *Store) SaveKnowledge(ctx context.Context, item exploration.Knowledge) error {
 	now := time.Now().UTC()
 	if item.ValidFrom.IsZero() {
 		item.ValidFrom = now
@@ -82,7 +82,7 @@ func (s *Store) SaveKnowledge(ctx context.Context, item harness.Knowledge) error
 }
 
 // UpdateKnowledge updates one durable knowledge item by id.
-func (s *Store) UpdateKnowledge(ctx context.Context, item harness.Knowledge) error {
+func (s *Store) UpdateKnowledge(ctx context.Context, item exploration.Knowledge) error {
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE task_knowledge SET run_id=?, topic=?, kind=?, statement=?, scope=?, target=?,
 			trust=?, reuse=?, evidence_refs=?, sources=?, contradicts=?,
@@ -140,7 +140,7 @@ func formatOptionalTimeValue(value time.Time) any {
 }
 
 // SaveBranch inserts or updates one exploration branch.
-func (s *Store) SaveBranch(ctx context.Context, branch harness.Branch) error {
+func (s *Store) SaveBranch(ctx context.Context, branch exploration.Branch) error {
 	now := time.Now().UTC()
 	if branch.CreatedAt.IsZero() {
 		branch.CreatedAt = now
@@ -172,7 +172,7 @@ func (s *Store) SaveBranch(ctx context.Context, branch harness.Branch) error {
 }
 
 // SaveAttempt inserts or updates one branch attempt.
-func (s *Store) SaveAttempt(ctx context.Context, attempt harness.Attempt) error {
+func (s *Store) SaveAttempt(ctx context.Context, attempt exploration.Attempt) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO exploration_attempts(
 			id, branch_id, run_id, session_id, status, outcome, observation_ids,
@@ -192,7 +192,7 @@ func (s *Store) SaveAttempt(ctx context.Context, attempt harness.Attempt) error 
 }
 
 // SaveObservation inserts one immutable observation.
-func (s *Store) SaveObservation(ctx context.Context, observation harness.Observation) error {
+func (s *Store) SaveObservation(ctx context.Context, observation exploration.Observation) error {
 	createdAt := observation.CreatedAt
 	if createdAt.IsZero() {
 		createdAt = time.Now().UTC()
@@ -220,7 +220,7 @@ func encodeJSON(value any) []byte {
 }
 
 // ListBranches returns branches for one run ordered by depth and creation.
-func (s *Store) ListBranches(ctx context.Context, runID string) ([]harness.Branch, error) {
+func (s *Store) ListBranches(ctx context.Context, runID string) ([]exploration.Branch, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, parent_id, task_id, run_id, depth, topic, goal, hypothesis,
 		       success_condition, failure_condition, scope, budget, status, priority,
@@ -230,9 +230,9 @@ func (s *Store) ListBranches(ctx context.Context, runID string) ([]harness.Branc
 		return nil, fmt.Errorf("list branches: %w", err)
 	}
 	defer rows.Close()
-	out := make([]harness.Branch, 0)
+	out := make([]exploration.Branch, 0)
 	for rows.Next() {
-		var branch harness.Branch
+		var branch exploration.Branch
 		var budget, refs []byte
 		var createdAt, updatedAt string
 		if err := rows.Scan(

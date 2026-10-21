@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -90,7 +91,7 @@ func TestBundledExamplesLoad(t *testing.T) {
 	}
 }
 
-func TestSingleAgentConfigEnablesFrontierEngine(t *testing.T) {
+func TestSingleAgentConfigEnablesExplorationWorkflow(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "run.yaml")
 	content := `apiVersion: harness/v1alpha1
 task:
@@ -111,13 +112,15 @@ agents:
 	if err != nil {
 		t.Fatalf("ToRunSpec: %v", err)
 	}
-	if spec.Exploration == nil {
-		t.Fatal("single-agent config did not enable exploration")
+	if err := configureExploration(&spec, nil, nil); err != nil {
+		t.Fatalf("configureExploration: %v", err)
 	}
-	if spec.Exploration.MaxDepth != 4 || spec.Exploration.MaxNodes != 15 {
-		t.Fatalf("tree policy = %+v, want depth 4 nodes 15", spec.Exploration)
+	if spec.Workflow == nil || spec.WorkflowConfig == nil || spec.WorkflowConfig.Name != "exploration" {
+		t.Fatalf("single-agent config did not enable exploration: %#v", spec.WorkflowConfig)
 	}
-	if spec.Exploration.MaxActiveBranches != 2 {
-		t.Fatalf("max active branches = %d, want 2", spec.Exploration.MaxActiveBranches)
+	if !strings.Contains(string(spec.WorkflowConfig.Config), `"max_depth":4`) ||
+		!strings.Contains(string(spec.WorkflowConfig.Config), `"max_nodes":15`) ||
+		!strings.Contains(string(spec.WorkflowConfig.Config), `"max_active_branches":2`) {
+		t.Fatalf("tree policy = %s", spec.WorkflowConfig.Config)
 	}
 }

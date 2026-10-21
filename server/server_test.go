@@ -175,3 +175,55 @@ func TestServerTSecSweep(t *testing.T) {
 		t.Fatalf("persisted sweep: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestServerPassesExplorationPolicyToBuilder(t *testing.T) {
+	store, _ := sqlite.Open(filepath.Join(t.TempDir(), "harness.db"))
+	factory := &fakeFactory{session: &fakeSession{result: harness.AgentResult{Status: harness.StatusSucceeded}}}
+	runner, _ := harness.NewRunner(harness.Config{Store: store, DefaultFactory: factory, WorkspaceRoot: t.TempDir()})
+	var gotDepth int
+	builder := func(req server.RunRequest) (harness.RunSpec, error) {
+		if req.Exploration == nil {
+			t.Fatal("exploration policy was not decoded")
+		}
+		gotDepth = req.Exploration.MaxDepth
+		spec := req.Run
+		spec.Verifier = fakeVerifier{verdict: harness.Verdict{Success: true}}
+		return spec, nil
+	}
+	handler := server.New(runner, store, builder).Handler()
+	body := `{"run":{"task":{"id":"explore","objective":"solve"},"agents":[{"id":"a"}]},"exploration":{"max_depth":2}}`
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/runs", strings.NewReader(body)))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if gotDepth != 2 {
+		t.Fatalf("exploration max_depth = %d, want 2", gotDepth)
+	}
+}
+
+func TestServerAcceptsLegacyNestedExplorationPolicy(t *testing.T) {
+	store, _ := sqlite.Open(filepath.Join(t.TempDir(), "harness.db"))
+	factory := &fakeFactory{session: &fakeSession{result: harness.AgentResult{Status: harness.StatusSucceeded}}}
+	runner, _ := harness.NewRunner(harness.Config{Store: store, DefaultFactory: factory, WorkspaceRoot: t.TempDir()})
+	var gotDepth int
+	builder := func(req server.RunRequest) (harness.RunSpec, error) {
+		if req.Exploration == nil {
+			t.Fatal("nested exploration policy was not decoded")
+		}
+		gotDepth = req.Exploration.MaxDepth
+		spec := req.Run
+		spec.Verifier = fakeVerifier{verdict: harness.Verdict{Success: true}}
+		return spec, nil
+	}
+	handler := server.New(runner, store, builder).Handler()
+	body := `{"run":{"task":{"id":"explore","objective":"solve"},"agents":[{"id":"a"}],"exploration":{"max_depth":3}}}`
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/runs", strings.NewReader(body)))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if gotDepth != 3 {
+		t.Fatalf("exploration max_depth = %d, want 3", gotDepth)
+	}
+}

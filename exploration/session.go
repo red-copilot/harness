@@ -1,16 +1,23 @@
-package harness
+package exploration
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/red-copilot/harness"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
-const MaxBranchReportBytes = 1 << 20
+const (
+	MaxBranchReportBytes     = 1 << 20
+	ReportFileName           = "report.json"
+	DefaultPlannerTimeout    = 120 * time.Second
+	DefaultPlannerToolLimit  = 4
+	DefaultFrontierToolLimit = 8
+)
 
 // ParseBranchPlanOutput parses the planner's JSON output.
 func ParseBranchPlanOutput(data []byte) (BranchPlanOutput, error) {
@@ -74,7 +81,7 @@ func ParseAttemptReport(data []byte, branchID string) (AttemptReport, error) {
 
 // SessionBranchPlanner adapts an AgentSession to the branch planner contract.
 type SessionBranchPlanner struct {
-	Session AgentSession
+	Session harness.AgentSession
 	Sink    EventSink
 	Timeout time.Duration
 }
@@ -83,7 +90,7 @@ func (p *SessionBranchPlanner) Plan(ctx context.Context, request BranchPlanReque
 	if p == nil || p.Session == nil {
 		return BranchPlanOutput{}, fmt.Errorf("branch planner session is required")
 	}
-	resettable, ok := p.Session.(ResettableSession)
+	resettable, ok := p.Session.(harness.ResettableSession)
 	if !ok {
 		return BranchPlanOutput{}, fmt.Errorf("branch planner session does not support reset")
 	}
@@ -111,7 +118,7 @@ func (p *SessionBranchPlanner) Plan(ctx context.Context, request BranchPlanReque
 
 // SessionBranchExecutor adapts an AgentSession to the branch executor contract.
 type SessionBranchExecutor struct {
-	Session      AgentSession
+	Session      harness.AgentSession
 	IDValue      string
 	WorkspaceDir string
 	Sink         EventSink
@@ -128,7 +135,7 @@ func (e *SessionBranchExecutor) Reset(ctx context.Context) error {
 	if e == nil || e.Session == nil {
 		return fmt.Errorf("branch executor session is required")
 	}
-	resettable, ok := e.Session.(ResettableSession)
+	resettable, ok := e.Session.(harness.ResettableSession)
 	if !ok {
 		return fmt.Errorf("branch executor session does not support reset")
 	}

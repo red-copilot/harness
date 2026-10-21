@@ -218,7 +218,12 @@ func (s *fakeSession) Wait(ctx context.Context) (harness.AgentResult, error) {
 	<-ctx.Done()
 	return harness.AgentResult{Status: harness.StatusCancelled, Error: ctx.Err().Error()}, ctx.Err()
 }
-func (s *fakeSession) Usage() harness.Usage        { return s.usage }
+func (s *fakeSession) Usage() harness.Usage {
+	if s.usage != (harness.Usage{}) {
+		return s.usage
+	}
+	return s.result.Usage
+}
 func (s *fakeSession) Abort(context.Context) error { return nil }
 func (s *fakeSession) Close(context.Context) error {
 	s.once.Do(func() {
@@ -421,14 +426,14 @@ func TestRunnerFailsWhenUsageBudgetExceeded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = runner.Run(context.Background(), harness.RunSpec{
+	result, err := runner.Run(context.Background(), harness.RunSpec{
 		Task:     harness.Task{ID: "budget", Objective: "solve"},
 		Agents:   []harness.AgentSpec{{ID: "a"}},
 		Budget:   harness.Budget{MaxToolCalls: 1},
 		Verifier: fakeVerifier{verdict: harness.Verdict{Success: true}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "budget exceeded") {
-		t.Fatalf("expected budget error, got %v", err)
+		t.Fatalf("expected budget error, result=%#v err=%v", result, err)
 	}
 }
 

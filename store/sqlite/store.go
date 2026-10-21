@@ -128,20 +128,6 @@ func (s *Store) migrate() error {
 		_ = tx.Rollback()
 		return cause
 	}
-	if version == 1 {
-		runIDs, err := explorationRunIDs(ctx, tx)
-		if err != nil {
-			return rollback(err)
-		}
-		for _, runID := range runIDs {
-			if _, err := tx.ExecContext(ctx, `DELETE FROM events WHERE run_id=?`, runID); err != nil {
-				return rollback(fmt.Errorf("delete exploration events: %w", err))
-			}
-			if _, err := tx.ExecContext(ctx, `DELETE FROM logs WHERE run_id=?`, runID); err != nil {
-				return rollback(fmt.Errorf("delete exploration logs: %w", err))
-			}
-		}
-	}
 	for _, stmt := range v2SchemaStatements() {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
 			return rollback(fmt.Errorf("migrate v2: %w", err))
@@ -153,27 +139,7 @@ func (s *Store) migrate() error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit schema migration: %w", err)
 	}
-	_, _ = s.db.ExecContext(ctx, `VACUUM`)
 	return nil
-}
-
-func explorationRunIDs(ctx context.Context, tx *sql.Tx) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT DISTINCT run_id FROM events
-		WHERE type LIKE 'exploration.%' OR source='control'`)
-	if err != nil {
-		return nil, fmt.Errorf("find exploration runs: %w", err)
-	}
-	defer rows.Close()
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
 }
 
 func v2SchemaStatements() []string {

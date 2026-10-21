@@ -13,8 +13,40 @@ import (
 	"time"
 
 	"github.com/red-copilot/harness"
+	"github.com/red-copilot/harness/exploration"
 	"github.com/red-copilot/harness/verify"
 )
+
+func (r *RunRequest) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Run             json.RawMessage     `json:"run"`
+		Exploration     *exploration.Policy `json:"exploration,omitempty"`
+		VerifierCommand *verify.Command     `json:"verifier_command,omitempty"`
+		TSec            *TSecRequest        `json:"tsec,omitempty"`
+		Target          *TargetRequest      `json:"target,omitempty"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if len(raw.Run) > 0 {
+		var run struct {
+			harness.RunSpec
+			Exploration *exploration.Policy `json:"exploration,omitempty"`
+		}
+		if err := json.Unmarshal(raw.Run, &run); err != nil {
+			return err
+		}
+		r.Run = run.RunSpec
+		if raw.Exploration == nil {
+			raw.Exploration = run.Exploration
+		}
+	}
+	r.Exploration = raw.Exploration
+	r.VerifierCommand = raw.VerifierCommand
+	r.TSec = raw.TSec
+	r.Target = raw.Target
+	return nil
+}
 
 type TargetRequest struct {
 	Kind        string   `json:"kind,omitempty"`
@@ -31,10 +63,11 @@ type TargetRequest struct {
 }
 
 type RunRequest struct {
-	Run             harness.RunSpec `json:"run"`
-	VerifierCommand *verify.Command `json:"verifier_command,omitempty"`
-	TSec            *TSecRequest    `json:"tsec,omitempty"`
-	Target          *TargetRequest  `json:"target,omitempty"`
+	Run             harness.RunSpec     `json:"run"`
+	Exploration     *exploration.Policy `json:"exploration,omitempty"`
+	VerifierCommand *verify.Command     `json:"verifier_command,omitempty"`
+	TSec            *TSecRequest        `json:"tsec,omitempty"`
+	Target          *TargetRequest      `json:"target,omitempty"`
 }
 
 type TSecRequest struct {
@@ -114,11 +147,11 @@ type SweepOverview struct {
 }
 
 type branchReader interface {
-	ListBranches(context.Context, string) ([]harness.Branch, error)
+	ListBranches(context.Context, string) ([]exploration.Branch, error)
 }
 
 type knowledgeReader interface {
-	ListKnowledge(context.Context, string) ([]harness.Knowledge, error)
+	ListKnowledge(context.Context, string) ([]exploration.Knowledge, error)
 }
 
 type Server struct {

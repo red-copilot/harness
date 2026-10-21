@@ -447,6 +447,10 @@ waitOutcome:
 			runErr = errors.Join(runErr, errors.New("workflow did not stop after cancellation"))
 		}
 	}
+	run.cancel()
+	if status == "" && runErr != nil {
+		status = StatusFailed
+	}
 
 	if pendingVerify && status == "" && closeErr == nil {
 		if reason := exceededBudget(aggregateUsage(sessionResults), spec.Budget); reason != "" {
@@ -525,4 +529,136 @@ waitOutcome:
 		result.Error = redactor.Redact(runErr.Error())
 	}
 	run.finish(result, runErr)
+}
+
+// directWorkflow preserves the default Harness behavior when no workflow is
+// configured: each declared agent receives the bounded task prompt and runs in
+// its own isolated session.
+type directWorkflow struct{}
+
+func (directWorkflow) Execute(ctx context.Context, rt WorkflowRuntime) (WorkflowResult, error) {
+	workflowCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	errs := make(chan error, len(rt.Agents()))
+	var wg sync.WaitGroup
+	for _, agent := range rt.Agents() {
+		agent := agent
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			lease, err := rt.OpenSession(workflowCtx, agent)
+			if err != nil {
+				errs <- err
+				cancel()
+				return
+			}
+
+			eventErr := make(chan error, 1)
+			events := lease.Session.Events()
+			go func() {
+				for {
+					select {
+					case event, ok := <-events:
+						if !ok {
+							eventErr <- nil
+							return
+						}
+						if err := rt.Emit(workflowCtx, Event{
+							SessionID: lease.ID, Source: "agent", Type: event.Type, Data: event.Data,
+						}); err != nil {
+							eventErr <- err
+							cancel()
+							return
+						}
+					case <-workflowCtx.Done():
+						eventErr <- workflowCtx.Err()
+						return
+					}
+				}
+			}()
+
+			if err := lease.Session.Prompt(workflowCtx, buildPrompt(rt.Task(), rt.Target())); err != nil {
+				errs <- err
+				cancel()
+				return
+			}
+			result, waitErr := lease.Session.Wait(workflowCtx)
+			if waitErr != nil {
+				errs <- waitErr
+				cancel()
+				return
+			}
+			if result.Status != StatusSucceeded {
+				errs <- fmt.Errorf("session %s finished with status %s", lease.ID, result.Status)
+				cancel()
+				return
+			}
+			select {
+			case err := <-eventErr:
+				if err != nil && !errors.Is(err, context.Canceled) {
+					errs <- err
+					cancel()
+				}
+			case <-time.After(2 * time.Second):
+				errs <- fmt.Errorf("timed out waiting for %s events", lease.ID)
+				cancel()
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	var joined error
+	for err := range errs {
+		joined = errors.Join(joined, err)
+	}
+	return WorkflowResult{}, joined
+}
+
+func sessionWorkspace(runRoot, sessionID string) string {
+	return filepath.Join(runRoot, "sessions", sessionID)
+}
+
+type completionTracker struct {
+	mu     sync.RWMutex
+	latest Completion
+}
+
+func (t *completionTracker) Update(completion Completion) (Completion, bool) {
+	if t == nil {
+		return Completion{}, false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	changed := t.latest.Progress != completion.Progress ||
+		t.latest.Total != completion.Total ||
+		t.latest.Done != completion.Done ||
+		t.latest.Success != completion.Success
+	t.latest = completion
+	return completion, changed
+}
+
+func (t *completionTracker) Snapshot() Completion {
+	if t == nil {
+		return Completion{}
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.latest
+}
+
+func (r *Runner) recordBackendProgress(run *Run, redactor *Redactor, tracker *completionTracker, completion Completion) {
+	if tracker == nil || (completion.Progress == 0 && completion.Total == 0 && !completion.Done) {
+		return
+	}
+	if _, changed := tracker.Update(completion); !changed {
+		return
+	}
+	if _, err := r.appendEvent(run, redactor, Event{
+		RunID: run.ID, Source: "backend", Type: "backend.progress",
+		Time: time.Now().UTC(), Data: mustJSON(completion),
+	}); err != nil {
+		run.setControlError(err)
+		run.cancel()
+	}
 }

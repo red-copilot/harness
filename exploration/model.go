@@ -1,9 +1,10 @@
-package harness
+package exploration
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/red-copilot/harness"
 	"net/url"
 	"strings"
 	"time"
@@ -189,8 +190,8 @@ type Knowledge struct {
 
 // ExplorationPolicy bounds the binary hypothesis tree.
 type ExplorationPolicy struct {
-	// Legacy fields are retained only until the v2 runner migration is
-	// complete. They are not used by the binary-tree engine.
+	// Rounds is accepted for configuration compatibility; the binary tree is
+	// bounded by MaxNodes instead.
 	Rounds           int      `json:"rounds,omitempty" yaml:"rounds,omitempty"`
 	MaxWorkers       int      `json:"max_workers,omitempty" yaml:"max_workers,omitempty"`
 	PlannerAgentID   string   `json:"planner_agent_id,omitempty" yaml:"planner_agent_id,omitempty"`
@@ -205,6 +206,15 @@ type ExplorationPolicy struct {
 	MaxWallTimePerAttempt  time.Duration `json:"max_wall_time_per_attempt,omitempty" yaml:"max_wall_time_per_attempt,omitempty"`
 	StagnationRounds       int           `json:"stagnation_rounds,omitempty" yaml:"stagnation_rounds,omitempty"`
 }
+
+// Policy is the binary-tree exploration configuration.
+type Policy = ExplorationPolicy
+
+// DefaultPolicy returns the binary-tree defaults.
+func DefaultPolicy() Policy { return DefaultExplorationPolicy() }
+
+// NormalizePolicy fills zero fields with binary-tree defaults.
+func NormalizePolicy(policy Policy) Policy { return NormalizeExplorationPolicy(policy) }
 
 // DefaultExplorationPolicy returns the v2 binary-tree defaults.
 func DefaultExplorationPolicy() ExplorationPolicy {
@@ -254,7 +264,7 @@ func NormalizeExplorationPolicy(policy ExplorationPolicy) ExplorationPolicy {
 func ValidateBranchProposal(
 	proposal BranchProposal,
 	parent *Branch,
-	targets []Target,
+	targets []harness.Target,
 	existing []Branch,
 	policy ExplorationPolicy,
 ) (Branch, error) {
@@ -379,7 +389,7 @@ func shortHash(value string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func authorizedTargetV2(target string, targets []Target) bool {
+func authorizedTargetV2(target string, targets []harness.Target) bool {
 	target = strings.TrimSpace(target)
 	if target == "" {
 		return false
@@ -427,4 +437,20 @@ func containsSecretLikeValue(value string) bool {
 		}
 	}
 	return false
+}
+
+func appendUnique(values []string, additions ...string) []string {
+	seen := make(map[string]struct{}, len(values)+len(additions))
+	out := make([]string, 0, len(values)+len(additions))
+	for _, value := range append(append([]string(nil), values...), additions...) {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }

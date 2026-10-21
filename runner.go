@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 )
@@ -170,9 +169,6 @@ func validateSpec(spec RunSpec, maxSessions int) error {
 	if len(spec.Agents) == 0 {
 		return errors.New("at least one agent is required")
 	}
-	if spec.Exploration == nil && spec.Workflow == nil && len(spec.Agents) > maxSessions {
-		return fmt.Errorf("at most %d agent sessions are supported", maxSessions)
-	}
 	seen := map[string]struct{}{}
 	for i, agent := range spec.Agents {
 		if agent.ID == "" {
@@ -183,437 +179,14 @@ func validateSpec(spec RunSpec, maxSessions int) error {
 		}
 		seen[agent.ID] = struct{}{}
 	}
-	if spec.Exploration != nil {
-		sessions, err := explorationSessionCount(spec)
-		if err != nil {
-			return err
-		}
-		if sessions > maxSessions {
-			return fmt.Errorf("at most %d agent sessions are supported", maxSessions)
-		}
-	}
 	return nil
 }
 
 func (r *Runner) execute(run *Run, spec RunSpec, redactor *Redactor) {
-	if spec.Workflow != nil {
-		r.executeWorkflow(run, spec, redactor)
-		return
+	if spec.Workflow == nil {
+		spec.Workflow = directWorkflow{}
 	}
-	started := time.Now().UTC()
-	if err := r.updateRun(run, func(record *RunRecord) {
-		record.Status = StatusRunning
-		record.StartedAt = &started
-	}); err != nil {
-		run.finish(Result{RunID: run.ID, Status: StatusFailed, Error: err.Error()}, err)
-		return
-	}
-	r.emitEvent(run, redactor, Event{RunID: run.ID, Source: "harness", Type: "run.started", Time: started})
-
-	target := spec.Target
-	backendProgress := &completionTracker{}
-	closeBackend := func() {}
-	defer func() { closeBackend() }()
-	if spec.Backend != nil {
-		var err error
-		target, err = spec.Backend.Provision(run.ctx, ProvisionRequest{
-			RunID: run.ID, Task: spec.Task, Metadata: target.Metadata,
-		})
-		if err != nil {
-			finished := time.Now().UTC()
-			_ = r.updateRun(run, func(record *RunRecord) {
-				record.Status = StatusFailed
-				record.Error = err.Error()
-				record.FinishedAt = &finished
-			})
-			r.emitEvent(run, redactor, Event{
-				RunID: run.ID, Source: "harness", Type: "run.failed", Time: finished,
-				Data: mustJSON(map[string]string{"error": redactor.Redact(err.Error())}),
-			})
-			run.finish(Result{RunID: run.ID, Status: StatusFailed, Error: err.Error(), StartedAt: &started, FinishedAt: &finished}, err)
-			return
-		}
-		closeBackend = func() {
-			if err := spec.Backend.Close(context.Background(), target); err != nil {
-				r.logger.Warn("backend close failed", "run_id", run.ID, "error", err)
-			}
-		}
-		r.emitEvent(run, redactor, Event{
-			RunID: run.ID, Source: "backend", Type: "backend.provisioned", Time: time.Now().UTC(),
-			Data: mustJSON(target),
-		})
-		if completion, err := spec.Backend.Observe(run.ctx, target); err == nil {
-			r.recordBackendProgress(run, redactor, backendProgress, completion)
-		} else {
-			r.emitEvent(run, redactor, Event{
-				RunID: run.ID, Source: "backend", Type: "backend.observe_error",
-				Time: time.Now().UTC(), Data: mustJSON(map[string]string{"error": redactor.Redact(err.Error())}),
-			})
-		}
-	}
-
-	runRoot := filepath.Join(r.workspaceRoot, run.ID)
-	if spec.WorkspaceRoot != "" {
-		runRoot = spec.WorkspaceRoot
-	}
-	taskDir := filepath.Join(runRoot, "task")
-	skillsDir := filepath.Join(runRoot, "skills")
-	if err := os.MkdirAll(taskDir, 0o700); err != nil {
-		r.fail(run, redactor, started, fmt.Errorf("create task dir: %w", err))
-		return
-	}
-	if err := os.MkdirAll(skillsDir, 0o700); err != nil {
-		r.fail(run, redactor, started, fmt.Errorf("create skills dir: %w", err))
-		return
-	}
-	if err := prepareEmbeddedSkills(skillsDir); err != nil {
-		r.fail(run, redactor, started, fmt.Errorf("prepare embedded skills: %w", err))
-		return
-	}
-
-	sessionCtxs := map[string]context.CancelFunc{}
-	sessionDirs := map[string]string{}
-	sessionCount := len(spec.Agents)
-	if spec.Exploration != nil {
-		var err error
-		sessionCount, err = explorationSessionCount(spec)
-		if err != nil {
-			r.fail(run, redactor, started, err)
-			return
-		}
-	} else {
-		for _, agent := range spec.Agents {
-			sessionDir := filepath.Join(runRoot, "sessions", agent.ID)
-			if err := os.MkdirAll(sessionDir, 0o700); err != nil {
-				r.fail(run, redactor, started, fmt.Errorf("create session workspace: %w", err))
-				return
-			}
-			sessionDirs[agent.ID] = sessionDir
-		}
-	}
-	sessionResults := make(chan SessionResult, sessionCount)
-	var sessionsWG sync.WaitGroup
-
-	if spec.Exploration != nil {
-		sessionsWG.Add(1)
-		go func() {
-			defer sessionsWG.Done()
-			for _, result := range r.runExplorationSessions(run.ctx, run, redactor, spec, target, runRoot, taskDir, skillsDir, backendProgress) {
-				sessionResults <- result
-			}
-		}()
-	} else {
-		for _, agent := range spec.Agents {
-			factory := agent.Factory
-			if factory == nil {
-				factory = r.defaultFactory
-			}
-			sessionID := agent.ID
-			workspaceDir := sessionDirs[sessionID]
-			sessionCtx, sessionCancel := context.WithCancel(run.ctx)
-			sessionCtxs[sessionID] = sessionCancel
-			env := buildEnvironment(run.ID, sessionID, spec, agent, target, workspaceDir, taskDir, skillsDir)
-			req := SessionRequest{
-				RunID: run.ID, SessionID: sessionID, Agent: agent, Task: spec.Task, Target: target,
-				WorkspaceDir: workspaceDir, TaskDir: taskDir, SkillsDir: skillsDir,
-				Env: env, Starter: r.starter,
-			}
-			sessionsWG.Add(1)
-			go func() {
-				defer sessionsWG.Done()
-				sessionResults <- r.runOneSession(sessionCtx, run, redactor, spec, factory, req)
-			}()
-		}
-	}
-
-	var completionOut chan Completion
-	var completionCh <-chan Completion
-	var backgroundWG sync.WaitGroup
-	if spec.Backend != nil {
-		completionOut = make(chan Completion, 1)
-		completionCh = completionOut
-		backgroundWG.Add(1)
-		go func() {
-			defer backgroundWG.Done()
-			r.observeBackend(run.ctx, redactor, run, spec.Backend, target, completionOut, func(completion Completion) {
-				r.recordBackendProgress(run, redactor, backendProgress, completion)
-			})
-		}()
-	}
-
-	var (
-		status      Status
-		verdict     *Verdict
-		runErr      error
-		results     []SessionResult
-		remaining   = sessionCount
-		verifierRan = false
-	)
-	for status == "" {
-		select {
-		case result := <-sessionResults:
-			results = append(results, result)
-			remaining--
-			if reason := exceededBudget(aggregateUsage(results), spec.Budget); reason != "" {
-				status = StatusFailed
-				runErr = fmt.Errorf("budget exceeded: %s", reason)
-			}
-		case completion := <-completionCh:
-			verdict = completionToVerdict(completion)
-			if verdict.Success {
-				status = StatusSucceeded
-			} else {
-				status = StatusFailed
-			}
-		case <-run.ctx.Done():
-			if reason := run.controlError(); reason != "" {
-				status = StatusFailed
-				runErr = errors.New(reason)
-			} else if reason := run.budgetExceeded(); reason != "" {
-				status = StatusFailed
-				runErr = fmt.Errorf("budget exceeded: %s", reason)
-			} else if errors.Is(run.ctx.Err(), context.DeadlineExceeded) {
-				status = StatusTimedOut
-			} else {
-				status = StatusCancelled
-			}
-		}
-		if status != "" {
-			break
-		}
-		if remaining == 0 && !verifierRan {
-			verifierRan = true
-			if run.isStagnated() && spec.Verifier == nil {
-				status = StatusStagnated
-				break
-			}
-			if reason := exceededBudget(aggregateUsage(results), spec.Budget); reason != "" {
-				status = StatusFailed
-				runErr = fmt.Errorf("budget exceeded: %s", reason)
-				break
-			}
-			if spec.Verifier != nil {
-				v, err := spec.Verifier.Verify(context.Background(), VerifyRequest{
-					RunID: run.ID, Task: spec.Task, Target: target, Sessions: results,
-					WorkspaceRoot: runRoot, Store: r.store,
-				})
-				if err != nil {
-					status = StatusFailed
-					runErr = fmt.Errorf("verifier: %w", err)
-					break
-				}
-				verdict = &v
-				if v.Success {
-					status = StatusSucceeded
-				} else {
-					status = StatusFailed
-				}
-			} else if spec.Backend == nil {
-				status = StatusFailed
-			}
-		}
-	}
-
-	for _, cancel := range sessionCtxs {
-		cancel()
-	}
-	for id, session := range run.snapshotSessions() {
-		_ = session.Abort(context.Background())
-		_ = session.Close(context.Background())
-		r.emitEvent(run, redactor, Event{
-			RunID: run.ID, SessionID: id, Source: "harness", Type: "session.closed", Time: time.Now().UTC(),
-		})
-	}
-	waitGroupDone := make(chan struct{})
-	go func() {
-		sessionsWG.Wait()
-		close(waitGroupDone)
-	}()
-	select {
-	case <-waitGroupDone:
-	case <-time.After(5 * time.Second):
-		r.logger.Warn("timed out waiting for sessions to close", "run_id", run.ID)
-	}
-	close(sessionResults)
-	for result := range sessionResults {
-		results = append(results, result)
-	}
-	backgroundWG.Wait()
-
-	closeBackend()
-	closeBackend = func() {}
-
-	if verdict == nil && status == StatusSucceeded {
-		verdict = &Verdict{Success: true, Message: "backend completion"}
-	}
-	if verdict == nil && status == StatusFailed && runErr == nil {
-		verdict = &Verdict{Success: false, Message: "no authoritative verdict"}
-	}
-
-	finished := time.Now().UTC()
-	usage := aggregateUsage(results)
-	result := Result{
-		RunID: run.ID, Status: status, Verdict: verdict, Sessions: results, Usage: usage,
-		StartedAt: &started, FinishedAt: &finished,
-	}
-	if runErr != nil {
-		result.Error = redactor.Redact(runErr.Error())
-		runErr = errors.New(result.Error)
-	}
-	if verdict != nil {
-		redactedVerdict := *verdict
-		redactedVerdict.Message = redactor.Redact(redactedVerdict.Message)
-		redactedVerdict.Evidence = redactor.RedactJSON(redactedVerdict.Evidence)
-		verdict = &redactedVerdict
-		result.Verdict = verdict
-		_ = r.store.SaveVerdict(context.Background(), VerdictRecord{
-			RunID: run.ID, Success: verdict.Success, Score: verdict.Score,
-			Message: redactor.Redact(verdict.Message), Evidence: redactor.RedactJSON(verdict.Evidence),
-			CreatedAt: finished,
-		})
-	}
-	r.emitEvent(run, redactor, Event{
-		RunID: run.ID, Source: "harness", Type: "run.finished", Time: finished,
-		Data: mustJSON(map[string]any{"status": status, "verdict": verdict}),
-	})
-	resultJSON, _ := json.Marshal(result)
-	resultJSON = redactor.RedactJSON(resultJSON)
-	_ = r.updateRun(run, func(record *RunRecord) {
-		record.Status = status
-		record.Result = resultJSON
-		record.Error = redactError(redactor, runErr)
-		record.FinishedAt = &finished
-	})
-	run.finish(result, runErr)
-}
-
-func (r *Runner) runOneSession(ctx context.Context, run *Run, redactor *Redactor, spec RunSpec, factory SessionFactory, req SessionRequest) SessionResult {
-	result := SessionResult{ID: req.SessionID, Status: StatusFailed}
-	if factory == nil {
-		result.Error = "no session factory configured"
-		return result
-	}
-	session, err := factory.NewSession(ctx, req)
-	if err != nil {
-		result.Error = redactor.Redact(err.Error())
-		return result
-	}
-	run.addSession(req.SessionID, session)
-	r.emitEvent(run, redactor, Event{
-		RunID: run.ID, SessionID: req.SessionID, Source: "harness", Type: "session.started", Time: time.Now().UTC(),
-	})
-	exploration := NewExplorationState(run.ID, req.SessionID, spec.Task, req.Target)
-	eventDone := make(chan struct{})
-	eventStream := session.Events()
-	go func() {
-		defer close(eventDone)
-		for {
-			select {
-			case event, ok := <-eventStream:
-				if !ok {
-					return
-				}
-				stored := r.emitEvent(run, redactor, Event{
-					RunID: run.ID, SessionID: req.SessionID, Source: "agent", Type: event.Type,
-					Time: time.Now().UTC(), Data: event.Data,
-				})
-				if stored.Seq == 0 {
-					run.setControlError(errors.New("persist agent event before exploration update"))
-					run.cancel()
-					return
-				}
-				if stored.Type == "turn_end" {
-					next, err := ReduceExploration(exploration, stored)
-					if err != nil {
-						run.setControlError(fmt.Errorf("reduce exploration: %w", err))
-						run.cancel()
-						return
-					}
-					exploration = next
-					if r.emitEvent(run, redactor, Event{
-						RunID: run.ID, SessionID: req.SessionID, Source: "control",
-						Type: "exploration.state.updated", Time: time.Now().UTC(), Data: mustJSON(exploration),
-					}).Seq == 0 {
-						run.setControlError(errors.New("persist exploration state"))
-						run.cancel()
-						return
-					}
-					explorationContext := BuildExplorationContext(exploration, 1)
-					if r.emitEvent(run, redactor, Event{
-						RunID: run.ID, SessionID: req.SessionID, Source: "control",
-						Type: "exploration.frontier.updated", Time: time.Now().UTC(), Data: mustJSON(explorationContext),
-					}).Seq == 0 {
-						run.setControlError(errors.New("persist exploration frontier"))
-						run.cancel()
-						return
-					}
-					if err := session.Steer(ctx, FormatExplorationContext(explorationContext)); err != nil {
-						if ctx.Err() != nil {
-							return
-						}
-						run.setControlError(fmt.Errorf("steer exploration frontier: %w", err))
-						run.cancel()
-						return
-					}
-				}
-				r.checkLiveBudget(run, spec.Budget, session)
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-	logDone := make(chan struct{})
-	if source, ok := session.(LogSource); ok {
-		go func() {
-			defer close(logDone)
-			for {
-				select {
-				case log, ok := <-source.Logs():
-					if !ok {
-						return
-					}
-					r.emitLog(run, redactor, LogRecord{
-						RunID: run.ID, SessionID: req.SessionID, Stream: log.Stream,
-						Time: time.Now().UTC(), Text: log.Text,
-					})
-				case <-ctx.Done():
-					return
-				}
-			}
-		}()
-	} else {
-		close(logDone)
-	}
-	initialContext := BuildExplorationContext(exploration, 1)
-	prompt := buildPrompt(spec.Task, req.Target) + "\n\n" + FormatExplorationContext(initialContext)
-	if err := session.Prompt(ctx, prompt); err != nil {
-		result.Error = redactor.Redact(err.Error())
-		_ = session.Close(context.Background())
-		<-eventDone
-		<-logDone
-		return result
-	}
-	r.checkLiveBudget(run, spec.Budget, session)
-	agentResult, waitErr := session.Wait(ctx)
-	if waitErr != nil {
-		result.Error = redactor.Redact(waitErr.Error())
-	} else {
-		result.Error = redactor.Redact(agentResult.Error)
-	}
-	result.Status = agentResult.Status
-	if result.Status == "" {
-		result.Status = StatusFailed
-	}
-	result.ExitCode = agentResult.ExitCode
-	result.Usage = agentResult.Usage
-	_ = session.Close(context.Background())
-	<-eventDone
-	<-logDone
-	r.emitEvent(run, redactor, Event{
-		RunID: run.ID, SessionID: req.SessionID, Source: "harness", Type: "session.finished",
-		Time: time.Now().UTC(), Data: mustJSON(result),
-	})
-	return result
+	r.executeWorkflow(run, spec, redactor)
 }
 
 func (r *Runner) observeBackend(ctx context.Context, redactor *Redactor, run *Run, backend Backend, target Target, out chan<- Completion, onProgress func(Completion)) {
@@ -627,10 +200,14 @@ func (r *Runner) observeBackend(ctx context.Context, redactor *Redactor, run *Ru
 		}
 		completion, err := backend.Observe(ctx, target)
 		if err != nil {
-			r.emitEvent(run, redactor, Event{
+			if _, eventErr := r.appendEvent(run, redactor, Event{
 				RunID: run.ID, Source: "backend", Type: "backend.observe_error",
 				Time: time.Now().UTC(), Data: mustJSON(map[string]string{"error": redactor.Redact(err.Error())}),
-			})
+			}); eventErr != nil {
+				run.setControlError(eventErr)
+				run.cancel()
+				return
+			}
 			continue
 		}
 		if onProgress != nil {
@@ -686,12 +263,6 @@ func (r *Runner) appendLog(run *Run, redactor *Redactor, record LogRecord) error
 		return fmt.Errorf("persist %s log: %w", record.Stream, err)
 	}
 	return nil
-}
-
-func (r *Runner) emitLog(run *Run, redactor *Redactor, record LogRecord) {
-	if err := r.appendLog(run, redactor, record); err != nil {
-		r.logger.Warn("persist log failed", "run_id", run.ID, "stream", record.Stream, "error", err)
-	}
 }
 
 func (r *Runner) fail(run *Run, redactor *Redactor, started time.Time, err error) {
@@ -809,6 +380,7 @@ against the authorized targets above.`, task.Objective, targetJSON, hint)
 
 func specForStore(spec RunSpec) RunSpec {
 	out := spec
+	out.Workflow = nil
 	out.Agents = append([]AgentSpec(nil), spec.Agents...)
 	for i := range out.Agents {
 		out.Agents[i].Factory = nil

@@ -103,7 +103,9 @@ func serve(args []string, stdout, stderr io.Writer) error {
 	}
 	builder := func(req server.RunRequest) (harness.RunSpec, error) {
 		spec := req.Run
-		enableDefaultExploration(&spec)
+		if err := configureExploration(&spec, req.Exploration, store); err != nil {
+			return harness.RunSpec{}, err
+		}
 		applyPiEnvironmentDefaults(&spec)
 		if req.VerifierCommand != nil {
 			spec.Verifier = *req.VerifierCommand
@@ -147,7 +149,9 @@ func serve(args []string, stdout, stderr io.Writer) error {
 		if req.TSec == nil {
 			return server.SweepPlan{}, errors.New("tsec configuration is required for a sweep")
 		}
-		enableDefaultExploration(&req.Run)
+		if err := configureExploration(&req.Run, nil, store); err != nil {
+			return server.SweepPlan{}, err
+		}
 		applyPiEnvironmentDefaults(&req.Run)
 		baseURL := req.TSec.BaseURL
 		if baseURL == "" {
@@ -219,11 +223,14 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if *workspace != "" {
 		spec.WorkspaceRoot = *workspace
 	}
-	runner, _, err := newRunner(*dbPath, spec.WorkspaceRoot)
+	runner, store, err := newRunner(*dbPath, spec.WorkspaceRoot)
 	if err != nil {
 		return err
 	}
 	defer runner.Close(context.Background())
+	if err := configureExploration(&spec, cfg.Exploration, store); err != nil {
+		return err
+	}
 	if cfg.TSec != nil {
 		client, err := clientFromTSec(cfg.TSec, "")
 		if err != nil {
@@ -331,11 +338,14 @@ func tsecRun(args []string, stdout, stderr io.Writer) error {
 	if *workspace != "" {
 		spec.WorkspaceRoot = *workspace
 	}
-	runner, _, err := newRunner(*dbPath, spec.WorkspaceRoot)
+	runner, store, err := newRunner(*dbPath, spec.WorkspaceRoot)
 	if err != nil {
 		return err
 	}
 	defer runner.Close(context.Background())
+	if err := configureExploration(&spec, cfg.Exploration, store); err != nil {
+		return err
+	}
 	client, err := tsecClient(*baseURL, *token, *baseEnv, *tokenEnv, true)
 	if err != nil {
 		return err

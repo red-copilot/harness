@@ -179,7 +179,7 @@ type AgentSession interface {
 }
 
 // ResettableSession can discard its conversation context while keeping the
-// underlying process alive. The Harness uses this for fresh frontier turns.
+// underlying process alive. Workflows use this for fresh bounded turns.
 type ResettableSession interface {
 	Reset(context.Context) error
 }
@@ -265,10 +265,6 @@ type Verifier interface {
 	Verify(context.Context, VerifyRequest) (Verdict, error)
 }
 
-// ExplorationSpec is the legacy name for the v2 exploration policy.
-// Deprecated: use ExplorationPolicy.
-type ExplorationSpec = ExplorationPolicy
-
 // WorkflowResult is the bounded, non-authoritative outcome of a workflow.
 type WorkflowResult struct {
 	Stagnated bool `json:"stagnated,omitempty"`
@@ -310,17 +306,16 @@ type WorkflowConfig struct {
 
 // RunSpec is the Go-first input contract for one run.
 type RunSpec struct {
-	Task           Task               `json:"task" yaml:"task"`
-	Target         Target             `json:"target,omitempty" yaml:"target,omitempty"`
-	Agents         []AgentSpec        `json:"agents" yaml:"agents"`
-	Exploration    *ExplorationPolicy `json:"exploration,omitempty" yaml:"exploration,omitempty"`
-	Workflow       Workflow           `json:"-" yaml:"-"`
-	WorkflowConfig *WorkflowConfig    `json:"workflow,omitempty" yaml:"-"`
-	Budget         Budget             `json:"budget,omitempty" yaml:"budget,omitempty"`
-	Backend        Backend            `json:"-" yaml:"-"`
-	Verifier       Verifier           `json:"-" yaml:"-"`
-	SecretEnv      []string           `json:"secret_env,omitempty" yaml:"secret_env,omitempty"`
-	WorkspaceRoot  string             `json:"workspace_root,omitempty" yaml:"workspace_root,omitempty"`
+	Task           Task            `json:"task" yaml:"task"`
+	Target         Target          `json:"target,omitempty" yaml:"target,omitempty"`
+	Agents         []AgentSpec     `json:"agents" yaml:"agents"`
+	Workflow       Workflow        `json:"-" yaml:"-"`
+	WorkflowConfig *WorkflowConfig `json:"workflow,omitempty" yaml:"-"`
+	Budget         Budget          `json:"budget,omitempty" yaml:"budget,omitempty"`
+	Backend        Backend         `json:"-" yaml:"-"`
+	Verifier       Verifier        `json:"-" yaml:"-"`
+	SecretEnv      []string        `json:"secret_env,omitempty" yaml:"secret_env,omitempty"`
+	WorkspaceRoot  string          `json:"workspace_root,omitempty" yaml:"workspace_root,omitempty"`
 }
 
 // Event is an append-only run or session event.
@@ -415,59 +410,4 @@ type Store interface {
 	ListSweeps(context.Context, int) ([]SweepRecord, error)
 	MarkInterrupted(context.Context) error
 	Close() error
-}
-
-// FactTrust records how strongly a fact is established by explorer evidence.
-// It never represents task success; only a Verifier or backend completion can
-// do that.
-type FactTrust string
-
-const (
-	FactObserved     FactTrust = "observed"
-	FactCorroborated FactTrust = "corroborated"
-	FactRefuted      FactTrust = "refuted"
-)
-
-// Fact is one bounded assertion in the shared exploration ledger.
-type Fact struct {
-	ID        string    `json:"id"`
-	Claim     string    `json:"claim"`
-	Evidence  string    `json:"evidence"`
-	Source    string    `json:"source"`
-	Sources   []string  `json:"sources"`
-	Trust     FactTrust `json:"trust"`
-	Contested bool      `json:"contested"`
-	Targets   []string  `json:"targets,omitempty"`
-	RefutedBy []string  `json:"refuted_by,omitempty"`
-}
-
-// ExplorerClaim is one claim produced by an explorer report.
-type ExplorerClaim struct {
-	Claim    string   `json:"claim"`
-	Evidence string   `json:"evidence"`
-	Targets  []string `json:"targets,omitempty"`
-	Supports []string `json:"supports,omitempty"`
-	Refutes  []string `json:"refutes,omitempty"`
-}
-
-// ExplorerProposal is one bounded next action proposed by a planner or
-// executor. The controller validates it before it becomes a FrontierItem.
-type ExplorerProposal struct {
-	Question         string   `json:"question"`
-	Target           string   `json:"target"`
-	ProbeKey         string   `json:"probe_key"`
-	Params           []string `json:"params"`
-	ExpectedEvidence string   `json:"expected_evidence"`
-	FailureEvidence  string   `json:"failure_evidence"`
-	Anchors          []string `json:"anchors,omitempty"`
-}
-
-// ExplorerReport is the structured result of one frontier execution.
-type ExplorerReport struct {
-	ItemID   string             `json:"item_id"`
-	Verdict  string             `json:"verdict"`
-	Claims   []ExplorerClaim    `json:"claims"`
-	Next     []ExplorerProposal `json:"next"`
-	Commands []string           `json:"commands,omitempty"`
-	Errors   []string           `json:"errors,omitempty"`
 }

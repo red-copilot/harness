@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/red-copilot/harness"
+	"github.com/red-copilot/harness/exploration"
 	"github.com/red-copilot/harness/server"
 	"github.com/red-copilot/harness/store/sqlite"
 )
@@ -20,10 +20,10 @@ func TestServerExposesBranchesAndTaskKnowledge(t *testing.T) {
 	}
 	defer store.Close()
 	ctx := context.Background()
-	if err := store.SaveBranch(ctx, harness.Branch{ID: "branch-1", TaskID: "task-1", RunID: "run-1", Depth: 1, Topic: "web.oa", Status: harness.BranchOpen}); err != nil {
+	if err := store.SaveBranch(ctx, exploration.Branch{ID: "branch-1", TaskID: "task-1", RunID: "run-1", Depth: 1, Topic: "web.oa", Status: exploration.BranchOpen}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SaveKnowledge(ctx, harness.Knowledge{ID: "k-1", TaskID: "task-1", Topic: "web.oa", Kind: harness.KnowledgeAnchor, Statement: "OA exists", Scope: harness.KnowledgeScopeTarget, Trust: harness.KnowledgeObserved, Reuse: harness.ReuseStable}); err != nil {
+	if err := store.SaveKnowledge(ctx, exploration.Knowledge{ID: "k-1", TaskID: "task-1", Topic: "web.oa", Kind: exploration.KnowledgeAnchor, Statement: "OA exists", Scope: exploration.KnowledgeScopeTarget, Trust: exploration.KnowledgeObserved, Reuse: exploration.ReuseStable}); err != nil {
 		t.Fatal(err)
 	}
 	handler := server.New(nil, store, nil).Handler()
@@ -32,7 +32,7 @@ func TestServerExposesBranchesAndTaskKnowledge(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("branches status = %d body=%s", rec.Code, rec.Body.String())
 	}
-	var branches []harness.Branch
+	var branches []exploration.Branch
 	if err := json.Unmarshal(rec.Body.Bytes(), &branches); err != nil || len(branches) != 1 {
 		t.Fatalf("branches = %v %s", err, rec.Body.String())
 	}
@@ -41,7 +41,7 @@ func TestServerExposesBranchesAndTaskKnowledge(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("knowledge status = %d body=%s", rec.Code, rec.Body.String())
 	}
-	var knowledge []harness.Knowledge
+	var knowledge []exploration.Knowledge
 	if err := json.Unmarshal(rec.Body.Bytes(), &knowledge); err != nil || len(knowledge) != 1 {
 		t.Fatalf("knowledge = %v %s", err, rec.Body.String())
 	}

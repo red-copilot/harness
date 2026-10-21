@@ -9,10 +9,10 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/red-copilot/harness"
+	"github.com/red-copilot/harness/exploration"
 )
 
-func TestOpenMigratesV1AndRemovesExplorationAudit(t *testing.T) {
+func TestOpenMigratesV1WithoutDeletingAudit(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "harness.db")
 	raw, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -43,11 +43,11 @@ func TestOpenMigratesV1AndRemovesExplorationAudit(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer store.Close()
-	if got := countRows(t, store.db, "events"); got != 1 {
-		t.Fatalf("events = %d, want only non-exploration event", got)
+	if got := countRows(t, store.db, "events"); got != 2 {
+		t.Fatalf("events = %d, want both historical rows", got)
 	}
-	if got := countRows(t, store.db, "logs"); got != 1 {
-		t.Fatalf("logs = %d, want only non-exploration log", got)
+	if got := countRows(t, store.db, "logs"); got != 2 {
+		t.Fatalf("logs = %d, want both historical rows", got)
 	}
 	if got := countRows(t, store.db, "exploration_branches"); got != 0 {
 		t.Fatalf("exploration_branches = %d, want empty", got)
@@ -71,10 +71,10 @@ func TestKnowledgeStorePersistsTaskScopedKnowledge(t *testing.T) {
 	}
 	defer store.Close()
 	ctx := context.Background()
-	item := harness.Knowledge{
-		ID: "k-1", TaskID: "task-1", Topic: "web.oa", Kind: harness.KnowledgeAnchor,
-		Statement: "OA path exists", Scope: harness.KnowledgeScopeTarget, Target: "b-02",
-		Trust: harness.KnowledgeObserved, Reuse: harness.ReuseStable,
+	item := exploration.Knowledge{
+		ID: "k-1", TaskID: "task-1", Topic: "web.oa", Kind: exploration.KnowledgeAnchor,
+		Statement: "OA path exists", Scope: exploration.KnowledgeScopeTarget, Target: "b-02",
+		Trust: exploration.KnowledgeObserved, Reuse: exploration.ReuseStable,
 		EvidenceRefs: []string{"obs-1"}, Sources: []string{"executor-1"},
 		ValidFrom: time.Now().UTC(),
 	}
@@ -88,12 +88,12 @@ func TestKnowledgeStorePersistsTaskScopedKnowledge(t *testing.T) {
 	if len(items) != 1 || items[0].ID != "k-1" {
 		t.Fatalf("items = %+v", items)
 	}
-	item.Trust = harness.KnowledgeCorroborated
+	item.Trust = exploration.KnowledgeCorroborated
 	if err := store.UpdateKnowledge(ctx, item); err != nil {
 		t.Fatalf("UpdateKnowledge: %v", err)
 	}
 	items, _ = store.ListKnowledge(ctx, "task-1")
-	if items[0].Trust != harness.KnowledgeCorroborated {
+	if items[0].Trust != exploration.KnowledgeCorroborated {
 		t.Fatalf("trust = %q", items[0].Trust)
 	}
 	other, _ := store.ListKnowledge(ctx, "task-2")
@@ -118,15 +118,15 @@ func TestExplorationStorePersistsBranchesAttemptsAndObservations(t *testing.T) {
 	}
 	defer store.Close()
 	ctx := context.Background()
-	branch := harness.Branch{ID: "branch-1", TaskID: "task-1", RunID: "run-1", Depth: 1, Topic: "web.oa", Goal: "find OA", Hypothesis: "OA exists", Scope: "b-02", Status: harness.BranchActive}
+	branch := exploration.Branch{ID: "branch-1", TaskID: "task-1", RunID: "run-1", Depth: 1, Topic: "web.oa", Goal: "find OA", Hypothesis: "OA exists", Scope: "b-02", Status: exploration.BranchActive}
 	if err := store.SaveBranch(ctx, branch); err != nil {
 		t.Fatalf("SaveBranch: %v", err)
 	}
-	attempt := harness.Attempt{ID: "attempt-1", BranchID: branch.ID, RunID: "run-1", SessionID: "executor-1", Status: harness.AttemptCompleted, Outcome: harness.AttemptLocalSuccess}
+	attempt := exploration.Attempt{ID: "attempt-1", BranchID: branch.ID, RunID: "run-1", SessionID: "executor-1", Status: exploration.AttemptCompleted, Outcome: exploration.AttemptLocalSuccess}
 	if err := store.SaveAttempt(ctx, attempt); err != nil {
 		t.Fatalf("SaveAttempt: %v", err)
 	}
-	observation := harness.Observation{ID: "obs-1", BranchID: branch.ID, AttemptID: attempt.ID, Kind: "http", Summary: "HTTP 200", EvidenceRefs: []string{"raw-1"}}
+	observation := exploration.Observation{ID: "obs-1", BranchID: branch.ID, AttemptID: attempt.ID, Kind: "http", Summary: "HTTP 200", EvidenceRefs: []string{"raw-1"}}
 	if err := store.SaveObservation(ctx, observation); err != nil {
 		t.Fatalf("SaveObservation: %v", err)
 	}

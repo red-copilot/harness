@@ -1,8 +1,9 @@
-package harness
+package exploration
 
 import (
 	"context"
 	"fmt"
+	"github.com/red-copilot/harness"
 	"sort"
 	"strings"
 	"time"
@@ -49,8 +50,8 @@ type BranchStore interface {
 
 // BranchPlanRequest is the bounded planner context.
 type BranchPlanRequest struct {
-	Task      Task
-	Targets   []Target
+	Task      harness.Task
+	Targets   []harness.Target
 	Branches  []Branch
 	Knowledge []Knowledge
 	Progress  ProgressSignal
@@ -81,7 +82,7 @@ type AttemptReport struct {
 	Observations   []Observation       `json:"observations,omitempty"`
 	Knowledge      []KnowledgeProposal `json:"knowledge,omitempty"`
 	ChildBranches  []BranchProposal    `json:"child_branches,omitempty"`
-	Usage          Usage               `json:"usage,omitempty"`
+	Usage          harness.Usage       `json:"usage,omitempty"`
 	Error          string              `json:"error,omitempty"`
 }
 
@@ -94,8 +95,8 @@ type BranchEvent struct {
 // BranchEngineConfig configures one run-scoped binary hypothesis tree.
 type BranchEngineConfig struct {
 	RunID            string
-	Task             Task
-	Targets          []Target
+	Task             harness.Task
+	Targets          []harness.Target
 	Policy           ExplorationPolicy
 	KnowledgeStore   KnowledgeStore
 	Store            BranchStore
@@ -108,7 +109,7 @@ type BranchEngineConfig struct {
 type BranchEngine struct {
 	cfg     BranchEngineConfig
 	planner BranchPlanner
-	emit    func(BranchEvent)
+	emit    func(BranchEvent) error
 
 	branches       []Branch
 	attempts       []Attempt
@@ -125,10 +126,10 @@ type BranchEngine struct {
 }
 
 // NewBranchEngine creates a v2 tree engine.
-func NewBranchEngine(cfg BranchEngineConfig, planner BranchPlanner, emit func(BranchEvent)) *BranchEngine {
+func NewBranchEngine(cfg BranchEngineConfig, planner BranchPlanner, emit func(BranchEvent) error) *BranchEngine {
 	cfg.Policy = NormalizeExplorationPolicy(cfg.Policy)
 	if emit == nil {
-		emit = func(BranchEvent) {}
+		emit = func(BranchEvent) error { return nil }
 	}
 	return &BranchEngine{
 		cfg: cfg, planner: planner, emit: emit, needPlan: true,
@@ -157,8 +158,12 @@ func (e *BranchEngine) Run(ctx context.Context) error {
 		Scope: firstTargetScope(e.cfg.Targets), CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 	}
 	e.branches = append(e.branches, root)
-	e.saveBranch(root)
-	e.emit(BranchEvent{Type: "branch.created", Data: root})
+	if err := e.saveBranch(root); err != nil {
+		return err
+	}
+	if err := e.emit(BranchEvent{Type: "branch.created", Data: root}); err != nil {
+		return err
+	}
 
 	maxRounds := e.cfg.Policy.MaxNodes
 	if maxRounds <= 0 {
@@ -171,7 +176,9 @@ func (e *BranchEngine) Run(ctx context.Context) error {
 		progress := e.progress()
 		if progress.Done {
 			e.success = progress.Success
-			e.emit(BranchEvent{Type: "progress.updated", Data: progress})
+			if err := e.emit(BranchEvent{Type: "progress.updated", Data: progress}); err != nil {
+				return err
+			}
 			return nil
 		}
 		if e.needPlan {
@@ -189,7 +196,9 @@ func (e *BranchEngine) Run(ctx context.Context) error {
 		}
 		e.observeRound()
 		if e.stagnated {
-			e.emit(BranchEvent{Type: "stagnated", Data: map[string]any{"round": round + 1}})
+			if err := e.emit(BranchEvent{Type: "stagnated", Data: map[string]any{"round": round + 1}}); err != nil {
+				return err
+			}
 			if e.cfg.OnStagnated != nil {
 				e.cfg.OnStagnated()
 			}
@@ -201,7 +210,7 @@ func (e *BranchEngine) Run(ctx context.Context) error {
 
 func (e *BranchEngine) plan(ctx context.Context, round int) error {
 	request := BranchPlanRequest{
-		Task: e.cfg.Task, Targets: append([]Target(nil), e.cfg.Targets...),
+		Task: e.cfg.Task, Targets: append([]harness.Target(nil), e.cfg.Targets...),
 		Branches: e.Branches(), Knowledge: append([]Knowledge(nil), e.knowledge...),
 		Progress: e.progress(), Reports: append([]AttemptReport(nil), e.reports...),
 	}
@@ -231,7 +240,9 @@ func (e *BranchEngine) plan(ctx context.Context, round int) error {
 			parentID = "root"
 		}
 		if parentID != "root" {
-			e.rejectBranch(parentID, "planner_cannot_expand", proposal)
+			if err := e.rejectBranch(parentID, "planner_cannot_expand", proposal); err != nil {
+				return err
+			}
 			continue
 		}
 		parent := e.findBranch(parentID)
@@ -240,7 +251,9 @@ func (e *BranchEngine) plan(ctx context.Context, round int) error {
 		}
 		branch, err := ValidateBranchProposal(proposal, parent, e.cfg.Targets, e.branches, e.cfg.Policy)
 		if err != nil {
-			e.rejectBranch(parent.ID, err.Error(), proposal)
+			if rejectErr := e.rejectBranch(parent.ID, err.Error(), proposal); rejectErr != nil {
+				return rejectErr
+			}
 			continue
 		}
 		if parent.Status == BranchOpen {
@@ -248,7 +261,12 @@ func (e *BranchEngine) plan(ctx context.Context, round int) error {
 			parent.UpdatedAt = time.Now().UTC()
 		}
 		e.branches = append(e.branches, branch)
-		e.emit(BranchEvent{Type: "branch.created", Data: branch})
+		if err := e.saveBranch(branch); err != nil {
+			return err
+		}
+		if err := e.emit(BranchEvent{Type: "branch.created", Data: branch}); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -277,8 +295,12 @@ func (e *BranchEngine) runBranches(ctx context.Context, round int, ready []Branc
 			BranchID: ready[i].ID, RunID: e.cfg.RunID, SessionID: executor.ID(),
 			Status: AttemptRunning, StartedAt: time.Now().UTC(),
 		}
-		e.saveAttempt(attempt)
-		e.emit(BranchEvent{Type: "attempt.started", Data: attempt})
+		if err := e.saveAttempt(attempt); err != nil {
+			return err
+		}
+		if err := e.emit(BranchEvent{Type: "attempt.started", Data: attempt}); err != nil {
+			return err
+		}
 		if err := executor.Reset(ctx); err != nil {
 			attempt.Status = AttemptFailed
 			attempt.Outcome = AttemptOperationalFailure
@@ -286,7 +308,15 @@ func (e *BranchEngine) runBranches(ctx context.Context, round int, ready []Branc
 			attempt.FinishedAt = time.Now().UTC()
 			e.attempts = append(e.attempts, attempt)
 			e.branches[branchIndex].Status = BranchPaused
-			e.emit(BranchEvent{Type: "attempt.failed", Data: attempt})
+			if err := e.saveBranch(e.branches[branchIndex]); err != nil {
+				return err
+			}
+			if err := e.saveAttempt(attempt); err != nil {
+				return err
+			}
+			if err := e.emit(BranchEvent{Type: "attempt.failed", Data: attempt}); err != nil {
+				return err
+			}
 			continue
 		}
 		brief := BranchBrief{Objective: e.cfg.Task.Objective, Branch: ready[i], Knowledge: e.knowledge, Budget: e.branchBudget()}
@@ -298,7 +328,15 @@ func (e *BranchEngine) runBranches(ctx context.Context, round int, ready []Branc
 			attempt.FinishedAt = time.Now().UTC()
 			e.attempts = append(e.attempts, attempt)
 			e.branches[branchIndex].Status = BranchPaused
-			e.emit(BranchEvent{Type: "attempt.failed", Data: attempt})
+			if err := e.saveBranch(e.branches[branchIndex]); err != nil {
+				return err
+			}
+			if err := e.saveAttempt(attempt); err != nil {
+				return err
+			}
+			if err := e.emit(BranchEvent{Type: "attempt.failed", Data: attempt}); err != nil {
+				return err
+			}
 			continue
 		}
 		if report.BranchID == "" {
@@ -311,7 +349,15 @@ func (e *BranchEngine) runBranches(ctx context.Context, round int, ready []Branc
 			attempt.FinishedAt = time.Now().UTC()
 			e.attempts = append(e.attempts, attempt)
 			e.branches[branchIndex].Status = BranchPaused
-			e.emit(BranchEvent{Type: "attempt.failed", Data: attempt})
+			if err := e.saveBranch(e.branches[branchIndex]); err != nil {
+				return err
+			}
+			if err := e.saveAttempt(attempt); err != nil {
+				return err
+			}
+			if err := e.emit(BranchEvent{Type: "attempt.failed", Data: attempt}); err != nil {
+				return err
+			}
 			continue
 		}
 		if report.Status == "" {
@@ -325,62 +371,84 @@ func (e *BranchEngine) runBranches(ctx context.Context, round int, ready []Branc
 		attempt.ObservationIDs = append([]string(nil), report.ObservationIDs...)
 		attempt.FinishedAt = time.Now().UTC()
 		e.attempts = append(e.attempts, attempt)
-		e.saveAttempt(attempt)
-		e.recordObservations(attempt.ID, report.Observations, &attempt)
+		if err := e.saveAttempt(attempt); err != nil {
+			return err
+		}
+		if err := e.recordObservations(attempt.ID, report.Observations, &attempt); err != nil {
+			return err
+		}
 		e.reports = append(e.reports, report)
 		if attempt.Status == AttemptCompleted {
-			e.promoteKnowledge(report, e.branches[branchIndex])
+			if err := e.promoteKnowledge(report, e.branches[branchIndex]); err != nil {
+				return err
+			}
 		}
 		e.applyOutcome(branchIndex, attempt)
-		e.expandChildren(branchIndex, attempt, report.ChildBranches)
+		if err := e.expandChildren(branchIndex, attempt, report.ChildBranches); err != nil {
+			return err
+		}
 		e.needPlan = true
-		e.saveBranch(e.branches[branchIndex])
-		e.saveAttempt(attempt)
-		e.emit(BranchEvent{Type: "attempt.completed", Data: attempt})
+		if err := e.saveBranch(e.branches[branchIndex]); err != nil {
+			return err
+		}
+		if err := e.saveAttempt(attempt); err != nil {
+			return err
+		}
+		if err := e.emit(BranchEvent{Type: "attempt.completed", Data: attempt}); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func (e *BranchEngine) expandChildren(parentIndex int, attempt Attempt, proposals []BranchProposal) {
+func (e *BranchEngine) expandChildren(parentIndex int, attempt Attempt, proposals []BranchProposal) error {
 	if len(proposals) == 0 {
-		return
+		return nil
 	}
 	if parentIndex < 0 || parentIndex >= len(e.branches) {
-		return
+		return nil
 	}
 	parent := &e.branches[parentIndex]
 	if !CanExpandBranch(*parent, attempt) {
-		e.rejectBranch(parent.ID, "expansion_not_allowed", proposals[0])
-		return
+		return e.rejectBranch(parent.ID, "expansion_not_allowed", proposals[0])
 	}
 	created := 0
 	_, reviewBranch := e.reviewBranches[parent.ID]
 	for _, proposal := range proposals {
 		if !reviewBranch && created >= e.cfg.Policy.MaxChildrenPerBranch {
-			e.rejectBranch(parent.ID, "child_limit_exceeded", proposal)
+			if err := e.rejectBranch(parent.ID, "child_limit_exceeded", proposal); err != nil {
+				return err
+			}
 			continue
 		}
 		branch, err := ValidateBranchProposal(proposal, parent, e.cfg.Targets, e.branches, e.cfg.Policy)
 		if err != nil {
-			e.rejectBranch(parent.ID, err.Error(), proposal)
+			if rejectErr := e.rejectBranch(parent.ID, err.Error(), proposal); rejectErr != nil {
+				return rejectErr
+			}
 			continue
 		}
 		e.branches = append(e.branches, branch)
 		created++
-		e.saveBranch(branch)
-		e.emit(BranchEvent{Type: "branch.created", Data: branch})
+		if err := e.saveBranch(branch); err != nil {
+			return err
+		}
+		if err := e.emit(BranchEvent{Type: "branch.created", Data: branch}); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
-func (e *BranchEngine) rejectBranch(parentID, reason string, proposal BranchProposal) {
-	e.emit(BranchEvent{Type: "exploration.branch.rejected", Data: map[string]any{
+func (e *BranchEngine) rejectBranch(parentID, reason string, proposal BranchProposal) error {
+	return e.emit(BranchEvent{Type: "exploration.branch.rejected", Data: map[string]any{
 		"parent_id": parentID,
 		"reason":    reason,
 		"proposal":  proposal,
 	}})
 }
 
-func (e *BranchEngine) recordObservations(attemptID string, observations []Observation, attempt *Attempt) {
+func (e *BranchEngine) recordObservations(attemptID string, observations []Observation, attempt *Attempt) error {
 	for i := range observations {
 		if observations[i].ID == "" {
 			observations[i].ID = fmt.Sprintf("%s-obs-%d", attemptID, i+1)
@@ -391,12 +459,17 @@ func (e *BranchEngine) recordObservations(attemptID string, observations []Obser
 		}
 		e.observations = append(e.observations, observations[i])
 		attempt.ObservationIDs = append(attempt.ObservationIDs, observations[i].ID)
-		e.saveObservation(observations[i])
-		e.emit(BranchEvent{Type: "observation.recorded", Data: observations[i]})
+		if err := e.saveObservation(observations[i]); err != nil {
+			return err
+		}
+		if err := e.emit(BranchEvent{Type: "observation.recorded", Data: observations[i]}); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
-func (e *BranchEngine) promoteKnowledge(report AttemptReport, branch Branch) {
+func (e *BranchEngine) promoteKnowledge(report AttemptReport, branch Branch) error {
 	known := make(map[string]struct{}, len(e.observations))
 	for _, observation := range e.observations {
 		known[observation.ID] = struct{}{}
@@ -404,7 +477,9 @@ func (e *BranchEngine) promoteKnowledge(report AttemptReport, branch Branch) {
 	for _, proposal := range report.Knowledge {
 		knowledge, err := ValidateKnowledgeProposal(proposal, branch, known, e.knowledge)
 		if err != nil {
-			e.emit(BranchEvent{Type: "knowledge.rejected", Data: map[string]any{"proposal": proposal, "error": err.Error()}})
+			if emitErr := e.emit(BranchEvent{Type: "knowledge.rejected", Data: map[string]any{"proposal": proposal, "error": err.Error()}}); emitErr != nil {
+				return emitErr
+			}
 			continue
 		}
 		if len(proposal.Refutes) > 0 {
@@ -417,19 +492,30 @@ func (e *BranchEngine) promoteKnowledge(report AttemptReport, branch Branch) {
 					e.knowledge[i].Trust = KnowledgeContested
 					e.knowledge[i].Contradicts = appendUnique(e.knowledge[i].Contradicts, knowledge.ID)
 					if e.cfg.KnowledgeStore != nil {
-						_ = e.cfg.KnowledgeStore.UpdateKnowledge(context.Background(), e.knowledge[i])
+						if err := e.cfg.KnowledgeStore.UpdateKnowledge(context.Background(), e.knowledge[i]); err != nil {
+							return err
+						}
 					}
-					e.emit(BranchEvent{Type: "knowledge.contested", Data: e.knowledge[i]})
+					if err := e.emit(BranchEvent{Type: "knowledge.contested", Data: e.knowledge[i]}); err != nil {
+						return err
+					}
 				}
 			}
-			e.addReviewBranch(branch, knowledge)
+			if err := e.addReviewBranch(branch, knowledge); err != nil {
+				return err
+			}
 		}
 		e.knowledge = append(e.knowledge, knowledge)
 		if e.cfg.KnowledgeStore != nil && strings.TrimSpace(knowledge.TaskID) != "" {
-			_ = e.cfg.KnowledgeStore.SaveKnowledge(context.Background(), knowledge)
+			if err := e.cfg.KnowledgeStore.SaveKnowledge(context.Background(), knowledge); err != nil {
+				return err
+			}
 		}
-		e.emit(BranchEvent{Type: "knowledge.promoted", Data: knowledge})
+		if err := e.emit(BranchEvent{Type: "knowledge.promoted", Data: knowledge}); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func (e *BranchEngine) applyOutcome(index int, attempt Attempt) {
@@ -503,15 +589,15 @@ func (e *BranchEngine) attemptCount(branchID string) int {
 	return count
 }
 
-func (e *BranchEngine) addReviewBranch(parent Branch, knowledge Knowledge) {
+func (e *BranchEngine) addReviewBranch(parent Branch, knowledge Knowledge) error {
 	topic := "review." + normalizeTopic(knowledge.Topic)
 	for _, branch := range e.branches {
 		if branch.Topic == topic && branch.Scope == parent.Scope {
-			return
+			return nil
 		}
 	}
 	if parent.Depth+1 > e.cfg.Policy.MaxDepth || len(e.branches)+1 > e.cfg.Policy.MaxNodes {
-		return
+		return nil
 	}
 	now := time.Now().UTC()
 	branch := Branch{
@@ -527,8 +613,10 @@ func (e *BranchEngine) addReviewBranch(parent Branch, knowledge Knowledge) {
 		e.reviewBranches = make(map[string]struct{})
 	}
 	e.reviewBranches[branch.ID] = struct{}{}
-	e.saveBranch(branch)
-	e.emit(BranchEvent{Type: "branch.created", Data: branch})
+	if err := e.saveBranch(branch); err != nil {
+		return err
+	}
+	return e.emit(BranchEvent{Type: "branch.created", Data: branch})
 }
 
 func (e *BranchEngine) observeRound() {
@@ -547,22 +635,25 @@ func (e *BranchEngine) observeRound() {
 	}
 }
 
-func (e *BranchEngine) saveBranch(branch Branch) {
+func (e *BranchEngine) saveBranch(branch Branch) error {
 	if e.cfg.Store != nil {
-		_ = e.cfg.Store.SaveBranch(context.Background(), branch)
+		return e.cfg.Store.SaveBranch(context.Background(), branch)
 	}
+	return nil
 }
 
-func (e *BranchEngine) saveAttempt(attempt Attempt) {
+func (e *BranchEngine) saveAttempt(attempt Attempt) error {
 	if e.cfg.Store != nil {
-		_ = e.cfg.Store.SaveAttempt(context.Background(), attempt)
+		return e.cfg.Store.SaveAttempt(context.Background(), attempt)
 	}
+	return nil
 }
 
-func (e *BranchEngine) saveObservation(observation Observation) {
+func (e *BranchEngine) saveObservation(observation Observation) error {
 	if e.cfg.Store != nil {
-		_ = e.cfg.Store.SaveObservation(context.Background(), observation)
+		return e.cfg.Store.SaveObservation(context.Background(), observation)
 	}
+	return nil
 }
 
 func (e *BranchEngine) progress() ProgressSignal {
@@ -606,7 +697,7 @@ func (e *BranchEngine) Success() bool { return e.success }
 // Stagnated reports whether the tree stopped without progress or new knowledge.
 func (e *BranchEngine) Stagnated() bool { return e.stagnated }
 
-func firstTargetScope(targets []Target) string {
+func firstTargetScope(targets []harness.Target) string {
 	if len(targets) == 0 {
 		return ""
 	}

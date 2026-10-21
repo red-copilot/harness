@@ -1,7 +1,8 @@
-package harness
+package exploration
 
 import (
 	"context"
+	"github.com/red-copilot/harness"
 	"strings"
 	"testing"
 )
@@ -113,16 +114,16 @@ func sessionBranchRejection(events []BranchEvent, reason string) (map[string]any
 }
 
 func TestPlannerCannotExpandNonRoot(t *testing.T) {
-	target := Target{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}
+	target := harness.Target{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}
 	planner := &nonRootPlanner{}
 	var events []BranchEvent
 	engine := NewBranchEngine(BranchEngineConfig{
-		RunID: "run-1", Task: Task{ID: "task-1", Objective: "find flag"}, Targets: []Target{target},
+		RunID: "run-1", Task: harness.Task{ID: "task-1", Objective: "find flag"}, Targets: []harness.Target{target},
 		Policy: DefaultExplorationPolicy(),
 		AcquireExecutors: func(context.Context, int) ([]BranchExecutor, error) {
 			return []BranchExecutor{&plannerScopeExecutor{}}, nil
 		},
-	}, planner, func(event BranchEvent) { events = append(events, event) })
+	}, planner, func(event BranchEvent) error { events = append(events, event); return nil })
 	if err := engine.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -151,7 +152,7 @@ func TestPlannerCannotExpandNonRoot(t *testing.T) {
 }
 
 func TestPlannerRootSeedingRespectsMaxNodes(t *testing.T) {
-	target := Target{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}
+	target := harness.Target{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}
 	planner := &rootSeedPlanner{proposals: []BranchProposal{
 		{ParentID: "root", Topic: "web.oa", Goal: "find OA", Hypothesis: "OA exists", Target: "b-02", SuccessCondition: "OA found", FailureCondition: "no OA"},
 		{ParentID: "root", Topic: "web.alt", Goal: "find alternate", Hypothesis: "alternate exists", Target: "b-02", SuccessCondition: "alternate found", FailureCondition: "no alternate"},
@@ -163,12 +164,12 @@ func TestPlannerRootSeedingRespectsMaxNodes(t *testing.T) {
 	policy.MaxChildrenPerBranch = 1
 	var events []BranchEvent
 	engine := NewBranchEngine(BranchEngineConfig{
-		RunID: "run-1", Task: Task{ID: "task-1", Objective: "find flag"}, Targets: []Target{target},
+		RunID: "run-1", Task: harness.Task{ID: "task-1", Objective: "find flag"}, Targets: []harness.Target{target},
 		Policy: policy,
 		AcquireExecutors: func(context.Context, int) ([]BranchExecutor, error) {
 			return []BranchExecutor{&plannerScopeExecutor{}}, nil
 		},
-	}, planner, func(event BranchEvent) { events = append(events, event) })
+	}, planner, func(event BranchEvent) error { events = append(events, event); return nil })
 	if err := engine.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}

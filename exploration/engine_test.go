@@ -1,7 +1,8 @@
-package harness
+package exploration
 
 import (
 	"context"
+	"github.com/red-copilot/harness"
 	"strings"
 	"testing"
 	"time"
@@ -29,7 +30,7 @@ func TestValidateBranchProposalRejectsUnauthorizedTarget(t *testing.T) {
 	_, err := ValidateBranchProposal(BranchProposal{
 		ParentID: root.ID, Topic: "web.oa", Goal: "find OA", Hypothesis: "OA is exposed",
 		Target: "other-target", SuccessCondition: "OA login page", FailureCondition: "no OA page",
-	}, &root, []Target{{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}}, nil, DefaultExplorationPolicy())
+	}, &root, []harness.Target{{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}}, nil, DefaultExplorationPolicy())
 	if err == nil || !strings.Contains(err.Error(), "authorized") {
 		t.Fatalf("ValidateBranchProposal error = %v, want authorized target error", err)
 	}
@@ -41,7 +42,7 @@ func TestValidateBranchProposalRejectsDuplicateTopicScope(t *testing.T) {
 	_, err := ValidateBranchProposal(BranchProposal{
 		ParentID: root.ID, Topic: " web.oa ", Goal: "find OA again", Hypothesis: "OA is exposed",
 		Target: "b-02", SuccessCondition: "OA login page", FailureCondition: "no OA page",
-	}, &root, []Target{{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}}, existing, DefaultExplorationPolicy())
+	}, &root, []harness.Target{{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}}, existing, DefaultExplorationPolicy())
 	if err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("ValidateBranchProposal error = %v, want duplicate error", err)
 	}
@@ -127,7 +128,7 @@ func findBranchRejection(events []BranchEvent, reason string) (map[string]any, b
 }
 
 func TestBranchEngineCapsExpansionAtTwoChildren(t *testing.T) {
-	target := Target{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}
+	target := harness.Target{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}
 	proposals := []BranchProposal{
 		{ParentID: "parent", Topic: "web.oa.deep", Goal: "deep OA", Hypothesis: "deep OA exists", Target: "b-02", SuccessCondition: "deep page", FailureCondition: "no deep page"},
 		{ParentID: "parent", Topic: "web.oa.creds", Goal: "OA creds", Hypothesis: "creds exist", Target: "b-02", SuccessCondition: "credential path", FailureCondition: "no credential path"},
@@ -136,12 +137,12 @@ func TestBranchEngineCapsExpansionAtTwoChildren(t *testing.T) {
 	executor := &childExpansionExecutor{outcome: AttemptLocalSuccess, proposals: proposals}
 	var events []BranchEvent
 	engine := NewBranchEngine(BranchEngineConfig{
-		RunID: "run-1", Task: Task{ID: "task-1", Objective: "find flag"}, Targets: []Target{target},
+		RunID: "run-1", Task: harness.Task{ID: "task-1", Objective: "find flag"}, Targets: []harness.Target{target},
 		Policy: DefaultExplorationPolicy(),
 		AcquireExecutors: func(context.Context, int) ([]BranchExecutor, error) {
 			return []BranchExecutor{executor}, nil
 		},
-	}, &singleBranchPlanner{}, func(event BranchEvent) { events = append(events, event) })
+	}, &singleBranchPlanner{}, func(event BranchEvent) error { events = append(events, event); return nil })
 	if err := engine.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -177,7 +178,7 @@ func TestBranchEngineCapsExpansionAtTwoChildren(t *testing.T) {
 }
 
 func TestBranchEngineIgnoresChildrenWithoutLocalSuccess(t *testing.T) {
-	target := Target{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}
+	target := harness.Target{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}
 	proposals := []BranchProposal{
 		{ParentID: "parent", Topic: "web.oa.deep", Goal: "deep OA", Hypothesis: "deep OA exists", Target: "b-02", SuccessCondition: "deep page", FailureCondition: "no deep page"},
 		{ParentID: "parent", Topic: "web.oa.creds", Goal: "OA creds", Hypothesis: "creds exist", Target: "b-02", SuccessCondition: "credential path", FailureCondition: "no credential path"},
@@ -186,12 +187,12 @@ func TestBranchEngineIgnoresChildrenWithoutLocalSuccess(t *testing.T) {
 	executor := &childExpansionExecutor{outcome: AttemptRefuted, proposals: proposals}
 	var events []BranchEvent
 	engine := NewBranchEngine(BranchEngineConfig{
-		RunID: "run-1", Task: Task{ID: "task-1", Objective: "find flag"}, Targets: []Target{target},
+		RunID: "run-1", Task: harness.Task{ID: "task-1", Objective: "find flag"}, Targets: []harness.Target{target},
 		Policy: DefaultExplorationPolicy(),
 		AcquireExecutors: func(context.Context, int) ([]BranchExecutor, error) {
 			return []BranchExecutor{executor}, nil
 		},
-	}, &singleBranchPlanner{}, func(event BranchEvent) { events = append(events, event) })
+	}, &singleBranchPlanner{}, func(event BranchEvent) error { events = append(events, event); return nil })
 	if err := engine.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -289,12 +290,12 @@ func (p *treePlanner) Plan(context.Context, BranchPlanRequest) (BranchPlanOutput
 }
 
 func TestBranchEngineSplitsRootAndExpandsOnlySuccessfulBranch(t *testing.T) {
-	target := Target{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}
+	target := harness.Target{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}
 	planner := &treePlanner{}
 	executor := &fakeBranchExecutor{id: "executor-1"}
 	store := &memoryKnowledgeStore{}
 	engine := NewBranchEngine(BranchEngineConfig{
-		RunID: "run-1", Task: Task{ID: "task-1", Objective: "find flag"}, Targets: []Target{target},
+		RunID: "run-1", Task: harness.Task{ID: "task-1", Objective: "find flag"}, Targets: []harness.Target{target},
 		Policy: DefaultExplorationPolicy(), KnowledgeStore: store,
 		AcquireExecutors: func(context.Context, int) ([]BranchExecutor, error) {
 			return []BranchExecutor{executor}, nil
@@ -347,12 +348,12 @@ func (s *memoryExplorationStore) SaveObservation(context.Context, Observation) e
 }
 
 func TestBranchEnginePersistsNormalizedState(t *testing.T) {
-	target := Target{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}
+	target := harness.Target{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}
 	planner := &singleBranchPlanner{}
 	executor := &persistingExecutor{}
 	store := &memoryExplorationStore{}
 	engine := NewBranchEngine(BranchEngineConfig{
-		RunID: "run-1", Task: Task{ID: "task-1", Objective: "find flag"}, Targets: []Target{target},
+		RunID: "run-1", Task: harness.Task{ID: "task-1", Objective: "find flag"}, Targets: []harness.Target{target},
 		Policy: DefaultExplorationPolicy(), Store: store,
 		AcquireExecutors: func(context.Context, int) ([]BranchExecutor, error) {
 			return []BranchExecutor{executor}, nil
@@ -399,11 +400,11 @@ func (e *inconclusiveExecutor) Attempt(_ context.Context, branch Branch, _ Branc
 }
 
 func TestBranchEngineStagnatesWithoutProgressOrKnowledge(t *testing.T) {
-	target := Target{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}
+	target := harness.Target{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}
 	policy := DefaultExplorationPolicy()
 	policy.StagnationRounds = 1
 	engine := NewBranchEngine(BranchEngineConfig{
-		RunID: "run-1", Task: Task{ID: "task-1", Objective: "find flag"}, Targets: []Target{target},
+		RunID: "run-1", Task: harness.Task{ID: "task-1", Objective: "find flag"}, Targets: []harness.Target{target},
 		Policy: policy,
 		AcquireExecutors: func(context.Context, int) ([]BranchExecutor, error) {
 			return []BranchExecutor{&inconclusiveExecutor{}}, nil
@@ -437,14 +438,14 @@ func (e *conflictExecutor) Attempt(_ context.Context, branch Branch, _ BranchBri
 }
 
 func TestBranchEngineMarksConflictingKnowledgeContested(t *testing.T) {
-	target := Target{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}
+	target := harness.Target{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}
 	store := &memoryExplorationStore{}
 	store.items = append(store.items, Knowledge{
 		ID: "k-old", TaskID: "task-1", Topic: "web.oa", Kind: KnowledgeAnchor,
 		Statement: "OA path exists", Scope: KnowledgeScopeTarget, Trust: KnowledgeObserved, Reuse: ReuseStable,
 	})
 	engine := NewBranchEngine(BranchEngineConfig{
-		RunID: "run-1", Task: Task{ID: "task-1", Objective: "find flag"}, Targets: []Target{target},
+		RunID: "run-1", Task: harness.Task{ID: "task-1", Objective: "find flag"}, Targets: []harness.Target{target},
 		Policy: DefaultExplorationPolicy(), KnowledgeStore: store,
 		AcquireExecutors: func(context.Context, int) ([]BranchExecutor, error) {
 			return []BranchExecutor{&conflictExecutor{}}, nil
@@ -474,13 +475,13 @@ func TestBranchEngineMarksConflictingKnowledgeContested(t *testing.T) {
 }
 
 func TestBranchEngineExemptsReviewBranchesFromChildCap(t *testing.T) {
-	target := Target{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}
+	target := harness.Target{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}
 	policy := DefaultExplorationPolicy()
 	policy.MaxChildrenPerBranch = 2
 	var events []BranchEvent
 	engine := NewBranchEngine(BranchEngineConfig{
-		RunID: "run-1", Task: Task{ID: "task-1", Objective: "find flag"}, Targets: []Target{target}, Policy: policy,
-	}, nil, func(event BranchEvent) { events = append(events, event) })
+		RunID: "run-1", Task: harness.Task{ID: "task-1", Objective: "find flag"}, Targets: []harness.Target{target}, Policy: policy,
+	}, nil, func(event BranchEvent) error { events = append(events, event); return nil })
 	parent := Branch{
 		ID: "branch-parent", TaskID: "task-1", RunID: "run-1", Depth: 1,
 		Topic: "web.oa", Scope: "b-02", Status: BranchResolved,
@@ -528,13 +529,13 @@ func TestBranchEngineExemptsReviewBranchesFromChildCap(t *testing.T) {
 }
 
 func TestBranchEngineCapsOrdinaryReviewTopicBranch(t *testing.T) {
-	target := Target{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}
+	target := harness.Target{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}
 	policy := DefaultExplorationPolicy()
 	policy.MaxChildrenPerBranch = 2
 	var events []BranchEvent
 	engine := NewBranchEngine(BranchEngineConfig{
-		RunID: "run-1", Task: Task{ID: "task-1", Objective: "find flag"}, Targets: []Target{target}, Policy: policy,
-	}, nil, func(event BranchEvent) { events = append(events, event) })
+		RunID: "run-1", Task: harness.Task{ID: "task-1", Objective: "find flag"}, Targets: []harness.Target{target}, Policy: policy,
+	}, nil, func(event BranchEvent) error { events = append(events, event); return nil })
 	ordinary := Branch{
 		ID: "branch-review-lookalike", ParentID: "root", TaskID: "task-1", RunID: "run-1", Depth: 1,
 		Topic: "review.web.oa.alt", Scope: "b-02", Status: BranchResolved,
