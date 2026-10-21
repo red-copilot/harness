@@ -56,7 +56,7 @@ export function RunTable({
       title: t('common.agents'),
       key: 'agents',
       width: 130,
-      render: (_, run) => run.spec?.agents?.map((agent) => agent.id).join(', ') || '—',
+      render: (_, run) => [run.spec?.planner, ...(run.spec?.executors ?? [])].map((agent) => agent?.id).filter(Boolean).join(', ') || '—',
     },
     {
       title: t('common.duration'),

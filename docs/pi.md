@@ -1,35 +1,37 @@
-# Pi RPC
+# Pi Runtime Adapter
 
-Pi is launched with:
+Pi is the default `AgentRuntimeFactory`. It is not part of the root contract.
 
-```text
-pi --mode rpc --no-session --no-approve --no-context-files --no-extensions \
-   --no-mcp --no-prompt-templates --no-themes --no-skills \
-   --skill /skills/tools --skill /skills/tsec-submit \
-   --tools read,bash,edit,write --offline
+```go
+runtime := pi.NewFactory(pi.Config{
+    Provider: "openai",
+    Model:    "gpt-5",
+    Thinking: "high",
+})
 ```
 
-The SDK speaks strict LF-delimited JSONL. It never uses a line reader that
-treats Unicode line/paragraph separators as protocol boundaries. Each command
-has a unique ID and responses are correlated by that ID. stdout is read
-continuously; stderr is persisted as a separate log stream.
+`AgentSpec.RuntimeConfig` accepts the same JSON fields and overrides the factory config per role.
 
-A successful `prompt` response only means the prompt was accepted, queued or
-handled. The SDK waits for `agent_settled`; it does not treat `agent_end` as
-completion. Provider failures and aborts after acceptance are observed through
-events and process exit.
+## RPC
 
-The optional exploration workflow uses `turn_end` as its action boundary and
-advances a fresh-context executor turn. The core itself does not synthesize
-frontier state from direct sessions. Operators can still steer a live session
-through `Run.Steer`; Pi delivers steering after the current turn's tool calls and
-before the next LLM call.
+```text
+pi --mode rpc --no-session --no-approve --no-context-files \
+   --no-extensions --no-mcp --no-prompt-templates --no-themes \
+   --no-skills --tools <role tools> --offline
+```
 
-Before launch, the session scans the mounted `/skills` directory and passes
-every directory containing `SKILL.md` to Pi with `--skill`. Adding another
-embedded or task-provided skill therefore makes it visible in Pi's available
-skills list without changing the command construction.
+- Framing is strict LF-delimited JSONL.
+- Commands use unique IDs and responses are correlated by ID.
+- `agent_settled` is turn completion; `agent_end` is forwarded but never completes a turn.
+- Pre-settlement channel close, malformed framing, command errors and process exit fail the turn closed.
+- `Reset` starts a new Pi conversation while retaining the controlled process.
 
-The default command uses a read-only container root, a writable `/workspace`,
-read-only `/task` and `/skills`, dropped capabilities plus `NET_RAW`, and no
-Docker socket.
+## Roles
+
+- Planner defaults to `read` only.
+- Executor defaults to `read,bash,edit,write`.
+- Planner and Executor share the `AgentSession` contract; the core owns reset, persistence and turn limits.
+
+## Sandbox
+
+Pi receives a read-only root filesystem, writable `/workspace`, read-only `/task` and `/skills`, no Docker socket, dropped capabilities, `no-new-privileges`, CPU/memory/PID limits. Executors may receive `NET_RAW` explicitly; Planner does not receive shell capability by default.

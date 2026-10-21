@@ -1,109 +1,45 @@
 # Architecture
 
-Red Harness is a Go modular monolith with one minimal execution core and
-optional workflows.
+Red Harness v1 is a pure Go execution and trust boundary for one autonomous security Run against one logical Target.
 
-## Core
+## Layers
 
-The root `harness` package owns only the execution and trust boundary:
+1. **Control plane** — lifecycle, round-barrier exploration scheduling, depth/node/attempt/tool/wall-time budgets, cancellation and stagnation.
+2. **Execution plane** — runtime-neutral `AgentRuntimeFactory`/`AgentSession`, `ProcessStarter`, Docker sandbox and Target `Backend`.
+3. **Evidence plane** — immutable Observation and Artifact records, code-owned Branch/Attempt state and bounded same-Task Knowledge reuse.
+4. **Trust plane** — canonical append-only Store, Redactor, Verifier and the final authoritative Result.
 
-- run lifecycle, cancellation and budgets;
-- target provisioning through `Backend`;
-- isolated agent sessions through `SessionFactory`;
-- canonical event/log/run/verdict persistence through `Store`;
-- redaction before persistence;
-- authoritative verdict selection through `Verifier` or backend completion;
-- cleanup of every opened session, process and target.
+CLI, HTTP/SSE and Web sit outside the core. The root `harness` package imports only the standard library.
 
-`pi`, `sandbox/docker`, `tsec`, `verify`, `store/sqlite`, `server`, `webui`, and
-`internal/cli` are adapters around that core. The public library does not depend
-on the CLI or HTTP server.
+## Invariants
 
-## Workflow boundary
+- A successful Result can only come from `Verifier.Verify` or a backend completion with `Done=true` and `Success=true`.
+- Agent text, tool exit codes, observation content, knowledge trust and `local_success` are non-authoritative.
+- Branch identity, concurrency, depth, node count, child count, attempts, tool calls and context bounds are enforced by Go.
+- Evidence precedes knowledge: Knowledge references archived current-Attempt Observations; Observations reference archived Artifacts.
+- Event, log, normalized exploration and knowledge history writes are append-only. Canonical write failure terminates the Run.
+- Known secrets are redacted before persistence. Binary evidence containing a known secret is rejected.
+- Containers never receive the Docker socket and retain read-only root, `no-new-privileges`, capability reduction and resource limits.
+- There is one control path; no Workflow/direct-workflow duality and no resume.
 
-`RunSpec.Workflow` is an optional injected `Workflow`. The core gives it a narrow
-`WorkflowRuntime` that can:
+## Lifecycle
 
-- read the run ID, task, target, agents, budget, workspace root and latest
-  backend progress;
-- open unique sessions up to `Config.MaxSessions`;
-- emit redacted events through the canonical store;
-- redact text before normalized-state persistence.
+```text
+queued → provisioning → running → finalizing → verifying → terminal
+```
 
-A workflow cannot access the backend, verifier, store, or Run finalization
-directly. It returns only a non-authoritative `WorkflowResult` and an error.
+Terminal states are `succeeded`, `failed`, `cancelled`, `timed_out`, `stagnated`, and `interrupted`. Startup marks unfinished historical Runs `interrupted`; side effects are never replayed.
 
-When `RunSpec.Workflow` is nil, the Runner uses the direct workflow: one isolated
-session per declared `AgentSpec`, the standard bounded task prompt, persisted
-events/logs, and normal cleanup. Only a Verifier or backend completion can make
-the run successful.
+## Scheduling
 
-## Run flow
+Each round selects ready Branches in deterministic priority/depth/ID order, starts at most `MaxActiveBranches` Attempts, waits for the entire batch, then merges in deterministic order. Shared slices and normalized state are written by the collector only.
 
-1. The Runner persists a queued run and starts one target provision operation.
-2. It prepares the Harness-owned workspace and embedded skills.
-3. It constructs the workflow runtime and executes the selected workflow.
-4. Sessions emit events through the runtime; rejected event/log writes stop the
-   run. Known secrets and flag-like values are redacted before persistence.
-5. A backend completion races the workflow. On completion the Runner records the
-   authoritative verdict, cancels workflow work, and closes all sessions.
-6. After workflow completion, the Runner finalizes sessions and invokes a
-   caller-provided Verifier when no authoritative completion already won.
-7. The Runner persists the verdict, result and terminal event, then closes the
-   target backend and finishes the Run.
+Planner creates root-level hypotheses. Executor children require a completed `local_success` Attempt with at least one archived Observation and are capped at two per hypothesis branch. Review branches bind exactly two conflicting Knowledge IDs.
 
-## Optional exploration workflow
+## Isolation
 
-The `exploration` package implements the binary hypothesis tree outside the
-core:
-
-- `Branch` is the durable investigation unit; `Attempt` is one bounded
-  execution; `Observation` is immutable evidence; `Knowledge` is a
-  code-promoted conclusion.
-- The Planner is read-only and seeds root-level Branches. Executors use fresh
-  Pi contexts.
-- Expansion is executor-driven and code-capped. Only a `local_success` attempt
-  with at least one Observation may propose children.
-- The package emits `exploration.*` events and persists normalized branch,
-  attempt, observation and knowledge state through the runtime-provided store.
-- Local exploration success never establishes run success.
-
-Library callers opt in with `exploration.Configure(&spec, policy, store)`. The CLI
-continues to enable the default exploration policy for single-agent YAML/JSON
-runs and accepts the same `exploration:` block. Server requests accept either a
-top-level `exploration` object or the legacy nested `run.exploration` object.
-
-Default exploration limits:
-
-| Limit | Default |
-|---|---:|
-| Tree depth | 4 |
-| Tree nodes | 15 |
-| Children per hypothesis branch | 2 |
-| Concurrent branches | 2 |
-| Attempts per branch | 3 |
-| Tool calls per attempt | 20 |
-| Wall time per attempt | 10 minutes |
-| Stagnation rounds | 3 |
-
-## Trust boundary
-
-The run root is Harness-owned. Agent workspaces, RPC messages, tool output and
-target output are untrusted. They may be stored for audit but cannot establish
-success. The verifier and benchmark completion are the only trusted verdict
-sources.
-
-The agent container receives only explicit task/skill/workspace mounts and
-environment variables. It never receives a Docker socket. TSec credentials are
-an explicit product exception inside the agent container; persisted copies are
-redacted.
+v1 supports `caller_managed` only. Target checks are semantic reference checks, not network ACLs. The caller owns egress rules and must ensure the agent can only reach the authorized Target and required control endpoints.
 
 ## Persistence
 
-SQLite at `.harness/harness.db` is the canonical store. It contains runs,
-events, raw logs, verdicts, sweeps and optional normalized exploration state.
-Events and logs are append-only; schema migration must not delete historical
-audit rows. SSE consumers replay by event sequence.
-
-The service marks unfinished runs `interrupted` on startup and cleans labeled
-orphan containers/networks. There is no checkpoint/replay mode.
+SQLite is canonical. Events/logs have monotonic sequences for SSE replay. Branches, attempts, observations, artifacts and knowledge versions are Run-scoped. Artifact bytes are content-addressed and stored under `.harness/artifacts/sha256/`; SQLite stores metadata and source relationships.

@@ -22,7 +22,8 @@ import { isActiveStatus } from '@/utils/status'
 
 const STATUS_ORDER: RunStatus[] = [
   'running',
-  'starting',
+  'provisioning',
+  'finalizing',
   'verifying',
   'queued',
   'succeeded',
@@ -35,8 +36,9 @@ const STATUS_ORDER: RunStatus[] = [
 
 const STATUS_CLASS: Record<RunStatus, string> = {
   queued: 'bar-queued',
-  starting: 'bar-starting',
+  provisioning: 'bar-starting',
   running: 'bar-running',
+  finalizing: 'bar-finalizing',
   verifying: 'bar-verifying',
   succeeded: 'bar-succeeded',
   failed: 'bar-failed',
@@ -163,8 +165,9 @@ export default function OverviewPage() {
 function statusCountsFromOverview(runs: OverviewCounts): Record<RunStatus, number> {
   return {
     queued: runs.queued,
-    starting: runs.starting,
+    provisioning: runs.provisioning ?? runs.starting ?? 0,
     running: runs.running,
+    finalizing: runs.finalizing ?? 0,
     verifying: runs.verifying,
     succeeded: runs.succeeded,
     failed: runs.failed,
@@ -177,8 +180,10 @@ function statusCountsFromOverview(runs: OverviewCounts): Record<RunStatus, numbe
 
 interface OverviewCounts {
   queued: number
-  starting: number
+  provisioning?: number
+  starting?: number
   running: number
+  finalizing?: number
   verifying: number
   succeeded: number
   failed: number

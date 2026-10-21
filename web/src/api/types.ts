@@ -1,7 +1,8 @@
 export const RUN_STATUSES = [
   'queued',
-  'starting',
+  'provisioning',
   'running',
+  'finalizing',
   'verifying',
   'succeeded',
   'failed',
@@ -23,16 +24,37 @@ export interface Task {
   id: string
   objective: string
   inputs?: Mount[]
-  knowledge?: Mount[]
   skills?: Mount[]
-  targets?: Target[]
   metadata?: Record<string, string>
 }
 
+export type IsolationMode = 'caller_managed'
+
 export interface Target {
-  id?: string
+  id: string
   addresses?: string[]
+  isolation?: IsolationMode
   metadata?: Record<string, string>
+}
+
+export interface ResourceSpec {
+  cpus?: string
+  memory?: string
+  pids_limit?: number
+}
+
+export interface AgentSpec {
+  id: string
+  image?: string
+  command?: string[]
+  env?: Record<string, string>
+  env_from?: string[]
+  mounts?: Mount[]
+  skills?: Mount[]
+  network?: string
+  cap_add?: string[]
+  resources?: ResourceSpec
+  runtime?: unknown
 }
 
 export interface Budget {
@@ -43,39 +65,30 @@ export interface Budget {
   max_cost_usd?: number
 }
 
-export interface PiSpec {
-  provider?: string
-  model?: string
-  thinking?: string
-  tools?: string[]
-  extra_args?: string[]
-  env_passthrough?: string[]
-  system_prompt?: string
-  skills?: string[]
-  image?: string
-  models_json?: string
+export interface ExplorationPolicy {
+  max_depth: number
+  max_nodes: number
+  max_children_per_branch: number
+  max_active_branches: number
+  max_attempts_per_branch: number
+  max_tool_calls_per_attempt: number
+  max_wall_time_per_attempt: number
+  stagnation_rounds: number
 }
 
-export interface AgentSpec {
-  id: string
-  image?: string
-  command?: string[]
-  env?: Record<string, string>
-  env_from?: string[]
-  knowledge?: Mount[]
-  skills?: Mount[]
-  network?: string
-  cap_add?: string[]
-  pi?: PiSpec
-}
-
-export interface RunSpec {
+export interface RunDescriptor {
+  schema_version: number
   task: Task
-  target?: Target
-  agents: AgentSpec[]
+  target: Target
+  planner: AgentSpec
+  executors: AgentSpec[]
+  policy?: ExplorationPolicy
   budget?: Budget
-  secret_env?: string[]
-  workspace_root?: string
+}
+
+/** Read-only compatibility alias for records rendered by older builds. */
+export interface RunSpec extends Partial<RunDescriptor> {
+  agents?: AgentSpec[]
 }
 
 export interface Usage {
@@ -102,10 +115,99 @@ export interface SessionResult {
   error?: string
 }
 
+export interface Artifact {
+  id: string
+  run_id: string
+  attempt_id?: string
+  session_id?: string
+  name: string
+  media_type?: string
+  size?: number
+  sha256?: string
+  redacted?: boolean
+  created_at?: string
+}
+
+export interface Branch {
+  id: string
+  parent_id?: string
+  run_id: string
+  task_id: string
+  kind: 'root' | 'hypothesis' | 'review'
+  depth: number
+  topic: string
+  goal?: string
+  hypothesis?: string
+  success_condition?: string
+  failure_condition?: string
+  scope?: string
+  review_of?: string[]
+  status: string
+  priority?: number
+  created_at?: string
+  updated_at?: string
+}
+
+export interface Attempt {
+  id: string
+  run_id: string
+  branch_id: string
+  session_id?: string
+  status: string
+  outcome?: string
+  observation_ids?: string[]
+  started_at?: string
+  finished_at?: string
+  error?: string
+}
+
+export interface Observation {
+  id: string
+  run_id: string
+  branch_id: string
+  attempt_id: string
+  kind: string
+  summary: string
+  target?: string
+  evidence?: Artifact[]
+  created_at?: string
+}
+
+export interface KnowledgeSource {
+  run_id: string
+  attempt_id: string
+  session_id: string
+  observation: string
+}
+
+export interface Knowledge {
+  id: string
+  task_id: string
+  run_id: string
+  topic: string
+  kind: string
+  statement: string
+  scope: string
+  target?: string
+  trust: 'observed' | 'corroborated' | 'contested' | 'refuted'
+  reuse: 'stable' | 'instance' | 'never'
+  sources?: KnowledgeSource[]
+  contradicts?: string[]
+  valid_from?: string
+  last_validated?: string
+  expires_at?: string
+  version?: number
+}
+
 export interface RunResult {
   run_id: string
   status: RunStatus
   verdict?: Verdict
+  branches?: Branch[]
+  attempts?: Attempt[]
+  observations?: Observation[]
+  knowledge?: Knowledge[]
+  artifacts?: Artifact[]
   sessions?: SessionResult[]
   usage?: Usage
   error?: string
@@ -116,7 +218,7 @@ export interface RunResult {
 export interface RunRecord {
   id: string
   status: RunStatus
-  spec?: RunSpec | null
+  spec?: RunDescriptor | RunSpec | null
   result?: RunResult | null
   error?: string
   sweep_id?: string
@@ -128,6 +230,7 @@ export interface RunRecord {
 
 export interface EventRecord {
   seq: number
+  schema_version?: number
   run_id: string
   session_id?: string
   source: string
@@ -170,8 +273,10 @@ export interface RunOverview {
   active: number
   terminal: number
   queued: number
-  starting: number
+  provisioning?: number
+  starting?: number
   running: number
+  finalizing?: number
   verifying: number
   succeeded: number
   failed: number
@@ -205,12 +310,5 @@ export interface Overview {
   sweeps: SweepOverview
 }
 
-export interface HealthResponse {
-  status: string
-}
-
-export interface LogQuery {
-  afterSeq?: number
-  limit?: number
-  tail?: boolean
-}
+export interface HealthResponse { status: string }
+export interface LogQuery { afterSeq?: number; limit?: number; tail?: boolean }

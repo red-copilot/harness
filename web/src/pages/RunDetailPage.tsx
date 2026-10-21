@@ -231,7 +231,7 @@ function RunOverview({ run, verdict }: { run: RunRecord; verdict: VerdictRecord 
           <Descriptions.Item label={t('common.task')}>{run.spec?.task?.id ?? '—'}</Descriptions.Item>
           <Descriptions.Item label={t('common.sweepId')}>{run.sweep_id || '—'}</Descriptions.Item>
           <Descriptions.Item label={t('common.agents')}>
-            {run.spec?.agents?.map((agent) => agent.id).join(', ') || '—'}
+            {[run.spec?.planner, ...(run.spec?.executors ?? [])].map((agent) => agent?.id).filter(Boolean).join(', ') || '—'}
           </Descriptions.Item>
           <Descriptions.Item label={t('common.target')}>{address}</Descriptions.Item>
         </Descriptions>

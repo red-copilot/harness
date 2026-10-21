@@ -91,7 +91,7 @@ function filterRuns(runs: RunRecord[], statuses: RunStatus[], search: string): R
       run.spec?.task?.id,
       run.spec?.task?.objective,
       ...(run.spec?.target?.addresses ?? []),
-      ...(run.spec?.agents?.map((agent) => agent.id) ?? []),
+      ...(run.spec ? [run.spec.planner?.id, ...(run.spec.executors?.map((agent) => agent.id) ?? [])].filter((id): id is string => Boolean(id)) : []),
     ]
       .filter(Boolean)
       .join(' ')

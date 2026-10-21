@@ -53,3 +53,29 @@ describe('extractBranchView', () => {
     expect(view.attempts).toHaveLength(0)
   })
 })
+
+describe('extractBranchView v1 events', () => {
+  it('handles review branches, retries, artifacts and knowledge versions', () => {
+    const view = extractBranchView([
+      event(1, 'exploration.branch.created', { id: 'root', run_id: 'run_1', task_id: 'task-1', kind: 'root', depth: 0, topic: 'root', status: 'open' }),
+      event(2, 'exploration.branch.created', { id: 'review-1', parent_id: 'root', run_id: 'run_1', task_id: 'task-1', kind: 'review', depth: 1, topic: 'review.auth', status: 'open', review_of: ['k-1', 'k-2'] }),
+      event(3, 'exploration.branch.updated', { id: 'review-1', run_id: 'run_1', task_id: 'task-1', kind: 'review', depth: 1, topic: 'review.auth', status: 'resolved', review_of: ['k-1', 'k-2'] }),
+      event(4, 'exploration.attempt.failed', { id: 'attempt-1', run_id: 'run_1', branch_id: 'review-1', status: 'failed', outcome: 'failure', error: 'retry' }),
+      event(5, 'exploration.attempt.completed', { id: 'attempt-2', run_id: 'run_1', branch_id: 'review-1', status: 'completed', outcome: 'local_success' }),
+      event(6, 'artifact.stored', { id: 'sha256:abc', run_id: 'run_1', attempt_id: 'attempt-2', name: 'proof.txt', media_type: 'text/plain', size: 12, sha256: 'abc', redacted: true }),
+      event(7, 'knowledge.promoted', { id: 'k-1', task_id: 'task-1', run_id: 'run_1', topic: 'web.auth', kind: 'adapter.anchor', statement: 'auth exists', trust: 'corroborated', reuse: 'stable', version: 2, contradicts: [] }),
+    ])
+    expect(view.branches.find((branch) => branch.id === 'review-1')).toMatchObject({ kind: 'review', status: 'resolved', reviewOf: ['k-1', 'k-2'] })
+    expect(view.attempts).toHaveLength(2)
+    expect(view.artifacts[0]).toMatchObject({ name: 'proof.txt', redacted: true })
+    expect(view.knowledge[0]).toMatchObject({ id: 'k-1', trust: 'corroborated', version: 2 })
+  })
+
+  it('ignores unknown events without dropping the view', () => {
+    const view = extractBranchView([
+      event(1, 'exploration.branch.created', { id: 'root', run_id: 'run_1', task_id: 'task-1', kind: 'root', depth: 0, topic: 'root', status: 'open' }),
+      event(2, 'future.unknown', { ignored: true }),
+    ])
+    expect(view.branches).toHaveLength(1)
+  })
+})

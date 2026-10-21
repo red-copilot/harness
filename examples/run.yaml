@@ -1,4 +1,4 @@
-apiVersion: harness/v1alpha1
+apiVersion: harness/v1
 task:
   id: demo
   objective: Find the flag on the authorized target and write proof.txt to /workspace.
@@ -6,23 +6,38 @@ target:
   kind: external
   id: local-target
   addresses: ["127.0.0.1:8080"]
-agents:
-  - id: pi
+  isolation: caller_managed
+planner:
+  id: planner
+  image: harness/pi-kali:local
+  runtime:
+    provider: openai
+    model: gpt-test
+    thinking: medium
+executors:
+  - id: executor-1
     image: harness/pi-kali:local
-    pi:
+    runtime:
       provider: openai
       model: gpt-test
       thinking: medium
-      env_passthrough: [OPENAI_API_KEY]
-exploration:
+  - id: executor-2
+    image: harness/pi-kali:local
+    runtime:
+      provider: openai
+      model: gpt-test
+      thinking: medium
+policy:
   max_depth: 4
   max_nodes: 15
+  max_children_per_branch: 2
   max_active_branches: 2
   max_attempts_per_branch: 3
   max_tool_calls_per_attempt: 20
-  max_wall_time_per_attempt: 10m
+  max_wall_time_per_attempt: 600000000000
   stagnation_rounds: 3
 budget:
   wall_time_seconds: 300
+secret_env: [OPENAI_API_KEY]
 verifier:
   path: ./examples/verify.sh

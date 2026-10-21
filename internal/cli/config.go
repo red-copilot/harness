@@ -38,12 +38,26 @@ type TargetFileConfig struct {
 	Port        string   `json:"port,omitempty" yaml:"port,omitempty"`
 }
 
+type AgentFileSpec struct {
+	ID            string               `json:"id" yaml:"id"`
+	Image         string               `json:"image,omitempty" yaml:"image,omitempty"`
+	Command       []string             `json:"command,omitempty" yaml:"command,omitempty"`
+	Env           map[string]string    `json:"env,omitempty" yaml:"env,omitempty"`
+	EnvFrom       []string             `json:"env_from,omitempty" yaml:"env_from,omitempty"`
+	Mounts        []harness.Mount      `json:"mounts,omitempty" yaml:"mounts,omitempty"`
+	Skills        []harness.Mount      `json:"skills,omitempty" yaml:"skills,omitempty"`
+	Network       string               `json:"network,omitempty" yaml:"network,omitempty"`
+	CapAdd        []string             `json:"cap_add,omitempty" yaml:"cap_add,omitempty"`
+	Resources     harness.ResourceSpec `json:"resources,omitempty" yaml:"resources,omitempty"`
+	RuntimeConfig any                  `json:"runtime,omitempty" yaml:"runtime,omitempty"`
+}
+
 type FileConfig struct {
 	APIVersion    string                    `json:"apiVersion" yaml:"apiVersion"`
 	Task          harness.Task              `json:"task" yaml:"task"`
 	Target        TargetFileConfig          `json:"target" yaml:"target"`
-	Planner       harness.AgentSpec         `json:"planner" yaml:"planner"`
-	Executors     []harness.AgentSpec       `json:"executors" yaml:"executors"`
+	Planner       AgentFileSpec             `json:"planner" yaml:"planner"`
+	Executors     []AgentFileSpec           `json:"executors" yaml:"executors"`
 	Policy        harness.ExplorationPolicy `json:"policy,omitempty" yaml:"policy,omitempty"`
 	Budget        BudgetFile                `json:"budget,omitempty" yaml:"budget,omitempty"`
 	SecretEnv     []string                  `json:"secret_env,omitempty" yaml:"secret_env,omitempty"`
@@ -92,16 +106,24 @@ func (c *FileConfig) ToRunSpec(artifacts harness.ArtifactStore) (harness.RunSpec
 	target := harness.Target{ID: c.Target.ID, Addresses: append([]string(nil), c.Target.Addresses...), Isolation: harness.IsolationMode(c.Target.Isolation)}
 	spec := harness.RunSpec{Task: c.Task, Target: target, Policy: harness.NormalizeExplorationPolicy(c.Policy), Budget: harness.Budget{WallTime: time.Duration(c.Budget.WallTimeSeconds) * time.Second, MaxTokens: c.Budget.MaxTokens, MaxModelCalls: c.Budget.MaxModelCalls, MaxToolCalls: c.Budget.MaxToolCalls, MaxCostUSD: c.Budget.MaxCostUSD}, Artifacts: artifacts, SecretEnv: append([]string(nil), c.SecretEnv...), WorkspaceRoot: c.WorkspaceRoot}
 	var err error
-	spec.Planner, err = composeAgent(c.Planner)
+	planner, convertErr := c.Planner.toHarness()
+	if convertErr != nil {
+		return harness.RunSpec{}, fmt.Errorf("planner: %w", convertErr)
+	}
+	spec.Planner, err = composeAgent(planner)
 	if err != nil {
 		return harness.RunSpec{}, fmt.Errorf("planner: %w", err)
 	}
 	for i := range c.Executors {
-		spec.Executors = append(spec.Executors, c.Executors[i])
-		spec.Executors[i], err = composeAgent(c.Executors[i])
+		executor, convertErr := c.Executors[i].toHarness()
+		if convertErr != nil {
+			return harness.RunSpec{}, fmt.Errorf("executor %d: %w", i, convertErr)
+		}
+		executor, err = composeAgent(executor)
 		if err != nil {
 			return harness.RunSpec{}, fmt.Errorf("executor %d: %w", i, err)
 		}
+		spec.Executors = append(spec.Executors, executor)
 	}
 	switch c.Target.Kind {
 	case "", "external":
@@ -116,6 +138,18 @@ func (c *FileConfig) ToRunSpec(artifacts harness.ArtifactStore) (harness.RunSpec
 		spec.Verifier = *c.Verifier
 	}
 	return spec, nil
+}
+
+func (a AgentFileSpec) toHarness() (harness.AgentSpec, error) {
+	var runtimeConfig json.RawMessage
+	if a.RuntimeConfig != nil {
+		encoded, err := json.Marshal(a.RuntimeConfig)
+		if err != nil {
+			return harness.AgentSpec{}, err
+		}
+		runtimeConfig = encoded
+	}
+	return harness.AgentSpec{ID: a.ID, Image: a.Image, Command: a.Command, Env: a.Env, EnvFrom: a.EnvFrom, Mounts: a.Mounts, Skills: a.Skills, Network: a.Network, CapAdd: a.CapAdd, Resources: a.Resources, RuntimeConfig: runtimeConfig}, nil
 }
 
 func composeAgent(agent harness.AgentSpec) (harness.AgentSpec, error) {

@@ -173,6 +173,7 @@ func (r *Run) finishExecution(status Status, err error, verdict *Verdict, state 
 	if verdict != nil {
 		_ = r.runner.store.SaveVerdict(context.Background(), VerdictRecord{RunID: r.ID, Success: verdict.Success, Score: verdict.Score, Message: verdict.Message, Evidence: verdict.Evidence, CreatedAt: now})
 	}
+	result = redactResult(redactor, result)
 	resultJSON, _ := jsonMarshal(result)
 	record, getErr := r.runner.store.GetRun(context.Background(), r.ID)
 	if getErr == nil {

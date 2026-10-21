@@ -155,14 +155,28 @@ func composeDescriptor(base *FileConfig, descriptor harness.RunDescriptor, store
 	if cfg.Target.Isolation == "" {
 		cfg.Target.Isolation = string(harness.IsolationCallerManaged)
 	}
-	cfg.Planner = descriptor.Planner
-	cfg.Executors = descriptor.Executors
+	cfg.Planner = agentFromHarness(descriptor.Planner)
+	cfg.Executors = make([]AgentFileSpec, 0, len(descriptor.Executors))
+	for _, executor := range descriptor.Executors {
+		cfg.Executors = append(cfg.Executors, agentFromHarness(executor))
+	}
 	cfg.Policy = descriptor.Policy
 	cfg.Budget = BudgetFile{WallTimeSeconds: int(descriptor.Budget.WallTime / time.Second), MaxTokens: descriptor.Budget.MaxTokens, MaxModelCalls: descriptor.Budget.MaxModelCalls, MaxToolCalls: descriptor.Budget.MaxToolCalls, MaxCostUSD: descriptor.Budget.MaxCostUSD}
 	if cfg.Policy.MaxDepth == 0 {
 		cfg.Policy = harness.DefaultExplorationPolicy()
 	}
 	return cfg.ToRunSpec(store)
+}
+
+func agentFromHarness(agent harness.AgentSpec) AgentFileSpec {
+	converted := AgentFileSpec{ID: agent.ID, Image: agent.Image, Command: agent.Command, Env: agent.Env, EnvFrom: agent.EnvFrom, Mounts: agent.Mounts, Skills: agent.Skills, Network: agent.Network, CapAdd: agent.CapAdd, Resources: agent.Resources}
+	if len(agent.RuntimeConfig) > 0 {
+		var runtimeConfig any
+		if json.Unmarshal(agent.RuntimeConfig, &runtimeConfig) == nil {
+			converted.RuntimeConfig = runtimeConfig
+		}
+	}
+	return converted
 }
 
 func runsCommand(args []string, stdout, stderr io.Writer) error {

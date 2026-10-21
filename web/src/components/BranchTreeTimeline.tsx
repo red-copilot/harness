@@ -22,7 +22,7 @@ export function BranchTreeTimeline({ view }: { view: BranchView }) {
                   {branch.status}
                 </Tag>
                 <Typography.Text code>{branch.topic}</Typography.Text>
-                <Typography.Text type="secondary">depth {branch.depth} · {branch.scope}</Typography.Text>
+                <Typography.Text type="secondary">{branch.kind ?? 'branch'} · depth {branch.depth} · {branch.scope}</Typography.Text>
               </div>
               {branch.goal ? <Typography.Text>{branch.goal}</Typography.Text> : null}
               {branch.hypothesis ? <Typography.Text type="secondary">{branch.hypothesis}</Typography.Text> : null}
@@ -41,9 +41,27 @@ export function BranchTreeTimeline({ view }: { view: BranchView }) {
                   <Tag>{item.trust}</Tag>
                   <Tag>{item.reuse}</Tag>
                   <Typography.Text code>{item.topic}</Typography.Text>
-                  <Typography.Text type="secondary">{item.kind}</Typography.Text>
+                  <Typography.Text type="secondary">{item.kind}{item.version ? ` · v${item.version}` : ''}</Typography.Text>
                 </div>
                 <Typography.Text>{item.statement}</Typography.Text>
+              </article>
+            ))}
+          </div>
+        )}
+      </Card>
+      <Card title="Artifacts">
+        {view.artifacts.length === 0 ? (
+          <Typography.Text type="secondary">No archived artifacts yet</Typography.Text>
+        ) : (
+          <div className="branch-tree-list">
+            {view.artifacts.map((artifact) => (
+              <article key={`${artifact.id}:${artifact.seq}`} className="branch-tree-node">
+                <div className="branch-tree-node-head">
+                  <Tag>{artifact.mediaType ?? 'artifact'}</Tag>
+                  <Typography.Text code>{artifact.name}</Typography.Text>
+                  <Typography.Text type="secondary">{artifact.size ?? 0} bytes{artifact.redacted ? ' · redacted' : ''}</Typography.Text>
+                </div>
+                <Typography.Text type="secondary">{artifact.sha256 ?? artifact.id}</Typography.Text>
               </article>
             ))}
           </div>
