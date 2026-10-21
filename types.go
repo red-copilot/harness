@@ -361,3 +361,36 @@ type Store interface {
 	MarkInterrupted(context.Context) error
 	Close() error
 }
+
+// FactTrust records how strongly a fact is established by explorer evidence.
+// It never represents task success; only a Verifier or backend completion can
+// do that.
+type FactTrust string
+
+const (
+	FactObserved     FactTrust = "observed"
+	FactCorroborated FactTrust = "corroborated"
+	FactRefuted      FactTrust = "refuted"
+)
+
+// Fact is one bounded assertion in the shared exploration ledger.
+type Fact struct {
+	ID        string    `json:"id"`
+	Claim     string    `json:"claim"`
+	Evidence  string    `json:"evidence"`
+	Source    string    `json:"source"`
+	Sources   []string  `json:"sources"`
+	Trust     FactTrust `json:"trust"`
+	Contested bool      `json:"contested"`
+	Targets   []string  `json:"targets,omitempty"`
+	RefutedBy []string  `json:"refuted_by,omitempty"`
+}
+
+// ExplorerClaim is one claim produced by an explorer report.
+type ExplorerClaim struct {
+	Claim    string   `json:"claim"`
+	Evidence string   `json:"evidence"`
+	Targets  []string `json:"targets,omitempty"`
+	Supports []string `json:"supports,omitempty"`
+	Refutes  []string `json:"refutes,omitempty"`
+}
