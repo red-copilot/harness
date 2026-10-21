@@ -1,5 +1,8 @@
 .harness/
-dist/
+.env
+.env.*
+!.env.example
+/dist/
 coverage.out
 *.test
 *.db
@@ -10,3 +13,8 @@ coverage.out
 
 *.ovpn
 *.ovpn.*
+
+web/node_modules/
+web/coverage/
+webui/dist/*
+!webui/dist/.gitkeep

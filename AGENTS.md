@@ -14,6 +14,8 @@ does not depend on Python or the legacy `red-copilot` runtime.
 - `server/`: asynchronous HTTP API and SSE replay.
 - `internal/cli/`, `cmd/harness/`: operational CLI.
 - `skills/tsec-submit/`: embedded Pi skill and authoritative API reference.
+- `skills/tools/`: embedded security-tool selection skill with one reference
+  per preinstalled command.
 - `images/pi-kali/`: pinned Kali + Pi image.
 - `docs/`: architecture, Pi and TSec contracts.
 

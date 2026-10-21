@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,8 +21,6 @@ import (
 
 // DefaultImage is the pinned image the SDK ships for Pi in Kali.
 const DefaultImage = "ghcr.io/red-copilot/harness-pi-kali:0.1.0"
-
-const tsecSkillPath = "/skills/tsec-submit"
 
 // Factory creates Pi RPC sessions from harness.SessionRequest values.
 type Factory struct{}
@@ -55,7 +54,11 @@ func (f *Factory) NewSession(ctx context.Context, req harness.SessionRequest) (h
 			return nil, fmt.Errorf("write pi models.json: %w", err)
 		}
 	}
-	command := BuildCommand(req.Agent, tsecSkillPath)
+	skills, err := discoverSkills(req.SkillsDir)
+	if err != nil {
+		return nil, fmt.Errorf("discover skills: %w", err)
+	}
+	command := BuildCommand(req.Agent, skills...)
 	network := req.Agent.Network
 	if network == "" {
 		network = "bridge"
@@ -94,7 +97,7 @@ func (f *Factory) NewSession(ctx context.Context, req harness.SessionRequest) (h
 }
 
 // BuildCommand returns the fixed, hardened Pi RPC command line.
-func BuildCommand(agent harness.AgentSpec, tsecSkill string) []string {
+func BuildCommand(agent harness.AgentSpec, skills ...string) []string {
 	piSpec := harness.PiSpec{}
 	if agent.Pi != nil {
 		piSpec = *agent.Pi
@@ -103,7 +106,9 @@ func BuildCommand(agent harness.AgentSpec, tsecSkill string) []string {
 		"pi", "--mode", "rpc", "--no-session", "--no-approve",
 		"--no-context-files", "--no-extensions", "--no-mcp",
 		"--no-prompt-templates", "--no-themes", "--no-skills",
-		"--skill", tsecSkill,
+	}
+	for _, skill := range skills {
+		args = append(args, "--skill", skill)
 	}
 	for _, skill := range piSpec.Skills {
 		args = append(args, "--skill", skill)
@@ -126,6 +131,34 @@ func BuildCommand(agent harness.AgentSpec, tsecSkill string) []string {
 		args = append(args, "--append-system-prompt", piSpec.SystemPrompt)
 	}
 	return append(args, piSpec.ExtraArgs...)
+}
+
+func discoverSkills(root string) ([]string, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var skills []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		info, err := os.Stat(filepath.Join(root, entry.Name(), "SKILL.md"))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
+		if !info.IsDir() {
+			skills = append(skills, filepath.ToSlash(filepath.Join("/skills", entry.Name())))
+		}
+	}
+	sort.Strings(skills)
+	return skills, nil
 }
 
 type responseRecord struct {

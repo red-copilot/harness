@@ -312,6 +312,43 @@ func (s *Store) ListLogs(ctx context.Context, runID string, after int64) ([]harn
 		return nil, fmt.Errorf("list logs: %w", err)
 	}
 	defer rows.Close()
+	return scanLogs(rows)
+}
+
+// ListLogsPage returns a bounded page of logs. When tail is true and after is
+// zero, the newest limit rows are returned in ascending sequence order.
+func (s *Store) ListLogsPage(ctx context.Context, runID string, after int64, limit int, tail bool) ([]harness.LogRecord, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+	var rows *sql.Rows
+	var err error
+	if tail && after == 0 {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT seq, run_id, session_id, stream, time, text
+			FROM logs WHERE run_id=? ORDER BY seq DESC LIMIT ?`, runID, limit)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT seq, run_id, session_id, stream, time, text
+			FROM logs WHERE run_id=? AND seq>? ORDER BY seq LIMIT ?`, runID, after, limit)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list logs page: %w", err)
+	}
+	defer rows.Close()
+	out, err := scanLogs(rows)
+	if err != nil {
+		return nil, err
+	}
+	if tail && after == 0 {
+		for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+			out[i], out[j] = out[j], out[i]
+		}
+	}
+	return out, nil
+}
+
+func scanLogs(rows *sql.Rows) ([]harness.LogRecord, error) {
 	out := make([]harness.LogRecord, 0)
 	for rows.Next() {
 		var record harness.LogRecord
@@ -320,10 +357,11 @@ func (s *Store) ListLogs(ctx context.Context, runID string, after int64) ([]harn
 			&at, &record.Text); err != nil {
 			return nil, fmt.Errorf("scan log: %w", err)
 		}
-		record.Time, err = parseTime(at)
+		t, err := parseTime(at)
 		if err != nil {
 			return nil, err
 		}
+		record.Time = t
 		out = append(out, record)
 	}
 	return out, rows.Err()
@@ -509,3 +547,4 @@ func boolInt(v bool) int {
 }
 
 var _ harness.Store = (*Store)(nil)
+var _ harness.LogPageReader = (*Store)(nil)

@@ -76,17 +76,55 @@ func TestSafePiCommandDefaults(t *testing.T) {
 			Provider: "openai", Model: "gpt-test", Thinking: "medium",
 			Tools: []string{"read", "bash"}, EnvPassthrough: []string{"OPENAI_API_KEY"},
 		},
-	}, "/skills/tsec-submit")
+	}, "/skills/tools", "/skills/tsec-submit")
 	joined := strings.Join(args, " ")
 	for _, want := range []string{
 		"pi --mode rpc", "--no-session", "--no-approve", "--no-context-files",
 		"--no-extensions", "--no-mcp", "--no-prompt-templates", "--no-themes",
-		"--no-skills", "--skill /skills/tsec-submit", "--tools read,bash",
+		"--no-skills", "--skill /skills/tools", "--skill /skills/tsec-submit", "--tools read,bash",
 		"--provider openai", "--model gpt-test", "--thinking medium", "--offline",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("command %q missing %q", joined, want)
 		}
+	}
+}
+
+func TestFactoryDiscoversAllMountedSkills(t *testing.T) {
+	skillsDir := t.TempDir()
+	for _, name := range []string{"tools", "tsec-submit"} {
+		dir := filepath.Join(skillsDir, name)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatalf("create skill dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: "+name+"\n---\n"), 0o600); err != nil {
+			t.Fatalf("write skill: %v", err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(skillsDir, "not-a-skill"), 0o700); err != nil {
+		t.Fatalf("create non-skill dir: %v", err)
+	}
+
+	starter := &fakeStarter{proc: newFakeProcess()}
+	session, err := pi.NewFactory().NewSession(context.Background(), harness.SessionRequest{
+		RunID: "run", SessionID: "s1",
+		Agent:        harness.AgentSpec{ID: "pi", Image: "kali-pi:test", Pi: &harness.PiSpec{Model: "test"}},
+		WorkspaceDir: t.TempDir(), TaskDir: t.TempDir(), SkillsDir: skillsDir,
+		Env: map[string]string{}, Starter: starter,
+	})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	_ = session.Close(context.Background())
+
+	joined := strings.Join(starter.spec.Command, " ")
+	for _, want := range []string{"--skill /skills/tools", "--skill /skills/tsec-submit"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("command %q missing %q", joined, want)
+		}
+	}
+	if strings.Contains(joined, "not-a-skill") {
+		t.Fatalf("command loaded directory without SKILL.md: %q", joined)
 	}
 }
 

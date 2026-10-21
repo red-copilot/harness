@@ -127,6 +127,23 @@ func (c *FileConfig) ToRunSpec() (harness.RunSpec, error) {
 	return spec, nil
 }
 
+func applyPiEnvironmentDefaults(spec *harness.RunSpec) {
+	provider, providerSet := os.LookupEnv("PI_PROVIDER")
+	model, modelSet := os.LookupEnv("PI_MODEL")
+	for index := range spec.Agents {
+		piSpec := spec.Agents[index].Pi
+		if piSpec == nil {
+			continue
+		}
+		if piSpec.Provider == "" && providerSet {
+			piSpec.Provider = provider
+		}
+		if piSpec.Model == "" && modelSet {
+			piSpec.Model = model
+		}
+	}
+}
+
 // Migrate converts the legacy Python task/agent YAML into a Go-first config.
 // It is intentionally one-way; legacy formats are not runtime contracts.
 func Migrate(taskPath, agentPath, outPath string) error {

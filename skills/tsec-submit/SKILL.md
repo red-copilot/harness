@@ -1,9 +1,24 @@
 ---
 name: tsec-submit
-description: Submit candidate flags to the authorized TSec Benchmark API while solving a challenge. Use whenever you find a flag-like value or need to check submission progress.
+description: Submit a known flag candidate to TSec or check an existing submission. Use only when a candidate flag is present or the request explicitly asks for submission status; never use for reconnaissance, exploitation, tool selection, or general TSec progress analysis.
+metadata:
+  short-description: Submit TSec flags and check progress
 ---
 
 # TSec submission
+
+## When to use
+
+Use this skill only when both conditions are true:
+
+- The current task is an active, authorized TSec Benchmark challenge.
+- A candidate flag exists, or the user explicitly asks to check submission
+  progress.
+
+Do not load this skill merely because the task is a TSec challenge. Continue
+target investigation separately until a candidate exists.
+
+## Submission workflow
 
 Read `references/CHALLENGES_API.md` before using this skill.
 

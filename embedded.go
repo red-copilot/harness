@@ -11,6 +11,8 @@ import (
 
 //go:embed skills/tsec-submit/SKILL.md
 //go:embed skills/tsec-submit/references/CHALLENGES_API.md
+//go:embed skills/tools/SKILL.md
+//go:embed skills/tools/references/*.md
 var embeddedSkills embed.FS
 
 func prepareEmbeddedSkills(dst string) error {

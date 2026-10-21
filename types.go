@@ -335,6 +335,12 @@ type Result struct {
 	FinishedAt *time.Time      `json:"finished_at,omitempty"`
 }
 
+// LogPageReader is an optional Store extension for bounded log pagination.
+// Stores that do not implement it fall back to ListLogs in the HTTP server.
+type LogPageReader interface {
+	ListLogsPage(context.Context, string, int64, int, bool) ([]LogRecord, error)
+}
+
 // Store is the sole canonical persistence contract.
 type Store interface {
 	CreateRun(context.Context, RunRecord) error

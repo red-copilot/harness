@@ -20,11 +20,16 @@ import (
 	"github.com/red-copilot/harness/server"
 	"github.com/red-copilot/harness/store/sqlite"
 	"github.com/red-copilot/harness/tsec"
+	"github.com/red-copilot/harness/webui"
 )
 
 const Version = "0.1.0"
 
 func Main(args []string, stdout, stderr io.Writer) int {
+	if err := loadEnvFile(".env"); err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return 1
+	}
 	if len(args) == 0 {
 		printUsage(stdout)
 		return 0
@@ -97,6 +102,7 @@ func serve(args []string, stdout, stderr io.Writer) error {
 	}
 	builder := func(req server.RunRequest) (harness.RunSpec, error) {
 		spec := req.Run
+		applyPiEnvironmentDefaults(&spec)
 		if req.VerifierCommand != nil {
 			spec.Verifier = *req.VerifierCommand
 		}
@@ -139,6 +145,7 @@ func serve(args []string, stdout, stderr io.Writer) error {
 		if req.TSec == nil {
 			return server.SweepPlan{}, errors.New("tsec configuration is required for a sweep")
 		}
+		applyPiEnvironmentDefaults(&req.Run)
 		baseURL := req.TSec.BaseURL
 		if baseURL == "" {
 			baseURL = os.Getenv("BENCHMARK_BASE_URL")
@@ -179,7 +186,7 @@ func serve(args []string, stdout, stderr io.Writer) error {
 			},
 		}, nil
 	}
-	handler := server.New(runner, store, builder, sweepBuilder).Handler()
+	handler := webui.Mount(server.New(runner, store, builder, sweepBuilder).Handler())
 	fmt.Fprintf(stdout, "listening on http://%s\n", *listen)
 	return http.ListenAndServe(*listen, handler)
 }
@@ -205,6 +212,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	applyPiEnvironmentDefaults(&spec)
 	if *workspace != "" {
 		spec.WorkspaceRoot = *workspace
 	}
@@ -316,6 +324,7 @@ func tsecRun(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	applyPiEnvironmentDefaults(&spec)
 	if *workspace != "" {
 		spec.WorkspaceRoot = *workspace
 	}

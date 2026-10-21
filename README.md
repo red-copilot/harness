@@ -116,6 +116,13 @@ harness doctor
 harness migrate --task task.yaml --agent agent.yaml --out run.json
 ```
 
+The CLI loads `.env` from the current working directory before command
+dispatch. Explicitly exported variables take precedence over values in the
+file. Agent provider and model defaults can be supplied with `PI_PROVIDER` and
+`PI_MODEL`; provider credentials use the provider-specific variable named by
+the run's `env_passthrough`. Keep `.env` private with mode `600`; it is ignored
+by Git.
+
 ## HTTP API · 本地服务
 
 ```bash
@@ -132,10 +139,18 @@ Keep the listener bound to loopback unless you configure an external security bo
 
 - `POST /v1/runs` creates an asynchronous run.
 - `GET /v1/runs/{id}` returns the SQLite-backed record.
-- `GET /v1/runs/{id}/events` streams SSE with `after_seq` replay.
+- `GET /v1/runs/{id}/events` streams SSE with `after_seq` replay. When `after_seq`
+  is absent, `Last-Event-ID` is used for browser reconnects.
+- `GET /v1/runs/{id}/logs` returns bounded logs with `after_seq`, `limit`, and
+  `tail` query parameters.
+- `GET /v1/runs/{id}/verdict` returns the authoritative verdict record.
+- `GET /v1/overview` returns the latest-100-run observability summary.
 - `POST /v1/runs/{id}/cancel` cancels a live run.
 - `POST /v1/runs/{id}/steer` sends operator guidance to a live session.
 - `POST /v1/tsec/sweeps` starts a batch of TSec challenge runs.
+
+The embedded read-only observability console is served at `/` by
+`harness serve`.
 
 ## TSec · 竞赛适配
 
@@ -143,6 +158,8 @@ TSec uses the platform API directly from Go:
 
 - SDK owns `list`, `start`, `close` and completion polling.
 - Pi owns `submit` through the embedded `tsec-submit` skill.
+- The embedded `tools` skill routes the agent to installed scanners, HTTP,
+  credential, file-transfer and pivoting commands.
 - `BENCHMARK_TOKEN` is passed into the agent container for the embedded submission skill. Known token values are redacted before events and logs are written to SQLite.
 - **Security boundary:** redaction protects persisted records; it does not prevent code running inside the agent container from reading the token. Treat the container as inside the credential trust boundary.
 - The skill never starts or closes a challenge and is not intended to print the token.
@@ -160,6 +177,43 @@ Workspace files are runtime artifacts, not the authoritative record.
 Containers use a read-only root filesystem, `no-new-privileges`, dropped
 capabilities with `NET_RAW` by default, bounded CPU/memory/PIDs and no Docker
 socket. The default HTTP listener is `127.0.0.1:8080`.
+
+## Observability UI · 可观测界面
+
+The React + Vite + TypeScript console lives in `web/` and is embedded into the
+Go binary from `webui/dist`. It provides a read-only view of runs, live events,
+raw logs, authoritative verdicts and TSec sweeps. It does not create, cancel or
+steer runs.
+
+Development uses the Vite proxy to the local API:
+
+```bash
+./harness serve --listen 127.0.0.1:8080
+npm --prefix web install
+npm --prefix web run dev
+```
+
+Open `http://127.0.0.1:5173`. `VITE_PROXY_TARGET` can override the proxy target.
+
+Production builds the frontend before the Go binary:
+
+```bash
+npm --prefix web run build
+go build ./cmd/harness
+./harness serve
+```
+
+The UI build is intentionally not committed. `go build` and `go test` still work
+without it; an unbuilt server shows build instructions instead of the SPA.
+
+Frontend checks:
+
+```bash
+npm --prefix web run lint
+npm --prefix web run typecheck
+npm --prefix web run test
+npm --prefix web run build
+```
 
 ## Tests · 测试
 

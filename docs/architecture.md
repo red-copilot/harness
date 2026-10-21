@@ -7,7 +7,8 @@ The SDK is a Go modular monolith:
 - `sandbox/docker` implements the hardened container process starter and local target backends.
 - `tsec` implements the benchmark API client, challenge backend and lifecycle polling.
 - `verify` implements the external command verifier.
-- `server` implements the asynchronous HTTP API and SSE replay.
+- `server` implements the asynchronous HTTP API, bounded logs and SSE replay.
+- `webui` embeds and serves the React observability SPA from the Go binary.
 - `internal/cli` provides the operational commands.
 
 ## Run flow

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -70,6 +72,46 @@ type SweepState struct {
 	FinishedAt *time.Time       `json:"finished_at,omitempty"`
 }
 
+// Overview is the bounded observability summary returned to the UI.
+type Overview struct {
+	GeneratedAt time.Time        `json:"generated_at"`
+	Window      int              `json:"window"`
+	Runs        RunOverview      `json:"runs"`
+	Usage       harness.Usage    `json:"usage"`
+	Duration    DurationOverview `json:"duration"`
+	Sweeps      SweepOverview    `json:"sweeps"`
+}
+
+type RunOverview struct {
+	Total       int     `json:"total"`
+	Active      int     `json:"active"`
+	Terminal    int     `json:"terminal"`
+	Queued      int     `json:"queued"`
+	Starting    int     `json:"starting"`
+	Running     int     `json:"running"`
+	Verifying   int     `json:"verifying"`
+	Succeeded   int     `json:"succeeded"`
+	Failed      int     `json:"failed"`
+	Cancelled   int     `json:"cancelled"`
+	TimedOut    int     `json:"timed_out"`
+	Interrupted int     `json:"interrupted"`
+	SuccessRate float64 `json:"success_rate"`
+}
+
+type DurationOverview struct {
+	Samples   int     `json:"samples"`
+	AverageMS float64 `json:"average_ms"`
+	P50MS     float64 `json:"p50_ms"`
+	P95MS     float64 `json:"p95_ms"`
+}
+
+type SweepOverview struct {
+	Total     int `json:"total"`
+	Active    int `json:"active"`
+	Succeeded int `json:"succeeded"`
+	Failed    int `json:"failed"`
+}
+
 type Server struct {
 	runner       *harness.Runner
 	store        harness.Store
@@ -95,6 +137,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", s.health)
 	mux.HandleFunc("/v1/runs", s.runs)
 	mux.HandleFunc("/v1/runs/", s.run)
+	mux.HandleFunc("/v1/overview", s.overview)
 	mux.HandleFunc("/v1/tsec/sweeps", s.sweepListCreate)
 	mux.HandleFunc("/v1/tsec/sweeps/", s.sweepGet)
 	return mux
@@ -181,6 +224,18 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.streamEvents(w, r, runID)
+	case "logs":
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, http.MethodGet)
+			return
+		}
+		s.runLogs(w, r, runID)
+	case "verdict":
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, http.MethodGet)
+			return
+		}
+		s.runVerdict(w, r, runID)
 	case "cancel":
 		if r.Method != http.MethodPost {
 			methodNotAllowed(w, http.MethodPost)
@@ -242,10 +297,15 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, runID stri
 			return
 		}
 		after = parsed
+	} else if value := r.Header.Get("Last-Event-ID"); value != "" {
+		if parsed, err := strconv.ParseInt(value, 10, 64); err == nil && parsed >= 0 {
+			after = parsed
+		}
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
 	lastSeq := after
 	for {
 		events, err := s.store.ListEvents(r.Context(), runID, lastSeq)
@@ -270,6 +330,212 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, runID stri
 			return
 		case <-time.After(100 * time.Millisecond):
 		}
+	}
+}
+
+func (s *Server) runLogs(w http.ResponseWriter, r *http.Request, runID string) {
+	if _, err := s.store.GetRun(r.Context(), runID); err != nil {
+		writeError(w, http.StatusNotFound, "run not found")
+		return
+	}
+	after, limit, tail, err := parseLogQuery(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var logs []harness.LogRecord
+	if reader, ok := s.store.(harness.LogPageReader); ok {
+		logs, err = reader.ListLogsPage(r.Context(), runID, after, limit, tail)
+	} else {
+		var all []harness.LogRecord
+		all, err = s.store.ListLogs(r.Context(), runID, after)
+		if err == nil {
+			if tail && after == 0 && len(all) > limit {
+				all = all[len(all)-limit:]
+			} else if len(all) > limit {
+				all = all[:limit]
+			}
+			logs = all
+		}
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if logs == nil {
+		logs = []harness.LogRecord{}
+	}
+	writeJSON(w, http.StatusOK, logs)
+}
+
+func parseLogQuery(r *http.Request) (int64, int, bool, error) {
+	query := r.URL.Query()
+	after := int64(0)
+	if value := query.Get("after_seq"); value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || parsed < 0 {
+			return 0, 0, false, fmt.Errorf("after_seq must be a non-negative integer")
+		}
+		after = parsed
+	}
+	limit := 1000
+	if value := query.Get("limit"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 || parsed > 5000 {
+			return 0, 0, false, fmt.Errorf("limit must be between 1 and 5000")
+		}
+		limit = parsed
+	}
+	tail := false
+	if value := query.Get("tail"); value != "" {
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return 0, 0, false, fmt.Errorf("tail must be a boolean")
+		}
+		tail = parsed
+	}
+	return after, limit, tail, nil
+}
+
+func (s *Server) runVerdict(w http.ResponseWriter, r *http.Request, runID string) {
+	if _, err := s.store.GetRun(r.Context(), runID); err != nil {
+		writeError(w, http.StatusNotFound, "run not found")
+		return
+	}
+	verdict, err := s.store.GetVerdict(r.Context(), runID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "verdict not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, verdict)
+}
+
+func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	runs, err := s.store.ListRuns(r.Context(), 100)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	sweeps, err := s.store.ListSweeps(r.Context(), 100)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, buildOverview(runs, sweeps))
+}
+
+func buildOverview(runs []harness.RunRecord, sweeps []harness.SweepRecord) Overview {
+	overview := Overview{
+		GeneratedAt: time.Now().UTC(),
+		Window:      100,
+		Runs:        RunOverview{Total: len(runs)},
+	}
+	durations := make([]float64, 0)
+	for _, run := range runs {
+		switch run.Status {
+		case harness.StatusQueued:
+			overview.Runs.Queued++
+		case harness.StatusStarting:
+			overview.Runs.Starting++
+		case harness.StatusRunning:
+			overview.Runs.Running++
+		case harness.StatusVerifying:
+			overview.Runs.Verifying++
+		case harness.StatusSucceeded:
+			overview.Runs.Succeeded++
+		case harness.StatusFailed:
+			overview.Runs.Failed++
+		case harness.StatusCancelled:
+			overview.Runs.Cancelled++
+		case harness.StatusTimedOut:
+			overview.Runs.TimedOut++
+		case harness.StatusInterrupted:
+			overview.Runs.Interrupted++
+		}
+		if isActive(run.Status) {
+			overview.Runs.Active++
+		}
+		if isTerminal(run.Status) {
+			overview.Runs.Terminal++
+		}
+		if len(run.Result) != 0 {
+			var result harness.Result
+			if json.Unmarshal(run.Result, &result) == nil {
+				overview.Usage.InputTokens += result.Usage.InputTokens
+				overview.Usage.OutputTokens += result.Usage.OutputTokens
+				overview.Usage.TotalTokens += result.Usage.TotalTokens
+				overview.Usage.ModelCalls += result.Usage.ModelCalls
+				overview.Usage.ToolCalls += result.Usage.ToolCalls
+				overview.Usage.CostUSD += result.Usage.CostUSD
+			}
+		}
+		if run.StartedAt != nil && run.FinishedAt != nil && !run.FinishedAt.Before(*run.StartedAt) {
+			durations = append(durations, float64(run.FinishedAt.Sub(*run.StartedAt).Milliseconds()))
+		}
+	}
+	if overview.Runs.Terminal > 0 {
+		overview.Runs.SuccessRate = round(float64(overview.Runs.Succeeded)/float64(overview.Runs.Terminal), 4)
+	}
+	overview.Duration = summarizeDurations(durations)
+	overview.Usage.CostUSD = round(overview.Usage.CostUSD, 6)
+	overview.Sweeps.Total = len(sweeps)
+	for _, sweep := range sweeps {
+		if isActive(sweep.Status) {
+			overview.Sweeps.Active++
+		}
+		switch sweep.Status {
+		case harness.StatusSucceeded:
+			overview.Sweeps.Succeeded++
+		case harness.StatusFailed:
+			overview.Sweeps.Failed++
+		}
+	}
+	return overview
+}
+
+func summarizeDurations(values []float64) DurationOverview {
+	if len(values) == 0 {
+		return DurationOverview{}
+	}
+	sort.Float64s(values)
+	total := 0.0
+	for _, value := range values {
+		total += value
+	}
+	return DurationOverview{
+		Samples:   len(values),
+		AverageMS: round(total/float64(len(values)), 3),
+		P50MS:     percentile(values, 0.50),
+		P95MS:     percentile(values, 0.95),
+	}
+}
+
+func percentile(sorted []float64, p float64) float64 {
+	index := int(math.Ceil(p*float64(len(sorted)))) - 1
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(sorted) {
+		index = len(sorted) - 1
+	}
+	return sorted[index]
+}
+
+func round(value float64, places int) float64 {
+	scale := math.Pow10(places)
+	return math.Round(value*scale) / scale
+}
+
+func isActive(status harness.Status) bool {
+	switch status {
+	case harness.StatusQueued, harness.StatusStarting, harness.StatusRunning, harness.StatusVerifying:
+		return true
+	default:
+		return false
 	}
 }
 

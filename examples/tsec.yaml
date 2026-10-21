@@ -6,11 +6,9 @@ agents:
   - id: pi
     image: harness/pi-kali:local
     pi:
-      provider: openai
-      model: gpt-test
       thinking: high
       tools: [read, bash, edit, write]
-      env_passthrough: [OPENAI_API_KEY]
+      env_passthrough: [OPENCODE_API_KEY]
     env_from: [BENCHMARK_BASE_URL, BENCHMARK_TOKEN]
 budget:
   wall_time_seconds: 1800
