@@ -10,7 +10,11 @@ import (
 )
 
 // BuildPlannerContext creates the deterministic, bounded planner view.
-func BuildPlannerContext(task Task, target Target, branches []Branch, knowledge []Knowledge, progress Completion, attempts []Attempt, policy ExplorationPolicy) (PlanRequest, int) {
+func BuildPlannerContext(task Task, target Target, branches []Branch, knowledge []Knowledge, progress Completion, attempts []Attempt) (PlanRequest, int) {
+	return buildPlannerContext(task, target, branches, knowledge, progress, attempts, DefaultExplorationPolicy())
+}
+
+func buildPlannerContext(task Task, target Target, branches []Branch, knowledge []Knowledge, progress Completion, attempts []Attempt, policy ExplorationPolicy) (PlanRequest, int) {
 	policy = NormalizeExplorationPolicy(policy)
 	summaries := make([]BranchSummary, 0, len(branches))
 	for i, branch := range branches {
@@ -24,7 +28,7 @@ func BuildPlannerContext(task Task, target Target, branches []Branch, knowledge 
 			ReviewOf: append([]string(nil), branch.ReviewOf...),
 		})
 	}
-	digest, dropped := boundedKnowledgeDigest(knowledge, policy, time.Now().UTC())
+	digest, dropped := boundedKnowledgeDigest(knowledge, target, policy, time.Now().UTC())
 	recent := make([]AttemptSummary, 0, policy.MaxActiveBranches)
 	for _, attempt := range attempts {
 		if len(recent) >= policy.MaxActiveBranches {
@@ -39,22 +43,29 @@ func BuildPlannerContext(task Task, target Target, branches []Branch, knowledge 
 }
 
 // BuildExecutorContext creates the deterministic, bounded executor view.
-func BuildExecutorContext(task Task, target Target, branch Branch, knowledge []Knowledge, budget AttemptBudget, workspaceDir string, policy ExplorationPolicy) (AttemptRequest, int) {
+func BuildExecutorContext(task Task, target Target, branch Branch, knowledge []Knowledge, budget AttemptBudget, workspaceDir string) (AttemptRequest, int) {
+	return buildExecutorContext(task, target, branch, knowledge, budget, workspaceDir, DefaultExplorationPolicy())
+}
+
+func buildExecutorContext(task Task, target Target, branch Branch, knowledge []Knowledge, budget AttemptBudget, workspaceDir string, policy ExplorationPolicy) (AttemptRequest, int) {
 	policy = NormalizeExplorationPolicy(policy)
-	digest, dropped := boundedKnowledgeDigest(knowledge, policy, time.Now().UTC())
+	digest, dropped := boundedKnowledgeDigest(knowledge, target, policy, time.Now().UTC())
 	return AttemptRequest{
 		Task: task, Target: target, Branch: branch, Knowledge: digest,
 		Budget: budget, WorkspaceDir: workspaceDir,
 	}, dropped
 }
 
-func boundedKnowledgeDigest(items []Knowledge, policy ExplorationPolicy, now time.Time) ([]Knowledge, int) {
+func boundedKnowledgeDigest(items []Knowledge, target Target, policy ExplorationPolicy, now time.Time) ([]Knowledge, int) {
 	filtered := make([]Knowledge, 0, len(items))
 	for _, item := range items {
 		if item.Trust == KnowledgeRefuted || item.Trust == "" {
 			continue
 		}
 		if item.ExpiresAt != nil && !item.ExpiresAt.After(now) {
+			continue
+		}
+		if (item.Scope == KnowledgeScopeTarget || item.Scope == KnowledgeScopeInstance) && item.Target != "" && item.Target != target.ID && item.Target != targetFingerprint(target) {
 			continue
 		}
 		filtered = append(filtered, item)

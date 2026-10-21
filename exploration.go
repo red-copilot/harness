@@ -224,7 +224,7 @@ func (e *explorationEngine) run(ctx context.Context) error {
 
 func (e *explorationEngine) plan(ctx context.Context, root Branch) (int, error) {
 	state := e.state
-	request, dropped := BuildPlannerContext(state.task, state.target, state.branches, state.knowledge, e.live.progress(), state.attempts, state.policy)
+	request, dropped := buildPlannerContext(state.task, state.target, state.branches, state.knowledge, e.live.progress(), state.attempts, state.policy)
 	if dropped > 0 {
 		state.dropped["planner"] += dropped
 		if err := e.emit("exploration.context.truncated", map[string]any{"context": "planner", "candidates": len(state.knowledge), "kept": len(request.Knowledge), "dropped": dropped}); err != nil {
@@ -364,7 +364,7 @@ func (e *explorationEngine) runBatch(ctx context.Context, branches []Branch) ([]
 				execution.err = err
 				return
 			}
-			request, dropped := BuildExecutorContext(state.task, state.target, execution.branch, state.knowledge, AttemptBudget{MaxAttempts: state.policy.MaxAttemptsPerBranch, MaxToolCalls: state.policy.MaxToolCallsPerAttempt, MaxWallTime: state.policy.MaxWallTimePerAttempt}, e.live.sessionWorkspace(state.runID, execution.sessionID), state.policy)
+			request, dropped := buildExecutorContext(state.task, state.target, execution.branch, state.knowledge, AttemptBudget{MaxAttempts: state.policy.MaxAttemptsPerBranch, MaxToolCalls: state.policy.MaxToolCallsPerAttempt, MaxWallTime: state.policy.MaxWallTimePerAttempt}, e.live.sessionWorkspace(state.runID, execution.sessionID), state.policy)
 			if dropped > 0 {
 				if err := e.emit("exploration.context.truncated", map[string]any{"context": "executor", "attempt_id": execution.attempt.ID, "dropped": dropped}); err != nil {
 					execution.err = err
