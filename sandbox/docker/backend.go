@@ -50,12 +50,14 @@ func (b ImageBackend) Provision(ctx context.Context, req harness.ProvisionReques
 		name = "harness_target_" + safeName(req.RunID)
 	}
 	network := b.Network
+	createdNetwork := false
 	if network == "" {
 		network = "harness_net_" + safeName(req.RunID)
 		if err := run(ctx, docker, "network", "create",
 			"--label", "harness.managed=true", "--label", "harness.run_id="+req.RunID, network); err != nil {
 			return harness.Target{}, fmt.Errorf("create target network: %w", err)
 		}
+		createdNetwork = true
 	}
 	args := []string{"run", "-d", "--name", name, "--network", network,
 		"--label", "harness.managed=true", "--label", "harness.run_id=" + req.RunID}
@@ -68,6 +70,10 @@ func (b ImageBackend) Provision(ctx context.Context, req harness.ProvisionReques
 	args = append(args, b.Image)
 	args = append(args, b.Command...)
 	if err := run(ctx, docker, args...); err != nil {
+		_ = run(ctx, docker, "rm", "-f", name)
+		if createdNetwork {
+			_ = run(ctx, docker, "network", "rm", network)
+		}
 		return harness.Target{}, fmt.Errorf("start target image: %w", err)
 	}
 	addresses := append([]string(nil), b.Addresses...)
@@ -86,7 +92,7 @@ func (b ImageBackend) Provision(ctx context.Context, req harness.ProvisionReques
 		}
 	}
 	return harness.Target{
-		ID: name, Addresses: addresses,
+		ID: name, Addresses: addresses, Isolation: harness.IsolationCallerManaged,
 		Metadata: map[string]string{
 			"container_name": name, "network": network,
 			"target_addresses": strings.Join(addresses, ","),
@@ -134,6 +140,7 @@ func (b ComposeBackend) Provision(ctx context.Context, req harness.ProvisionRequ
 	}
 	args := []string{"compose", "-p", project, "-f", filepath.Clean(b.File), "up", "-d"}
 	if err := run(ctx, docker, args...); err != nil {
+		_ = run(ctx, docker, "compose", "-p", project, "-f", filepath.Clean(b.File), "down", "-v", "--remove-orphans")
 		return harness.Target{}, fmt.Errorf("compose up: %w", err)
 	}
 	addresses := append([]string(nil), b.Addresses...)
@@ -150,7 +157,7 @@ func (b ComposeBackend) Provision(ctx context.Context, req harness.ProvisionRequ
 		}
 	}
 	return harness.Target{
-		ID: project, Addresses: addresses,
+		ID: project, Addresses: addresses, Isolation: harness.IsolationCallerManaged,
 		Metadata: map[string]string{
 			"compose_project": project, "compose_file": b.File,
 			"network": project + "_default",

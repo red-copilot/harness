@@ -58,3 +58,9 @@ func TestCommandVerifierFailsClosed(t *testing.T) {
 		t.Fatal("expected invalid verdict error")
 	}
 }
+
+func TestCommandVerifierRejectsMissingScript(t *testing.T) {
+	if _, err := (verify.Command{Path: filepath.Join(t.TempDir(), "missing")}).Verify(context.Background(), harness.VerifyRequest{}); err == nil {
+		t.Fatal("missing verifier script was accepted")
+	}
+}
