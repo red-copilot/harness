@@ -46,3 +46,7 @@ present them as passing unless they were actually run.
 - Add tests first; include negative/fail-closed cases for malformed input,
   cancellation, process exit, verification errors and cleanup.
 - Use Conventional Commits with a scope, for example `feat(pi): ...`.
+- After a task is implemented and its required verification passes, commit
+  only the files changed for that task and push the current branch to its
+  upstream automatically, without asking for additional confirmation. If
+  verification fails or the push is blocked, stop and report the exact reason.
