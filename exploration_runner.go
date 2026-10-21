@@ -47,7 +47,10 @@ func resolveExplorationAgents(spec RunSpec) (AgentSpec, []AgentSpec, error) {
 	if len(executorIDs) == 0 {
 		workers := spec.Exploration.MaxWorkers
 		if workers <= 0 {
-			workers = DefaultExplorationWorkers
+			workers = spec.Exploration.MaxActiveBranches
+		}
+		if workers <= 0 {
+			workers = DefaultExplorationPolicy().MaxActiveBranches
 		}
 		executors := make([]AgentSpec, 0, workers)
 		for index := 1; index <= workers; index++ {

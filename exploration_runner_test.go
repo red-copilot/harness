@@ -162,6 +162,9 @@ func TestRunnerDispatchesFreshFrontierSessions(t *testing.T) {
 	if len(roles) != 3 || roles[0] != "planner" || roles[1] != "executor-1" || roles[2] != "executor-2" {
 		t.Fatalf("roles = %v, want planner + two executors", roles)
 	}
+	if len(result.Sessions) != 3 {
+		t.Fatalf("session results = %d, want planner + two executors", len(result.Sessions))
+	}
 	for _, session := range sessions {
 		session.mu.Lock()
 		resets := session.resets
