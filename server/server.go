@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -48,6 +50,7 @@ func New(runner *harness.Runner, store harness.Store, builder Builder) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.health)
+	mux.HandleFunc("/v1/overview", s.overview)
 	mux.HandleFunc("/v1/runs", s.runs)
 	mux.HandleFunc("/v1/runs/", s.run)
 	mux.HandleFunc("/v1/tasks/", s.task)
@@ -60,6 +63,139 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
+
+// overviewWindow is how many recent Runs the overview aggregates.
+const overviewWindow = 100
+
+type overviewRuns struct {
+	Total        int     `json:"total"`
+	Active       int     `json:"active"`
+	Terminal     int     `json:"terminal"`
+	Queued       int     `json:"queued"`
+	Provisioning int     `json:"provisioning"`
+	Running      int     `json:"running"`
+	Finalizing   int     `json:"finalizing"`
+	Verifying    int     `json:"verifying"`
+	Succeeded    int     `json:"succeeded"`
+	Failed       int     `json:"failed"`
+	Cancelled    int     `json:"cancelled"`
+	TimedOut     int     `json:"timed_out"`
+	Interrupted  int     `json:"interrupted"`
+	Stagnated    int     `json:"stagnated"`
+	SuccessRate  float64 `json:"success_rate"`
+}
+
+type overviewDuration struct {
+	Samples   int     `json:"samples"`
+	AverageMS float64 `json:"average_ms"`
+	P50MS     float64 `json:"p50_ms"`
+	P95MS     float64 `json:"p95_ms"`
+}
+
+type overviewResponse struct {
+	GeneratedAt time.Time        `json:"generated_at"`
+	Window      int              `json:"window"`
+	Runs        overviewRuns     `json:"runs"`
+	Usage       harness.Usage    `json:"usage"`
+	Duration    overviewDuration `json:"duration"`
+}
+
+// overview aggregates the same canonical Run records the UI lists. It is a
+// read-only projection; it never derives success from anything but the stored
+// terminal status.
+func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	records, err := s.store.ListRuns(r.Context(), overviewWindow)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	response := overviewResponse{GeneratedAt: time.Now().UTC(), Window: overviewWindow}
+	response.Runs.Total = len(records)
+	var durations []float64
+	for _, record := range records {
+		switch record.Status {
+		case harness.StatusQueued:
+			response.Runs.Queued++
+		case harness.StatusProvisioning:
+			response.Runs.Provisioning++
+		case harness.StatusRunning:
+			response.Runs.Running++
+		case harness.StatusFinalizing:
+			response.Runs.Finalizing++
+		case harness.StatusVerifying:
+			response.Runs.Verifying++
+		case harness.StatusSucceeded:
+			response.Runs.Succeeded++
+		case harness.StatusFailed:
+			response.Runs.Failed++
+		case harness.StatusCancelled:
+			response.Runs.Cancelled++
+		case harness.StatusTimedOut:
+			response.Runs.TimedOut++
+		case harness.StatusInterrupted:
+			response.Runs.Interrupted++
+		case harness.StatusStagnated:
+			response.Runs.Stagnated++
+		}
+		if len(record.Result) == 0 {
+			continue
+		}
+		var result harness.Result
+		if err := json.Unmarshal(record.Result, &result); err != nil {
+			continue
+		}
+		response.Usage.InputTokens += result.Usage.InputTokens
+		response.Usage.OutputTokens += result.Usage.OutputTokens
+		response.Usage.TotalTokens += result.Usage.TotalTokens
+		response.Usage.ModelCalls += result.Usage.ModelCalls
+		response.Usage.ToolCalls += result.Usage.ToolCalls
+		response.Usage.CostUSD += result.Usage.CostUSD
+		if result.StartedAt != nil && result.FinishedAt != nil && result.FinishedAt.After(*result.StartedAt) {
+			durations = append(durations, float64(result.FinishedAt.Sub(*result.StartedAt).Milliseconds()))
+		}
+	}
+	response.Runs.Active = response.Runs.Queued + response.Runs.Provisioning + response.Runs.Running + response.Runs.Finalizing + response.Runs.Verifying
+	response.Runs.Terminal = response.Runs.Total - response.Runs.Active
+	if response.Runs.Terminal > 0 {
+		response.Runs.SuccessRate = float64(response.Runs.Succeeded) / float64(response.Runs.Terminal)
+	}
+	response.Duration = summarizeDurations(durations)
+	writeJSON(w, http.StatusOK, response)
+}
+
+func summarizeDurations(values []float64) overviewDuration {
+	if len(values) == 0 {
+		return overviewDuration{}
+	}
+	sorted := append([]float64(nil), values...)
+	sort.Float64s(sorted)
+	var total float64
+	for _, value := range sorted {
+		total += value
+	}
+	return overviewDuration{
+		Samples:   len(sorted),
+		AverageMS: total / float64(len(sorted)),
+		P50MS:     nearestRank(sorted, 0.50),
+		P95MS:     nearestRank(sorted, 0.95),
+	}
+}
+
+func nearestRank(sorted []float64, percentile float64) float64 {
+	index := int(math.Ceil(percentile*float64(len(sorted)))) - 1
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(sorted) {
+		index = len(sorted) - 1
+	}
+	return sorted[index]
+}
+
 func (s *Server) runs(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -270,10 +406,19 @@ func (s *Server) logs(w http.ResponseWriter, r *http.Request, runID string) {
 		return
 	}
 	after, _ := strconv.ParseInt(r.URL.Query().Get("after_seq"), 10, 64)
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	tail := r.URL.Query().Get("tail") == "true"
 	items, err := s.store.ListLogs(r.Context(), runID, after)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	// tail=limit returns the newest page, which is what a client needs to open
+	// an existing log stream. limit alone keeps the oldest page after_seq.
+	if tail && limit > 0 && len(items) > limit {
+		items = items[len(items)-limit:]
+	} else if !tail && limit > 0 && len(items) > limit {
+		items = items[:limit]
 	}
 	writeJSON(w, http.StatusOK, items)
 }

@@ -150,3 +150,113 @@ func (emptyExecutorStrategy) Prompt(harness.AttemptRequest) (string, error) { re
 func (emptyExecutorStrategy) Parse(harness.AttemptRequest, harness.TurnResult) (harness.AttemptReport, error) {
 	return harness.AttemptReport{Status: harness.AttemptCompleted, Outcome: harness.AttemptInconclusive}, nil
 }
+
+// TestOverviewAggregatesCanonicalRuns: the overview is a projection of stored
+// Run records, so its counts, usage and durations must come from the audit
+// trail rather than from any in-memory estimate.
+func TestOverviewAggregatesCanonicalRuns(t *testing.T) {
+	store, runner := testServerRunner(t)
+	ctx := context.Background()
+	started := time.Now().UTC().Add(-2 * time.Minute)
+	finished := started.Add(90 * time.Second)
+	result, err := json.Marshal(harness.Result{Status: harness.StatusSucceeded, Usage: harness.Usage{InputTokens: 10, OutputTokens: 20, TotalTokens: 30, ModelCalls: 2, ToolCalls: 3, CostUSD: 0.5}, StartedAt: &started, FinishedAt: &finished})
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := []harness.RunRecord{
+		{ID: "run-succeeded", Status: harness.StatusSucceeded, Result: result},
+		{ID: "run-failed", Status: harness.StatusFailed},
+		{ID: "run-running", Status: harness.StatusRunning},
+	}
+	for index, record := range records {
+		record.CreatedAt = time.Now().UTC().Add(time.Duration(index) * time.Second)
+		if err := store.CreateRun(ctx, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := server.New(runner, store, func(harness.RunDescriptor) (harness.RunSpec, error) { return harness.RunSpec{}, nil }).Handler()
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/overview", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var overview struct {
+		Window int `json:"window"`
+		Runs   struct {
+			Total       int     `json:"total"`
+			Active      int     `json:"active"`
+			Terminal    int     `json:"terminal"`
+			Running     int     `json:"running"`
+			Succeeded   int     `json:"succeeded"`
+			Failed      int     `json:"failed"`
+			SuccessRate float64 `json:"success_rate"`
+		} `json:"runs"`
+		Usage    harness.Usage `json:"usage"`
+		Duration struct {
+			Samples   int     `json:"samples"`
+			AverageMS float64 `json:"average_ms"`
+			P95MS     float64 `json:"p95_ms"`
+		} `json:"duration"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &overview); err != nil {
+		t.Fatalf("decode overview: %v body=%s", err, rec.Body.String())
+	}
+	if overview.Window <= 0 || overview.Runs.Total != 3 || overview.Runs.Active != 1 || overview.Runs.Terminal != 2 ||
+		overview.Runs.Running != 1 || overview.Runs.Succeeded != 1 || overview.Runs.Failed != 1 || overview.Runs.SuccessRate != 0.5 {
+		t.Fatalf("overview counts = %+v", overview)
+	}
+	if overview.Usage.TotalTokens != 30 || overview.Usage.ToolCalls != 3 || overview.Usage.CostUSD != 0.5 {
+		t.Fatalf("overview usage = %+v", overview.Usage)
+	}
+	if overview.Duration.Samples != 1 || overview.Duration.AverageMS != 90000 || overview.Duration.P95MS != 90000 {
+		t.Fatalf("overview duration = %+v", overview.Duration)
+	}
+}
+
+// TestLogsHonorLimitAndTail: the SPA opens an existing log stream with
+// tail=limit and pages forward with after_seq+limit. Ignoring those parameters
+// makes a long Run download its whole log on every poll.
+func TestLogsHonorLimitAndTail(t *testing.T) {
+	store, runner := testServerRunner(t)
+	ctx := context.Background()
+	if err := store.CreateRun(ctx, harness.RunRecord{ID: "run-1", Status: harness.StatusRunning, CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	for index := 1; index <= 4; index++ {
+		if _, err := store.AppendLog(ctx, harness.LogRecord{RunID: "run-1", Stream: "stderr", Text: "line", Time: time.Now().UTC()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := server.New(runner, store, func(harness.RunDescriptor) (harness.RunSpec, error) { return harness.RunSpec{}, nil }).Handler()
+	for _, tc := range []struct {
+		target string
+		want   []int64
+	}{
+		{"/v1/runs/run-1/logs?tail=true&limit=2", []int64{3, 4}},
+		{"/v1/runs/run-1/logs?limit=2", []int64{1, 2}},
+		{"/v1/runs/run-1/logs?after_seq=2&limit=1", []int64{3}},
+		{"/v1/runs/run-1/logs", []int64{1, 2, 3, 4}},
+	} {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.target, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status = %d body=%s", tc.target, rec.Code, rec.Body.String())
+		}
+		var items []harness.LogRecord
+		if err := json.Unmarshal(rec.Body.Bytes(), &items); err != nil {
+			t.Fatalf("%s decode: %v", tc.target, err)
+		}
+		var seqs []int64
+		for _, item := range items {
+			seqs = append(seqs, item.Seq)
+		}
+		if len(seqs) != len(tc.want) {
+			t.Fatalf("%s seqs = %v, want %v", tc.target, seqs, tc.want)
+		}
+		for index := range seqs {
+			if seqs[index] != tc.want[index] {
+				t.Fatalf("%s seqs = %v, want %v", tc.target, seqs, tc.want)
+			}
+		}
+	}
+}
