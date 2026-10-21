@@ -12,8 +12,18 @@ import (
 	"github.com/red-copilot/harness"
 	"github.com/red-copilot/harness/pi"
 	"github.com/red-copilot/harness/sandbox/docker"
+	"github.com/red-copilot/harness/tsec"
 	"github.com/red-copilot/harness/verify"
 )
+
+type TSecFileConfig struct {
+	BaseURL    string `json:"base_url,omitempty" yaml:"base_url,omitempty"`
+	Token      string `json:"token,omitempty" yaml:"token,omitempty"`
+	BaseURLEnv string `json:"base_url_env,omitempty" yaml:"base_url_env,omitempty"`
+	TokenEnv   string `json:"token_env,omitempty" yaml:"token_env,omitempty"`
+	UseHint    bool   `json:"use_hint,omitempty" yaml:"use_hint,omitempty"`
+	CheckVPN   bool   `json:"check_vpn,omitempty" yaml:"check_vpn,omitempty"`
+}
 
 type BudgetFile struct {
 	WallTimeSeconds int     `json:"wall_time_seconds,omitempty" yaml:"wall_time_seconds,omitempty"`
@@ -63,6 +73,7 @@ type FileConfig struct {
 	SecretEnv     []string                  `json:"secret_env,omitempty" yaml:"secret_env,omitempty"`
 	WorkspaceRoot string                    `json:"workspace_root,omitempty" yaml:"workspace_root,omitempty"`
 	Verifier      *verify.Command           `json:"verifier,omitempty" yaml:"verifier,omitempty"`
+	TSec          *TSecFileConfig           `json:"tsec,omitempty" yaml:"tsec,omitempty"`
 }
 
 func LoadConfig(path string) (*FileConfig, error) {
@@ -94,6 +105,14 @@ func LoadConfig(path string) (*FileConfig, error) {
 	}
 	if cfg.Policy.MaxDepth == 0 {
 		cfg.Policy = harness.DefaultExplorationPolicy()
+	}
+	if cfg.TSec != nil {
+		if cfg.TSec.BaseURLEnv == "" {
+			cfg.TSec.BaseURLEnv = "BENCHMARK_BASE_URL"
+		}
+		if cfg.TSec.TokenEnv == "" {
+			cfg.TSec.TokenEnv = "BENCHMARK_TOKEN"
+		}
 	}
 	return &cfg, nil
 }
@@ -131,6 +150,30 @@ func (c *FileConfig) ToRunSpec(artifacts harness.ArtifactStore) (harness.RunSpec
 		spec.Backend = docker.ImageBackend{Image: c.Target.Image, Command: c.Target.Command, Ports: c.Target.Ports, Network: c.Target.Network, Addresses: c.Target.Addresses}
 	case "compose":
 		spec.Backend = docker.ComposeBackend{File: c.Target.ComposeFile, ProjectName: c.Target.ProjectName, Service: c.Target.Service, Port: c.Target.Port, Addresses: c.Target.Addresses}
+	case "tsec":
+		if c.TSec == nil {
+			return harness.RunSpec{}, errors.New("tsec configuration is required for target.kind tsec")
+		}
+		baseURL := c.TSec.BaseURL
+		if baseURL == "" {
+			baseURL = os.Getenv(c.TSec.BaseURLEnv)
+		}
+		token := c.TSec.Token
+		if token == "" {
+			token = os.Getenv(c.TSec.TokenEnv)
+		}
+		client, err := tsec.New(tsec.Config{BaseURL: baseURL, Token: token, CheckVPN: c.TSec.CheckVPN})
+		if err != nil {
+			return harness.RunSpec{}, err
+		}
+		backend := tsec.NewBackend(client, c.Target.ID)
+		backend.CheckVPN = c.TSec.CheckVPN
+		backend.UseHint = c.TSec.UseHint
+		spec.Backend = backend
+		spec.SecretEnv = appendUniqueString(spec.SecretEnv, c.TSec.TokenEnv)
+		for i := range spec.Executors {
+			spec.Executors[i].EnvFrom = appendUniqueString(spec.Executors[i].EnvFrom, c.TSec.BaseURLEnv, c.TSec.TokenEnv)
+		}
 	default:
 		return harness.RunSpec{}, fmt.Errorf("unsupported target kind %q", c.Target.Kind)
 	}
@@ -150,6 +193,22 @@ func (a AgentFileSpec) toHarness() (harness.AgentSpec, error) {
 		runtimeConfig = encoded
 	}
 	return harness.AgentSpec{ID: a.ID, Image: a.Image, Command: a.Command, Env: a.Env, EnvFrom: a.EnvFrom, Mounts: a.Mounts, Skills: a.Skills, Network: a.Network, CapAdd: a.CapAdd, Resources: a.Resources, RuntimeConfig: runtimeConfig}, nil
+}
+
+func appendUniqueString(values []string, additions ...string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values)+len(additions))
+	for _, value := range append(append([]string(nil), values...), additions...) {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func composeAgent(agent harness.AgentSpec) (harness.AgentSpec, error) {

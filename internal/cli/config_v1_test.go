@@ -75,3 +75,31 @@ func TestApplyPiEnvironmentDefaults(t *testing.T) {
 	}
 	_ = context.Background()
 }
+
+func TestCLIComposesTSecBackend(t *testing.T) {
+	t.Setenv("BENCHMARK_BASE_URL", "https://tsec.example")
+	t.Setenv("BENCHMARK_TOKEN", "test-token")
+	cfg := &FileConfig{
+		APIVersion: "harness/v1",
+		Task:       harness.Task{ID: "task", Objective: "solve"},
+		Target:     TargetFileConfig{Kind: "tsec", ID: "web-1", Isolation: string(harness.IsolationCallerManaged)},
+		Planner:    AgentFileSpec{ID: "planner"},
+		Executors:  []AgentFileSpec{{ID: "exec"}},
+		TSec:       &TSecFileConfig{BaseURLEnv: "BENCHMARK_BASE_URL", TokenEnv: "BENCHMARK_TOKEN", CheckVPN: false},
+	}
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "harness.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	spec, err := cfg.ToRunSpec(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Backend == nil {
+		t.Fatal("TSec backend not composed")
+	}
+	if len(spec.Executors[0].EnvFrom) == 0 || spec.SecretEnv[0] != "BENCHMARK_TOKEN" {
+		t.Fatalf("credential binding = %+v secret=%v", spec.Executors[0].EnvFrom, spec.SecretEnv)
+	}
+}

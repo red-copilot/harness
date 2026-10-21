@@ -5,6 +5,7 @@ task:
   id: tsec-challenge
   objective: Solve the authorized TSec challenge and submit every remaining flag.
 target:
+  kind: tsec
   id: tsec-challenge
   isolation: caller_managed
   addresses: []
@@ -30,3 +31,8 @@ policy:
   stagnation_rounds: 3
 budget:
   wall_time_seconds: 1800
+tsec:
+  use_hint: false
+  check_vpn: true
+  base_url_env: BENCHMARK_BASE_URL
+  token_env: BENCHMARK_TOKEN
