@@ -256,13 +256,14 @@ func (b *fakeBackend) Close(context.Context, harness.Target) error {
 
 // memoryStore is deliberately small; SQLite has its own tests.
 type memoryStore struct {
-	mu      sync.Mutex
-	runs    map[string]harness.RunRecord
-	events  []harness.Event
-	logs    []harness.LogRecord
-	verdict map[string]harness.VerdictRecord
-	sweeps  map[string]harness.SweepRecord
-	nextSeq int64
+	mu                   sync.Mutex
+	runs                 map[string]harness.RunRecord
+	events               []harness.Event
+	logs                 []harness.LogRecord
+	verdict              map[string]harness.VerdictRecord
+	sweeps               map[string]harness.SweepRecord
+	nextSeq              int64
+	markInterruptedCalls int
 }
 
 func newMemoryStore() *memoryStore {
@@ -359,8 +360,13 @@ func (s *memoryStore) ListSweeps(context.Context, int) ([]harness.SweepRecord, e
 	}
 	return out, nil
 }
-func (s *memoryStore) MarkInterrupted(context.Context) error { return nil }
-func (s *memoryStore) Close() error                          { return nil }
+func (s *memoryStore) MarkInterrupted(context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.markInterruptedCalls++
+	return nil
+}
+func (s *memoryStore) Close() error { return nil }
 
 func TestRunnerWaitsForBackendAfterSessionsFinish(t *testing.T) {
 	store := newMemoryStore()
@@ -445,4 +451,29 @@ func TestRunnerStopsLiveBudgetExceeded(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "budget exceeded") {
 		t.Fatalf("expected live budget error, got %v", err)
 	}
+}
+
+func TestRunnerCanSkipRecoveryForObservabilityProcess(t *testing.T) {
+	store := newMemoryStore()
+	cleaner := &recordingCleaner{}
+	runner, err := harness.NewRunner(harness.Config{
+		Store: store, Cleaner: cleaner, SkipRecovery: true, WorkspaceRoot: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	defer runner.Close(context.Background())
+	if cleaner.calls != 0 {
+		t.Fatalf("cleanup calls = %d, want 0", cleaner.calls)
+	}
+	if store.markInterruptedCalls != 0 {
+		t.Fatalf("MarkInterrupted calls = %d, want 0", store.markInterruptedCalls)
+	}
+}
+
+type recordingCleaner struct{ calls int }
+
+func (c *recordingCleaner) CleanupOrphans(context.Context) error {
+	c.calls++
+	return nil
 }

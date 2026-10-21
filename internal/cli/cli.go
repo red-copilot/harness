@@ -95,7 +95,7 @@ func serve(args []string, stdout, stderr io.Writer) error {
 	starter := docker.New()
 	runner, err := harness.NewRunner(harness.Config{
 		Store: store, Starter: starter, DefaultFactory: pi.NewFactory(),
-		WorkspaceRoot: *workspace, Cleaner: starter,
+		WorkspaceRoot: *workspace, Cleaner: starter, SkipRecovery: true,
 	})
 	if err != nil {
 		return err

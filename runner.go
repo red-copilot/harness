@@ -24,6 +24,10 @@ type Config struct {
 	PollInterval   time.Duration
 	Logger         *slog.Logger
 	Cleaner        ResourceCleaner
+	// SkipRecovery prevents startup recovery from marking runs interrupted or
+	// removing labels belonging to another live harness process. Observability
+	// servers use this when they share a database with CLI runners.
+	SkipRecovery bool
 }
 
 // ResourceCleaner reconciles resources left by an interrupted server process.
@@ -62,13 +66,15 @@ func NewRunner(cfg Config) (*Runner, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	}
-	if cfg.Cleaner != nil {
-		if err := cfg.Cleaner.CleanupOrphans(context.Background()); err != nil {
-			return nil, fmt.Errorf("cleanup orphaned resources: %w", err)
+	if !cfg.SkipRecovery {
+		if cfg.Cleaner != nil {
+			if err := cfg.Cleaner.CleanupOrphans(context.Background()); err != nil {
+				return nil, fmt.Errorf("cleanup orphaned resources: %w", err)
+			}
 		}
-	}
-	if err := cfg.Store.MarkInterrupted(context.Background()); err != nil {
-		return nil, fmt.Errorf("mark interrupted runs: %w", err)
+		if err := cfg.Store.MarkInterrupted(context.Background()); err != nil {
+			return nil, fmt.Errorf("mark interrupted runs: %w", err)
+		}
 	}
 	return &Runner{
 		store: cfg.Store, starter: cfg.Starter, defaultFactory: cfg.DefaultFactory,
