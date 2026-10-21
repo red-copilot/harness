@@ -572,6 +572,121 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.exploration-flow-scroll {
+  overflow-x: auto;
+  padding: 2px 2px 14px;
+}
+
+.exploration-flow {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  min-width: max-content;
+}
+
+.exploration-flow-stage {
+  display: flex;
+  flex: 0 0 220px;
+  flex-direction: column;
+  width: 220px;
+  min-height: 210px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.exploration-flow-stage-start {
+  border-top: 3px solid #3b82f6;
+}
+
+.exploration-flow-stage-frontier {
+  border-top: 3px solid #f59e0b;
+}
+
+.exploration-flow-stage-result {
+  border-top: 3px solid #a855f7;
+}
+
+.exploration-flow-stage-fact {
+  border-top: 3px solid #10b981;
+}
+
+.exploration-flow-stage-authority {
+  border-top: 3px solid var(--accent);
+}
+
+.exploration-flow-stage-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.exploration-flow-stage-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 520px;
+  padding: 10px;
+  overflow-y: auto;
+}
+
+.exploration-flow-node {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.exploration-flow-node-active {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.exploration-flow-node-fact {
+  background: color-mix(in srgb, #10b981 6%, var(--surface));
+}
+
+.exploration-flow-node-authority {
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+
+.exploration-flow-node-authority .ant-typography {
+  margin: 0;
+}
+
+.exploration-flow-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.exploration-flow-arrow {
+  display: flex;
+  align-items: center;
+  flex: 0 0 26px;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 24px;
+}
+
+.exploration-flow-placeholder {
+  padding: 18px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
 .exploration-cycles {
   display: flex;
   flex-direction: column;

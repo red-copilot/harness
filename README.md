@@ -180,7 +180,8 @@ Keep the listener bound to loopback unless you configure an external security bo
 - `POST /v1/tsec/sweeps` starts a batch of TSec challenge runs.
 
 The embedded read-only observability console is served at `/` by
-`harness serve`.
+`harness serve`. Its exploration view renders the blackboard left-to-right as
+`start → candidate frontiers → executor results → facts → authoritative progress`.
 
 ## TSec · 竞赛适配
 
