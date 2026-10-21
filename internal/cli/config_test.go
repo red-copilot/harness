@@ -89,3 +89,32 @@ func TestBundledExamplesLoad(t *testing.T) {
 		}
 	}
 }
+
+func TestSingleAgentConfigEnablesFrontierEngine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "run.yaml")
+	content := `apiVersion: harness/v1alpha1
+task:
+  id: frontier
+  objective: find the flag
+agents:
+  - id: pi
+    image: kali-pi:test
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	spec, err := cfg.ToRunSpec()
+	if err != nil {
+		t.Fatalf("ToRunSpec: %v", err)
+	}
+	if spec.Exploration == nil {
+		t.Fatal("single-agent config did not enable exploration")
+	}
+	if spec.Exploration.Rounds != 6 {
+		t.Fatalf("rounds = %d, want 6", spec.Exploration.Rounds)
+	}
+}

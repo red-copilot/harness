@@ -102,6 +102,7 @@ func serve(args []string, stdout, stderr io.Writer) error {
 	}
 	builder := func(req server.RunRequest) (harness.RunSpec, error) {
 		spec := req.Run
+		enableDefaultExploration(&spec)
 		applyPiEnvironmentDefaults(&spec)
 		if req.VerifierCommand != nil {
 			spec.Verifier = *req.VerifierCommand
@@ -145,6 +146,7 @@ func serve(args []string, stdout, stderr io.Writer) error {
 		if req.TSec == nil {
 			return server.SweepPlan{}, errors.New("tsec configuration is required for a sweep")
 		}
+		enableDefaultExploration(&req.Run)
 		applyPiEnvironmentDefaults(&req.Run)
 		baseURL := req.TSec.BaseURL
 		if baseURL == "" {

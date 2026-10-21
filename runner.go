@@ -170,7 +170,7 @@ func validateSpec(spec RunSpec, maxSessions int) error {
 	if len(spec.Agents) == 0 {
 		return errors.New("at least one agent is required")
 	}
-	if len(spec.Agents) > maxSessions {
+	if spec.Exploration == nil && len(spec.Agents) > maxSessions {
 		return fmt.Errorf("at most %d agent sessions are supported", maxSessions)
 	}
 	seen := map[string]struct{}{}
@@ -182,6 +182,15 @@ func validateSpec(spec RunSpec, maxSessions int) error {
 			return fmt.Errorf("duplicate agent id %q", agent.ID)
 		}
 		seen[agent.ID] = struct{}{}
+	}
+	if spec.Exploration != nil {
+		sessions, err := explorationSessionCount(spec)
+		if err != nil {
+			return err
+		}
+		if sessions > maxSessions {
+			return fmt.Errorf("at most %d agent sessions are supported", maxSessions)
+		}
 	}
 	return nil
 }
@@ -251,37 +260,57 @@ func (r *Runner) execute(run *Run, spec RunSpec, redactor *Redactor) {
 
 	sessionCtxs := map[string]context.CancelFunc{}
 	sessionDirs := map[string]string{}
-	for _, agent := range spec.Agents {
-		sessionDir := filepath.Join(runRoot, "sessions", agent.ID)
-		if err := os.MkdirAll(sessionDir, 0o700); err != nil {
-			r.fail(run, redactor, started, fmt.Errorf("create session workspace: %w", err))
+	sessionCount := len(spec.Agents)
+	if spec.Exploration != nil {
+		var err error
+		sessionCount, err = explorationSessionCount(spec)
+		if err != nil {
+			r.fail(run, redactor, started, err)
 			return
 		}
-		sessionDirs[agent.ID] = sessionDir
+	} else {
+		for _, agent := range spec.Agents {
+			sessionDir := filepath.Join(runRoot, "sessions", agent.ID)
+			if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+				r.fail(run, redactor, started, fmt.Errorf("create session workspace: %w", err))
+				return
+			}
+			sessionDirs[agent.ID] = sessionDir
+		}
 	}
-	sessionResults := make(chan SessionResult, len(spec.Agents))
+	sessionResults := make(chan SessionResult, sessionCount)
 	var sessionsWG sync.WaitGroup
 
-	for _, agent := range spec.Agents {
-		factory := agent.Factory
-		if factory == nil {
-			factory = r.defaultFactory
-		}
-		sessionID := agent.ID
-		workspaceDir := sessionDirs[sessionID]
-		sessionCtx, sessionCancel := context.WithCancel(run.ctx)
-		sessionCtxs[sessionID] = sessionCancel
-		env := buildEnvironment(run.ID, sessionID, spec, agent, target, workspaceDir, taskDir, skillsDir)
-		req := SessionRequest{
-			RunID: run.ID, SessionID: sessionID, Agent: agent, Task: spec.Task, Target: target,
-			WorkspaceDir: workspaceDir, TaskDir: taskDir, SkillsDir: skillsDir,
-			Env: env, Starter: r.starter,
-		}
+	if spec.Exploration != nil {
 		sessionsWG.Add(1)
 		go func() {
 			defer sessionsWG.Done()
-			sessionResults <- r.runOneSession(sessionCtx, run, redactor, spec, factory, req)
+			for _, result := range r.runExplorationSessions(run.ctx, run, redactor, spec, target, runRoot, taskDir, skillsDir) {
+				sessionResults <- result
+			}
 		}()
+	} else {
+		for _, agent := range spec.Agents {
+			factory := agent.Factory
+			if factory == nil {
+				factory = r.defaultFactory
+			}
+			sessionID := agent.ID
+			workspaceDir := sessionDirs[sessionID]
+			sessionCtx, sessionCancel := context.WithCancel(run.ctx)
+			sessionCtxs[sessionID] = sessionCancel
+			env := buildEnvironment(run.ID, sessionID, spec, agent, target, workspaceDir, taskDir, skillsDir)
+			req := SessionRequest{
+				RunID: run.ID, SessionID: sessionID, Agent: agent, Task: spec.Task, Target: target,
+				WorkspaceDir: workspaceDir, TaskDir: taskDir, SkillsDir: skillsDir,
+				Env: env, Starter: r.starter,
+			}
+			sessionsWG.Add(1)
+			go func() {
+				defer sessionsWG.Done()
+				sessionResults <- r.runOneSession(sessionCtx, run, redactor, spec, factory, req)
+			}()
+		}
 	}
 
 	var completionOut chan Completion
@@ -302,7 +331,7 @@ func (r *Runner) execute(run *Run, spec RunSpec, redactor *Redactor) {
 		verdict     *Verdict
 		runErr      error
 		results     []SessionResult
-		remaining   = len(spec.Agents)
+		remaining   = sessionCount
 		verifierRan = false
 	)
 	for status == "" {

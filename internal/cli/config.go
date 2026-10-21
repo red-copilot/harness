@@ -49,15 +49,16 @@ type TargetFileConfig struct {
 }
 
 type FileConfig struct {
-	APIVersion    string              `json:"apiVersion" yaml:"apiVersion"`
-	Task          harness.Task        `json:"task" yaml:"task"`
-	Target        *TargetFileConfig   `json:"target,omitempty" yaml:"target,omitempty"`
-	Agents        []harness.AgentSpec `json:"agents" yaml:"agents"`
-	Budget        BudgetFile          `json:"budget,omitempty" yaml:"budget,omitempty"`
-	SecretEnv     []string            `json:"secret_env,omitempty" yaml:"secret_env,omitempty"`
-	WorkspaceRoot string              `json:"workspace_root,omitempty" yaml:"workspace_root,omitempty"`
-	Verifier      *verify.Command     `json:"verifier,omitempty" yaml:"verifier,omitempty"`
-	TSec          *TSecFileConfig     `json:"tsec,omitempty" yaml:"tsec,omitempty"`
+	APIVersion    string                   `json:"apiVersion" yaml:"apiVersion"`
+	Task          harness.Task             `json:"task" yaml:"task"`
+	Target        *TargetFileConfig        `json:"target,omitempty" yaml:"target,omitempty"`
+	Agents        []harness.AgentSpec      `json:"agents" yaml:"agents"`
+	Exploration   *harness.ExplorationSpec `json:"exploration,omitempty" yaml:"exploration,omitempty"`
+	Budget        BudgetFile               `json:"budget,omitempty" yaml:"budget,omitempty"`
+	SecretEnv     []string                 `json:"secret_env,omitempty" yaml:"secret_env,omitempty"`
+	WorkspaceRoot string                   `json:"workspace_root,omitempty" yaml:"workspace_root,omitempty"`
+	Verifier      *verify.Command          `json:"verifier,omitempty" yaml:"verifier,omitempty"`
+	TSec          *TSecFileConfig          `json:"tsec,omitempty" yaml:"tsec,omitempty"`
 }
 
 func LoadConfig(path string) (*FileConfig, error) {
@@ -95,7 +96,7 @@ func (c *FileConfig) ToRunSpec() (harness.RunSpec, error) {
 		return harness.RunSpec{}, errors.New("at least one agent is required")
 	}
 	spec := harness.RunSpec{
-		Task: c.Task, Agents: c.Agents,
+		Task: c.Task, Agents: c.Agents, Exploration: c.Exploration,
 		Budget: harness.Budget{
 			WallTime:  time.Duration(c.Budget.WallTimeSeconds) * time.Second,
 			MaxTokens: c.Budget.MaxTokens, MaxModelCalls: c.Budget.MaxModelCalls,
@@ -103,6 +104,7 @@ func (c *FileConfig) ToRunSpec() (harness.RunSpec, error) {
 		},
 		SecretEnv: c.SecretEnv, WorkspaceRoot: c.WorkspaceRoot,
 	}
+	enableDefaultExploration(&spec)
 	if c.Verifier != nil {
 		spec.Verifier = *c.Verifier
 	}
@@ -125,6 +127,13 @@ func (c *FileConfig) ToRunSpec() (harness.RunSpec, error) {
 		}
 	}
 	return spec, nil
+}
+
+func enableDefaultExploration(spec *harness.RunSpec) {
+	if spec == nil || spec.Exploration != nil || len(spec.Agents) != 1 {
+		return
+	}
+	spec.Exploration = &harness.ExplorationSpec{Rounds: 6}
 }
 
 func applyPiEnvironmentDefaults(spec *harness.RunSpec) {
