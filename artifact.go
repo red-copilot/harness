@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -59,13 +60,18 @@ func ArchiveAttemptEvidence(ctx context.Context, store ArtifactStore, redactor R
 	if len(req.Observations) == 0 {
 		return nil, errors.New("attempt requires at least one observation")
 	}
+	type preparedArtifact struct {
+		name, mediaType string
+		content         []byte
+		redacted        bool
+	}
+	type preparedObservation struct {
+		proposal  ObservationProposal
+		artifacts []preparedArtifact
+	}
+	prepared := make([]preparedObservation, 0, len(req.Observations))
 	totalFiles := 0
 	var totalBytes int64
-	type archived struct {
-		proposal  ObservationProposal
-		artifacts []Artifact
-	}
-	archivedObservations := make([]archived, 0, len(req.Observations))
 	for _, proposal := range req.Observations {
 		if strings.TrimSpace(proposal.LocalID) == "" {
 			return nil, errors.New("observation local_id is required")
@@ -77,7 +83,7 @@ func ArchiveAttemptEvidence(ctx context.Context, store ArtifactStore, redactor R
 		if req.MaxFiles > 0 && totalFiles > req.MaxFiles {
 			return nil, fmt.Errorf("evidence file limit exceeded: %d > %d", totalFiles, req.MaxFiles)
 		}
-		artifacts := make([]Artifact, 0, len(proposal.EvidenceFiles))
+		item := preparedObservation{proposal: proposal, artifacts: make([]preparedArtifact, 0, len(proposal.EvidenceFiles))}
 		for _, file := range proposal.EvidenceFiles {
 			path, err := ValidateEvidencePath(req.WorkspaceDir, file)
 			if err != nil {
@@ -108,11 +114,20 @@ func ArchiveAttemptEvidence(ctx context.Context, store ArtifactStore, redactor R
 			} else if redactor.Contains(string(content)) {
 				return nil, fmt.Errorf("binary evidence %q contains a known secret", file)
 			}
-			sum := sha256.Sum256(content)
+			item.artifacts = append(item.artifacts, preparedArtifact{name: filepath.Base(file), mediaType: mediaType(content), content: content, redacted: redacted})
+		}
+		prepared = append(prepared, item)
+	}
+	now := time.Now().UTC()
+	out := make([]Observation, 0, len(prepared))
+	for _, item := range prepared {
+		artifacts := make([]Artifact, 0, len(item.artifacts))
+		for _, file := range item.artifacts {
+			sum := sha256.Sum256(file.content)
 			expectedID := hex.EncodeToString(sum[:])
-			artifact, err := store.Put(ctx, ArtifactInput{RunID: req.RunID, AttemptID: req.AttemptID, SessionID: req.SessionID, Name: filepath.Base(file), MediaType: mediaType(content), Size: int64(len(content)), Content: strings.NewReader(string(content))})
+			artifact, err := store.Put(ctx, ArtifactInput{RunID: req.RunID, AttemptID: req.AttemptID, SessionID: req.SessionID, Name: file.name, MediaType: file.mediaType, Size: int64(len(file.content)), Content: bytes.NewReader(file.content)})
 			if err != nil {
-				return nil, fmt.Errorf("store artifact %q: %w", file, err)
+				return nil, fmt.Errorf("store artifact %q: %w", file.name, err)
 			}
 			if artifact.ID == "" {
 				artifact.ID = expectedID
@@ -121,7 +136,7 @@ func ArchiveAttemptEvidence(ctx context.Context, store ArtifactStore, redactor R
 				artifact.SHA256 = expectedID
 			}
 			if artifact.Size == 0 {
-				artifact.Size = int64(len(content))
+				artifact.Size = int64(len(file.content))
 			}
 			if artifact.RunID == "" {
 				artifact.RunID = req.RunID
@@ -133,20 +148,15 @@ func ArchiveAttemptEvidence(ctx context.Context, store ArtifactStore, redactor R
 				artifact.SessionID = req.SessionID
 			}
 			if artifact.Name == "" {
-				artifact.Name = filepath.Base(file)
+				artifact.Name = file.name
 			}
-			artifact.Redacted = artifact.Redacted || redacted
+			artifact.Redacted = artifact.Redacted || file.redacted
 			if artifact.CreatedAt.IsZero() {
-				artifact.CreatedAt = time.Now().UTC()
+				artifact.CreatedAt = now
 			}
 			artifacts = append(artifacts, artifact)
 		}
-		archivedObservations = append(archivedObservations, archived{proposal: proposal, artifacts: artifacts})
-	}
-	now := time.Now().UTC()
-	out := make([]Observation, 0, len(archivedObservations))
-	for _, item := range archivedObservations {
-		out = append(out, Observation{ID: req.AttemptID + ":obs:" + item.proposal.LocalID, RunID: req.RunID, BranchID: req.BranchID, AttemptID: req.AttemptID, Kind: item.proposal.Kind, Summary: item.proposal.Summary, Target: item.proposal.Target, Evidence: item.artifacts, CreatedAt: now})
+		out = append(out, Observation{ID: req.AttemptID + ":obs:" + item.proposal.LocalID, RunID: req.RunID, BranchID: req.BranchID, AttemptID: req.AttemptID, Kind: item.proposal.Kind, Summary: item.proposal.Summary, Target: item.proposal.Target, Evidence: artifacts, CreatedAt: now})
 	}
 	return out, nil
 }
