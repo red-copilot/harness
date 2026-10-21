@@ -207,6 +207,7 @@ func (r *Runner) execute(run *Run, spec RunSpec, redactor *Redactor) {
 	r.emitEvent(run, redactor, Event{RunID: run.ID, Source: "harness", Type: "run.started", Time: started})
 
 	target := spec.Target
+	backendProgress := &completionTracker{}
 	closeBackend := func() {}
 	defer func() { closeBackend() }()
 	if spec.Backend != nil {
@@ -237,6 +238,14 @@ func (r *Runner) execute(run *Run, spec RunSpec, redactor *Redactor) {
 			RunID: run.ID, Source: "backend", Type: "backend.provisioned", Time: time.Now().UTC(),
 			Data: mustJSON(target),
 		})
+		if completion, err := spec.Backend.Observe(run.ctx, target); err == nil {
+			r.recordBackendProgress(run, redactor, backendProgress, completion)
+		} else {
+			r.emitEvent(run, redactor, Event{
+				RunID: run.ID, Source: "backend", Type: "backend.observe_error",
+				Time: time.Now().UTC(), Data: mustJSON(map[string]string{"error": redactor.Redact(err.Error())}),
+			})
+		}
 	}
 
 	runRoot := filepath.Join(r.workspaceRoot, run.ID)
@@ -285,7 +294,7 @@ func (r *Runner) execute(run *Run, spec RunSpec, redactor *Redactor) {
 		sessionsWG.Add(1)
 		go func() {
 			defer sessionsWG.Done()
-			for _, result := range r.runExplorationSessions(run.ctx, run, redactor, spec, target, runRoot, taskDir, skillsDir) {
+			for _, result := range r.runExplorationSessions(run.ctx, run, redactor, spec, target, runRoot, taskDir, skillsDir, backendProgress) {
 				sessionResults <- result
 			}
 		}()
@@ -322,7 +331,9 @@ func (r *Runner) execute(run *Run, spec RunSpec, redactor *Redactor) {
 		backgroundWG.Add(1)
 		go func() {
 			defer backgroundWG.Done()
-			r.observeBackend(run.ctx, redactor, run, spec.Backend, target, completionOut)
+			r.observeBackend(run.ctx, redactor, run, spec.Backend, target, completionOut, func(completion Completion) {
+				r.recordBackendProgress(run, redactor, backendProgress, completion)
+			})
 		}()
 	}
 
@@ -597,7 +608,7 @@ func (r *Runner) runOneSession(ctx context.Context, run *Run, redactor *Redactor
 	return result
 }
 
-func (r *Runner) observeBackend(ctx context.Context, redactor *Redactor, run *Run, backend Backend, target Target, out chan<- Completion) {
+func (r *Runner) observeBackend(ctx context.Context, redactor *Redactor, run *Run, backend Backend, target Target, out chan<- Completion, onProgress func(Completion)) {
 	ticker := time.NewTicker(r.pollInterval)
 	defer ticker.Stop()
 	for {
@@ -613,6 +624,9 @@ func (r *Runner) observeBackend(ctx context.Context, redactor *Redactor, run *Ru
 				Time: time.Now().UTC(), Data: mustJSON(map[string]string{"error": redactor.Redact(err.Error())}),
 			})
 			continue
+		}
+		if onProgress != nil {
+			onProgress(completion)
 		}
 		if completion.Done {
 			select {

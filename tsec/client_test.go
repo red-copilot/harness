@@ -166,6 +166,35 @@ func TestBackendProvisionsAndObservesCompletion(t *testing.T) {
 	}
 }
 
+func TestBackendReportsPartialFlagProgress(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/openapi/v1/challenges":
+			writeJSON(w, []map[string]any{{
+				"unique_code": "b-02", "description": "multi flag", "flag_count": 6,
+				"correct_flag_count": 2, "is_completed": false, "total_score": 0,
+				"container_status": "available", "container_addr": []string{"10.0.0.1:80"},
+			}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client, err := tsec.New(tsec.Config{BaseURL: server.URL, Token: "secret-token", CheckVPN: false})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	backend := tsec.NewBackend(client, "b-02")
+	backend.CheckVPN = false
+	completion, err := backend.Observe(context.Background(), harness.Target{ID: "b-02"})
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if completion.Done || completion.Progress != 2 || completion.Total != 6 {
+		t.Fatalf("completion = %#v, want partial 2/6", completion)
+	}
+}
+
 func writeJSON(w http.ResponseWriter, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(value)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -102,6 +103,7 @@ func (r *Runner) runExplorationSessions(
 	runRoot string,
 	taskDir string,
 	skillsDir string,
+	progress *completionTracker,
 ) []SessionResult {
 	plannerSpec, executorSpecs, err := resolveExplorationAgents(spec)
 	if err != nil {
@@ -142,6 +144,7 @@ func (r *Runner) runExplorationSessions(
 	controllerCfg := ControllerConfig{
 		Rounds: spec.Exploration.Rounds, Objective: spec.Task.Objective,
 		Targets: taskTargets(spec.Task, target), MaxWorkers: spec.Exploration.MaxWorkers,
+		Progress: progress.Snapshot,
 	}
 	controller := NewController(controllerCfg, planner, explorers, func(event ControllerEvent) {
 		r.emitEvent(run, redactor, Event{
@@ -273,4 +276,45 @@ func taskTargets(task Task, provisioned Target) []Target {
 		targets = append(targets, provisioned)
 	}
 	return targets
+}
+
+type completionTracker struct {
+	mu     sync.RWMutex
+	latest Completion
+}
+
+func (t *completionTracker) Update(completion Completion) (Completion, bool) {
+	if t == nil {
+		return Completion{}, false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	changed := t.latest.Progress != completion.Progress ||
+		t.latest.Total != completion.Total ||
+		t.latest.Done != completion.Done ||
+		t.latest.Success != completion.Success
+	t.latest = completion
+	return completion, changed
+}
+
+func (t *completionTracker) Snapshot() Completion {
+	if t == nil {
+		return Completion{}
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.latest
+}
+
+func (r *Runner) recordBackendProgress(run *Run, redactor *Redactor, tracker *completionTracker, completion Completion) {
+	if tracker == nil || (completion.Progress == 0 && completion.Total == 0 && !completion.Done) {
+		return
+	}
+	if _, changed := tracker.Update(completion); !changed {
+		return
+	}
+	r.emitEvent(run, redactor, Event{
+		RunID: run.ID, Source: "backend", Type: "backend.progress",
+		Time: time.Now().UTC(), Data: mustJSON(completion),
+	})
 }

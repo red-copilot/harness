@@ -42,9 +42,13 @@ type frontierSession struct {
 	closed      bool
 	closeOnce   sync.Once
 	blockPrompt bool
+	prompts     []string
 }
 
 func (s *frontierSession) Prompt(ctx context.Context, message string) error {
+	s.mu.Lock()
+	s.prompts = append(s.prompts, message)
+	s.mu.Unlock()
 	if s.blockPrompt {
 		<-ctx.Done()
 		return ctx.Err()
@@ -215,3 +219,72 @@ func TestBackendCompletionPreemptsFrontierExecution(t *testing.T) {
 		t.Fatalf("result = %#v", result)
 	}
 }
+
+func TestPlannerReceivesAuthoritativeBackendProgress(t *testing.T) {
+	store := newMemoryStore()
+	factory := &frontierFactory{}
+	runner, err := harness.NewRunner(harness.Config{
+		Store: store, DefaultFactory: factory, WorkspaceRoot: t.TempDir(),
+		PollInterval: 5 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	backend := &stagedBackend{observations: []harness.Completion{
+		{Progress: 2, Total: 6},
+		{Progress: 2, Total: 6},
+		{Done: true, Success: true, Progress: 6, Total: 6},
+	}}
+	result, err := runner.Run(context.Background(), harness.RunSpec{
+		Task:        harness.Task{ID: "progress", Objective: "solve all flags"},
+		Target:      harness.Target{ID: "web", Addresses: []string{"10.0.0.5:80"}},
+		Agents:      []harness.AgentSpec{{ID: "base"}},
+		Exploration: &harness.ExplorationSpec{Rounds: 1},
+		Backend:     backend,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != harness.StatusSucceeded {
+		t.Fatalf("status = %q", result.Status)
+	}
+	factory.mu.Lock()
+	sessions := append([]*frontierSession(nil), factory.sessions...)
+	factory.mu.Unlock()
+	for _, session := range sessions {
+		if session.role != "planner" {
+			continue
+		}
+		session.mu.Lock()
+		prompts := append([]string(nil), session.prompts...)
+		session.mu.Unlock()
+		if len(prompts) == 0 || !strings.Contains(prompts[0], "Authoritative progress: 2/6") {
+			t.Fatalf("planner prompt missing authoritative progress:\n%v", prompts)
+		}
+		return
+	}
+	t.Fatal("planner session not created")
+}
+
+type stagedBackend struct {
+	mu           sync.Mutex
+	observations []harness.Completion
+	index        int
+}
+
+func (b *stagedBackend) Provision(context.Context, harness.ProvisionRequest) (harness.Target, error) {
+	return harness.Target{ID: "web", Addresses: []string{"10.0.0.5:80"}}, nil
+}
+
+func (b *stagedBackend) Observe(context.Context, harness.Target) (harness.Completion, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.index >= len(b.observations) {
+		return b.observations[len(b.observations)-1], nil
+	}
+	completion := b.observations[b.index]
+	b.index++
+	return completion, nil
+}
+
+func (b *stagedBackend) Close(context.Context, harness.Target) error { return nil }

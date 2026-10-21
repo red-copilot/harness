@@ -449,6 +449,7 @@ func (b *Backend) Observe(ctx context.Context, target harness.Target) (harness.C
 		if challenge.IsCompleted {
 			return harness.Completion{
 				Done: true, Success: true, Score: float64(challenge.TotalScore),
+				Progress: challenge.CorrectFlagCount, Total: challenge.FlagCount,
 				Message: "challenge completed",
 				Metadata: map[string]string{
 					"flag_count":         strconv.Itoa(challenge.FlagCount),
@@ -456,7 +457,14 @@ func (b *Backend) Observe(ctx context.Context, target harness.Target) (harness.C
 				},
 			}, nil
 		}
-		return harness.Completion{}, nil
+		return harness.Completion{
+			Progress: challenge.CorrectFlagCount,
+			Total:    challenge.FlagCount,
+			Metadata: map[string]string{
+				"flag_count":         strconv.Itoa(challenge.FlagCount),
+				"correct_flag_count": strconv.Itoa(challenge.CorrectFlagCount),
+			},
+		}, nil
 	}
 	return harness.Completion{}, &Error{Code: "challenge_not_found", Message: "challenge not found: " + b.Code}
 }
