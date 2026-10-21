@@ -63,9 +63,6 @@ func TestRefutedKnowledgeIsNeverInjected(t *testing.T) {
 	if len(filtered) != 1 || filtered[0].ID != "k1" {
 		t.Fatalf("filtered = %+v, want only k1", filtered)
 	}
-	if _, dropped := harness.BuildPlannerContext(harness.Task{ID: "task-1", Objective: "x"}, harness.Target{ID: "target-1"}, nil, []harness.Knowledge{refuted, kept}, harness.Completion{}, nil); dropped != 1 {
-		t.Fatalf("digest dropped = %d, want 1", dropped)
-	}
 }
 
 // conflictReviewPlanner creates the initial hypothesis and its refutation, then

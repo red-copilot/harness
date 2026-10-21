@@ -129,6 +129,15 @@ func TestKnowledgeLimitIsMechanical(t *testing.T) {
 	}
 }
 
+func TestKnowledgeLimitFollowsPolicy(t *testing.T) {
+	req := knowledgeRequest()
+	req.MaxItems = 1
+	req.Existing = []harness.Knowledge{{ID: "old", TaskID: req.Task.ID, RunID: "old", Topic: "old.topic", ValidFrom: req.Now}}
+	if _, _, err := harness.PromoteKnowledge(req); err == nil || !strings.Contains(err.Error(), "limit") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestKnowledgeFingerprintRejectsDuplicate(t *testing.T) {
 	req := knowledgeRequest()
 	existing := harness.Knowledge{ID: "k1", TaskID: req.Task.ID, RunID: "old", Topic: " service.exposed ", Scope: harness.KnowledgeScopeTask, Kind: "adapter.kind", Target: "target-1", ValidFrom: req.Now}

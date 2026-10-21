@@ -1,4 +1,4 @@
-package sqlite_test
+package sqlite
 
 import (
 	"context"
@@ -14,7 +14,6 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/red-copilot/harness"
-	"github.com/red-copilot/harness/store/sqlite"
 )
 
 func TestMigrationPreservesAuditRows(t *testing.T) {
@@ -39,7 +38,7 @@ func TestMigrationPreservesAuditRows(t *testing.T) {
 		}
 	}
 	_ = db.Close()
-	store, err := sqlite.Open(path)
+	store, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +62,7 @@ func TestMigrationPreservesAuditRows(t *testing.T) {
 func TestMigrationIsIdempotent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "harness.db")
 	for i := 0; i < 2; i++ {
-		store, err := sqlite.Open(path)
+		store, err := Open(path)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -84,7 +83,7 @@ func TestMigrationIsIdempotent(t *testing.T) {
 }
 
 func TestRunScopedIDsAreUniqueAcrossRuns(t *testing.T) {
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "harness.db"))
+	store, err := Open(filepath.Join(t.TempDir(), "harness.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +106,7 @@ func TestRunScopedIDsAreUniqueAcrossRuns(t *testing.T) {
 }
 
 func TestKnowledgeVersionsAreAppendOnly(t *testing.T) {
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "harness.db"))
+	store, err := Open(filepath.Join(t.TempDir(), "harness.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +131,7 @@ func TestKnowledgeVersionsAreAppendOnly(t *testing.T) {
 		t.Fatalf("latest = %+v", items)
 	}
 	var versions int
-	if err := store.DB().QueryRow(`SELECT COUNT(*) FROM knowledge WHERE run_id='run' AND id='k1'`).Scan(&versions); err != nil {
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM knowledge WHERE run_id='run' AND id='k1'`).Scan(&versions); err != nil {
 		t.Fatal(err)
 	}
 	if versions != 2 {
@@ -148,7 +147,7 @@ func TestKnowledgeVersionsAreAppendOnly(t *testing.T) {
 }
 
 func TestQueryKnowledgeFiltersAtStoreBoundary(t *testing.T) {
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "harness.db"))
+	store, err := Open(filepath.Join(t.TempDir(), "harness.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +176,7 @@ func TestQueryKnowledgeFiltersAtStoreBoundary(t *testing.T) {
 }
 
 func TestAppendArtifactMetadataAndBytes(t *testing.T) {
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "harness.db"))
+	store, err := Open(filepath.Join(t.TempDir(), "harness.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +208,7 @@ func TestAppendArtifactMetadataAndBytes(t *testing.T) {
 }
 
 func TestArtifactOpenRejectsUnknownAndTraversalID(t *testing.T) {
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "harness.db"))
+	store, err := Open(filepath.Join(t.TempDir(), "harness.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,17 +225,17 @@ func TestArtifactOpenRejectsUnknownAndTraversalID(t *testing.T) {
 // not be silently downgraded and reinterpreted by an older one.
 func TestOpenRejectsNewerSchemaVersion(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "harness.db")
-	store, err := sqlite.Open(path)
+	store, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().Exec(`UPDATE schema_meta SET version=99`); err != nil {
+	if _, err := store.db.Exec(`UPDATE schema_meta SET version=99`); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sqlite.Open(path); err == nil || !strings.Contains(err.Error(), "newer") {
+	if _, err := Open(path); err == nil || !strings.Contains(err.Error(), "newer") {
 		t.Fatalf("Open err = %v, want newer-schema rejection", err)
 	}
 }
@@ -245,7 +244,7 @@ func TestOpenRejectsNewerSchemaVersion(t *testing.T) {
 // verdict and run.finalized are one canonical write, so an audit reader can
 // never observe one without the others.
 func TestFinalizeCommitsTerminalStateTogether(t *testing.T) {
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "harness.db"))
+	store, err := Open(filepath.Join(t.TempDir(), "harness.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +291,7 @@ func TestFinalizeCommitsTerminalStateTogether(t *testing.T) {
 // TestFinalizeRollsBackOnMissingRun: a failed terminal write must not leave
 // the verdict behind as a partial audit record.
 func TestFinalizeRollsBackOnMissingRun(t *testing.T) {
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "harness.db"))
+	store, err := Open(filepath.Join(t.TempDir(), "harness.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

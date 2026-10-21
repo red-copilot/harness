@@ -8,11 +8,7 @@ import (
 	"unicode/utf8"
 )
 
-// BuildPlannerContext creates the deterministic, bounded planner view.
-func BuildPlannerContext(task Task, target Target, branches []Branch, knowledge []Knowledge, progress Completion, attempts []Attempt) (PlanRequest, int) {
-	return buildPlannerContext(task, target, branches, knowledge, progress, attempts, DefaultExplorationPolicy())
-}
-
+// buildPlannerContext creates the deterministic, bounded planner view.
 func buildPlannerContext(task Task, target Target, branches []Branch, knowledge []Knowledge, progress Completion, attempts []Attempt, policy ExplorationPolicy) (PlanRequest, int) {
 	policy = NormalizeExplorationPolicy(policy)
 	summaries := make([]BranchSummary, 0, len(branches))
@@ -28,11 +24,12 @@ func buildPlannerContext(task Task, target Target, branches []Branch, knowledge 
 		})
 	}
 	digest, dropped := boundedKnowledgeDigest(knowledge, target, policy, time.Now().UTC())
-	recent := make([]AttemptSummary, 0, policy.MaxActiveBranches)
-	for _, attempt := range attempts {
-		if len(recent) >= policy.MaxActiveBranches {
-			break
-		}
+	start := len(attempts) - policy.MaxActiveBranches
+	if start < 0 {
+		start = 0
+	}
+	recent := make([]AttemptSummary, 0, len(attempts)-start)
+	for _, attempt := range attempts[start:] {
 		recent = append(recent, AttemptSummary{ID: attempt.ID, BranchID: attempt.BranchID, Status: attempt.Status, Outcome: attempt.Outcome, Error: truncateUTF8(attempt.Error, 512)})
 	}
 	return PlanRequest{
@@ -41,17 +38,13 @@ func buildPlannerContext(task Task, target Target, branches []Branch, knowledge 
 	}, dropped
 }
 
-// BuildExecutorContext creates the deterministic, bounded executor view.
-func BuildExecutorContext(task Task, target Target, branch Branch, knowledge []Knowledge, budget AttemptBudget, workspaceDir string) (AttemptRequest, int) {
-	return buildExecutorContext(task, target, branch, knowledge, budget, workspaceDir, DefaultExplorationPolicy())
-}
-
+// buildExecutorContext creates the deterministic, bounded executor view.
 func buildExecutorContext(task Task, target Target, branch Branch, knowledge []Knowledge, budget AttemptBudget, workspaceDir string, policy ExplorationPolicy) (AttemptRequest, int) {
 	policy = NormalizeExplorationPolicy(policy)
 	digest, dropped := boundedKnowledgeDigest(knowledge, target, policy, time.Now().UTC())
 	return AttemptRequest{
 		Task: task, Target: target, Branch: branch, Knowledge: digest,
-		Budget: budget, WorkspaceDir: workspaceDir,
+		Budget: budget, WorkspaceDir: workspaceDir, MaxReportBytes: policy.MaxReportBytes,
 	}, dropped
 }
 

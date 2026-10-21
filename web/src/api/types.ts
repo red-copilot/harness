@@ -60,7 +60,6 @@ export interface AgentSpec {
   env?: Record<string, string>
   env_from?: string[]
   mounts?: Mount[]
-  skills?: Mount[]
   network?: string
   cap_add?: string[]
   resources?: ResourceSpec

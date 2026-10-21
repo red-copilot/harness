@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -63,17 +62,6 @@ func TestCLIRejectsWorkflowAndPiSpecKeys(t *testing.T) {
 			t.Fatalf("legacy key %q accepted", key)
 		}
 	}
-}
-
-func TestApplyPiEnvironmentDefaults(t *testing.T) {
-	t.Setenv("PI_PROVIDER", "provider-env")
-	t.Setenv("PI_MODEL", "model-env")
-	descriptor := harness.RunDescriptor{Planner: harness.AgentSpec{ID: "planner"}, Executors: []harness.AgentSpec{{ID: "exec"}}}
-	ApplyPiEnvironmentDefaults(&descriptor)
-	if len(descriptor.Planner.RuntimeConfig) == 0 || len(descriptor.Executors[0].RuntimeConfig) == 0 {
-		t.Fatal("runtime config was not populated")
-	}
-	_ = context.Background()
 }
 
 func TestCLIComposesTSecBackend(t *testing.T) {

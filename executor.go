@@ -30,8 +30,12 @@ func (defaultExecutorStrategy) Parse(req AttemptRequest, turn TurnResult) (Attem
 	if !info.Mode().IsRegular() {
 		return AttemptReport{}, errors.New("executor report must be a regular file")
 	}
-	if info.Size() > 1<<20 {
-		return AttemptReport{}, fmt.Errorf("executor report is too large: %d bytes", info.Size())
+	limit := req.MaxReportBytes
+	if limit <= 0 {
+		limit = DefaultExplorationPolicy().MaxReportBytes
+	}
+	if info.Size() > limit {
+		return AttemptReport{}, fmt.Errorf("executor report is too large: %d > %d bytes", info.Size(), limit)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -180,7 +184,6 @@ func RunAgentTurn(ctx context.Context, session AgentSession, prompt string, limi
 				if event.Text != "" {
 					result.AssistantText = event.Text
 				}
-				result.ToolCalls = append(result.ToolCalls, event.Tools...)
 			case AgentEventSettled:
 				result.Usage = session.Usage()
 				return result, nil

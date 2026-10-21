@@ -62,7 +62,11 @@ func PromoteKnowledge(req KnowledgePromotionRequest) (Knowledge, []KnowledgeEven
 		updated.Version++
 		return updated, []KnowledgeEvent{{Type: "knowledge.supported", Data: map[string]any{"knowledge_id": updated.ID, "sources": sources}}}, nil
 	}
-	if len(req.Existing) >= 200 {
+	limit := req.MaxItems
+	if limit <= 0 {
+		limit = DefaultExplorationPolicy().MaxKnowledgeItems
+	}
+	if len(req.Existing) >= limit {
 		return Knowledge{}, nil, errors.New("knowledge limit exceeded")
 	}
 	// Target identity is code-owned: an executor-supplied target string must not

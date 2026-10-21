@@ -56,7 +56,6 @@ type AgentFileSpec struct {
 	Env           map[string]string    `json:"env,omitempty" yaml:"env,omitempty"`
 	EnvFrom       []string             `json:"env_from,omitempty" yaml:"env_from,omitempty"`
 	Mounts        []harness.Mount      `json:"mounts,omitempty" yaml:"mounts,omitempty"`
-	Skills        []harness.Mount      `json:"skills,omitempty" yaml:"skills,omitempty"`
 	Network       string               `json:"network,omitempty" yaml:"network,omitempty"`
 	CapAdd        []string             `json:"cap_add,omitempty" yaml:"cap_add,omitempty"`
 	Resources     harness.ResourceSpec `json:"resources,omitempty" yaml:"resources,omitempty"`
@@ -195,7 +194,7 @@ func (a AgentFileSpec) toHarness() (harness.AgentSpec, error) {
 		}
 		runtimeConfig = encoded
 	}
-	return harness.AgentSpec{ID: a.ID, Image: a.Image, Command: a.Command, Env: a.Env, EnvFrom: a.EnvFrom, Mounts: a.Mounts, Skills: a.Skills, Network: a.Network, CapAdd: a.CapAdd, Resources: a.Resources, RuntimeConfig: runtimeConfig}, nil
+	return harness.AgentSpec{ID: a.ID, Image: a.Image, Command: a.Command, Env: a.Env, EnvFrom: a.EnvFrom, Mounts: a.Mounts, Network: a.Network, CapAdd: a.CapAdd, Resources: a.Resources, RuntimeConfig: runtimeConfig}, nil
 }
 
 func appendUniqueString(values []string, additions ...string) []string {
@@ -223,29 +222,4 @@ func composeAgent(agent harness.AgentSpec) (harness.AgentSpec, error) {
 	}
 	agent.Runtime = pi.NewFactory(config)
 	return agent, nil
-}
-
-func ApplyPiEnvironmentDefaults(descriptor *harness.RunDescriptor) {
-	provider, providerSet := os.LookupEnv("PI_PROVIDER")
-	model, modelSet := os.LookupEnv("PI_MODEL")
-	if !providerSet && !modelSet {
-		return
-	}
-	apply := func(agent *harness.AgentSpec) {
-		var config pi.Config
-		if len(agent.RuntimeConfig) > 0 {
-			_ = json.Unmarshal(agent.RuntimeConfig, &config)
-		}
-		if config.Provider == "" && providerSet {
-			config.Provider = provider
-		}
-		if config.Model == "" && modelSet {
-			config.Model = model
-		}
-		agent.RuntimeConfig, _ = json.Marshal(config)
-	}
-	apply(&descriptor.Planner)
-	for i := range descriptor.Executors {
-		apply(&descriptor.Executors[i])
-	}
 }

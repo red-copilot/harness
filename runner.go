@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,7 +25,6 @@ type Runner struct {
 	pollInterval  time.Duration
 	closeTimeout  time.Duration
 	cleaner       ResourceCleaner
-	logger        Logger
 
 	mu   sync.Mutex
 	runs map[string]*Run
@@ -56,13 +54,10 @@ func NewRunner(cfg Config) (*Runner, error) {
 	if cfg.WorkspaceRoot == "" {
 		cfg.WorkspaceRoot = ".harness/workspaces"
 	}
-	if cfg.Logger == nil {
-		cfg.Logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	}
 	// The composition root installs the redacting boundary, so no Run and no
 	// adapter can reach the canonical store without redaction.
 	redacting := newRedactingStore(cfg.Store)
-	runner := &Runner{store: redacting, redacting: redacting, starter: cfg.Starter, workspaceRoot: cfg.WorkspaceRoot, maxSessions: cfg.MaxSessions, pollInterval: cfg.PollInterval, closeTimeout: cfg.CloseTimeout, cleaner: cfg.Cleaner, logger: cfg.Logger, runs: map[string]*Run{}}
+	runner := &Runner{store: redacting, redacting: redacting, starter: cfg.Starter, workspaceRoot: cfg.WorkspaceRoot, maxSessions: cfg.MaxSessions, pollInterval: cfg.PollInterval, closeTimeout: cfg.CloseTimeout, cleaner: cfg.Cleaner, runs: map[string]*Run{}}
 	if !cfg.SkipRecovery {
 		if err := cfg.Store.MarkInterrupted(context.Background()); err != nil {
 			return nil, fmt.Errorf("mark interrupted runs: %w", err)

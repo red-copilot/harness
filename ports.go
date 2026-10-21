@@ -131,8 +131,3 @@ type Store interface {
 
 // EventSink persists raw session events.
 type EventSink func(Event) error
-
-// Logger is the minimal warning surface used by the core.
-type Logger interface {
-	Warn(msg string, args ...any)
-}

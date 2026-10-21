@@ -72,7 +72,6 @@ type Config struct {
 	MaxSessions   int
 	PollInterval  time.Duration
 	CloseTimeout  time.Duration
-	Logger        Logger
 	Cleaner       ResourceCleaner
 	SkipRecovery  bool
 }
@@ -101,13 +100,12 @@ type Mount struct {
 	ReadOnly    bool   `json:"read_only,omitempty" yaml:"read_only,omitempty"`
 }
 
-// Task is the caller-owned objective and read-only inputs.
+// Task is the caller-owned objective. Additional inputs and skills are
+// supplied as mounts on the agent specs; the Task itself carries identity and
+// intent only.
 type Task struct {
-	ID        string            `json:"id" yaml:"id"`
-	Objective string            `json:"objective" yaml:"objective"`
-	Inputs    []Mount           `json:"inputs,omitempty" yaml:"inputs,omitempty"`
-	Skills    []Mount           `json:"skills,omitempty" yaml:"skills,omitempty"`
-	Metadata  map[string]string `json:"metadata,omitempty" yaml:"metadata,omitempty"`
+	ID        string `json:"id" yaml:"id"`
+	Objective string `json:"objective" yaml:"objective"`
 }
 
 // IsolationMode records who owns the network boundary. v1 supports only
@@ -165,7 +163,6 @@ type AgentSpec struct {
 	Env           map[string]string   `json:"env,omitempty" yaml:"env,omitempty"`
 	EnvFrom       []string            `json:"env_from,omitempty" yaml:"env_from,omitempty"`
 	Mounts        []Mount             `json:"mounts,omitempty" yaml:"mounts,omitempty"`
-	Skills        []Mount             `json:"skills,omitempty" yaml:"skills,omitempty"`
 	Network       string              `json:"network,omitempty" yaml:"network,omitempty"`
 	CapAdd        []string            `json:"cap_add,omitempty" yaml:"cap_add,omitempty"`
 	Resources     ResourceSpec        `json:"resources,omitempty" yaml:"resources,omitempty"`
@@ -313,9 +310,8 @@ type RunDescriptor struct {
 
 // Token usage and turn summaries are produced by the core turn protocol.
 type TurnResult struct {
-	AssistantText string   `json:"assistant_text,omitempty"`
-	ToolCalls     []string `json:"tool_calls,omitempty"`
-	Usage         Usage    `json:"usage,omitempty"`
+	AssistantText string `json:"assistant_text,omitempty"`
+	Usage         Usage  `json:"usage,omitempty"`
 }
 
 // TurnLimits are enforced while the agent turn is live.
@@ -326,7 +322,6 @@ type TurnLimits struct {
 
 // AttemptBudget bounds one attempt of a branch.
 type AttemptBudget struct {
-	MaxAttempts  int           `json:"max_attempts"`
 	MaxToolCalls int           `json:"max_tool_calls"`
 	MaxWallTime  time.Duration `json:"max_wall_time"`
 }
@@ -499,6 +494,8 @@ type AttemptRequest struct {
 	Knowledge    []Knowledge   `json:"knowledge"`
 	Budget       AttemptBudget `json:"budget"`
 	WorkspaceDir string        `json:"workspace_dir"`
+	// MaxReportBytes is the policy-enforced executor report cap.
+	MaxReportBytes int64 `json:"max_report_bytes"`
 }
 
 // KnowledgeKind is intentionally adapter-defined.
@@ -783,5 +780,8 @@ type KnowledgePromotionRequest struct {
 	Proposal     KnowledgeProposal
 	Observations map[string]Observation
 	Existing     []Knowledge
-	Now          time.Time
+	// MaxItems is the mechanically enforced knowledge cap. Zero falls back to
+	// DefaultExplorationPolicy().MaxKnowledgeItems.
+	MaxItems int
+	Now      time.Time
 }

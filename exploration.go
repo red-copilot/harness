@@ -27,7 +27,6 @@ type explorationState struct {
 	observations []Observation
 	knowledge    []Knowledge
 	artifacts    []Artifact
-	lastBatch    []AttemptSummary
 	seq          int
 }
 
@@ -199,12 +198,10 @@ func (e *explorationEngine) run(ctx context.Context) error {
 		}
 		progressBefore := len(state.knowledge)
 		completed := 0
-		state.lastBatch = state.lastBatch[:0]
 		for _, execution := range executions {
 			if err := e.mergeAttempt(ctx, execution); err != nil {
 				return err
 			}
-			state.lastBatch = append(state.lastBatch, AttemptSummary{ID: execution.attempt.ID, BranchID: execution.attempt.BranchID, Status: execution.attempt.Status, Outcome: execution.attempt.Outcome, Error: execution.attempt.Error})
 			if execution.attempt.Status == AttemptCompleted {
 				completed++
 			}
@@ -366,7 +363,7 @@ func (e *explorationEngine) runBatch(ctx context.Context, branches []Branch) ([]
 				execution.err = err
 				return
 			}
-			request, dropped := buildExecutorContext(state.task, state.target, execution.branch, state.knowledge, AttemptBudget{MaxAttempts: state.policy.MaxAttemptsPerBranch, MaxToolCalls: state.policy.MaxToolCallsPerAttempt, MaxWallTime: state.policy.MaxWallTimePerAttempt}, e.live.sessionWorkspace(execution.sessionID), state.policy)
+			request, dropped := buildExecutorContext(state.task, state.target, execution.branch, state.knowledge, AttemptBudget{MaxToolCalls: state.policy.MaxToolCallsPerAttempt, MaxWallTime: state.policy.MaxWallTimePerAttempt}, e.live.sessionWorkspace(execution.sessionID), state.policy)
 			if dropped > 0 {
 				if err := e.emit("exploration.context.truncated", map[string]any{"context": "executor", "attempt_id": execution.attempt.ID, "dropped": dropped}); err != nil {
 					execution.err = err
@@ -490,7 +487,7 @@ func (e *explorationEngine) mergeAttempt(ctx context.Context, execution attemptE
 				}
 				break
 			}
-			promoted, events, err := PromoteKnowledge(KnowledgePromotionRequest{RunID: state.runID, AttemptID: attempt.ID, SessionID: execution.sessionID, Task: state.task, Target: state.target, Branch: *branch, Proposal: proposal, Observations: observationMap, Existing: state.knowledge, Now: time.Now().UTC()})
+			promoted, events, err := PromoteKnowledge(KnowledgePromotionRequest{RunID: state.runID, AttemptID: attempt.ID, SessionID: execution.sessionID, Task: state.task, Target: state.target, Branch: *branch, Proposal: proposal, Observations: observationMap, Existing: state.knowledge, MaxItems: state.policy.MaxKnowledgeItems, Now: time.Now().UTC()})
 			if err != nil {
 				if err := e.emit("knowledge.rejected", map[string]any{"attempt_id": attempt.ID, "error": err.Error()}); err != nil {
 					return err

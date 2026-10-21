@@ -165,7 +165,7 @@ func composeDescriptor(base *FileConfig, descriptor harness.RunDescriptor, store
 }
 
 func agentFromHarness(agent harness.AgentSpec) AgentFileSpec {
-	converted := AgentFileSpec{ID: agent.ID, Image: agent.Image, Command: agent.Command, Env: agent.Env, EnvFrom: agent.EnvFrom, Mounts: agent.Mounts, Skills: agent.Skills, Network: agent.Network, CapAdd: agent.CapAdd, Resources: agent.Resources}
+	converted := AgentFileSpec{ID: agent.ID, Image: agent.Image, Command: agent.Command, Env: agent.Env, EnvFrom: agent.EnvFrom, Mounts: agent.Mounts, Network: agent.Network, CapAdd: agent.CapAdd, Resources: agent.Resources}
 	if len(agent.RuntimeConfig) > 0 {
 		var runtimeConfig any
 		if json.Unmarshal(agent.RuntimeConfig, &runtimeConfig) == nil {

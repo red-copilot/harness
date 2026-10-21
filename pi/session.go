@@ -24,16 +24,15 @@ const DefaultImage = "ghcr.io/red-copilot/harness-pi-kali:0.1.0"
 // Config is immutable Pi adapter configuration. RuntimeConfig on an AgentSpec
 // may override these fields with the same JSON shape.
 type Config struct {
-	Provider       string   `json:"provider,omitempty" yaml:"provider,omitempty"`
-	Model          string   `json:"model,omitempty" yaml:"model,omitempty"`
-	Thinking       string   `json:"thinking,omitempty" yaml:"thinking,omitempty"`
-	SystemPrompt   string   `json:"system_prompt,omitempty" yaml:"system_prompt,omitempty"`
-	ModelsJSON     string   `json:"models_json,omitempty" yaml:"models_json,omitempty"`
-	Tools          []string `json:"tools,omitempty" yaml:"tools,omitempty"`
-	ExtraArgs      []string `json:"extra_args,omitempty" yaml:"extra_args,omitempty"`
-	EnvPassthrough []string `json:"env_passthrough,omitempty" yaml:"env_passthrough,omitempty"`
-	Skills         []string `json:"skills,omitempty" yaml:"skills,omitempty"`
-	Image          string   `json:"image,omitempty" yaml:"image,omitempty"`
+	Provider     string   `json:"provider,omitempty" yaml:"provider,omitempty"`
+	Model        string   `json:"model,omitempty" yaml:"model,omitempty"`
+	Thinking     string   `json:"thinking,omitempty" yaml:"thinking,omitempty"`
+	SystemPrompt string   `json:"system_prompt,omitempty" yaml:"system_prompt,omitempty"`
+	ModelsJSON   string   `json:"models_json,omitempty" yaml:"models_json,omitempty"`
+	Tools        []string `json:"tools,omitempty" yaml:"tools,omitempty"`
+	ExtraArgs    []string `json:"extra_args,omitempty" yaml:"extra_args,omitempty"`
+	Skills       []string `json:"skills,omitempty" yaml:"skills,omitempty"`
+	Image        string   `json:"image,omitempty" yaml:"image,omitempty"`
 }
 
 // Factory creates Pi RPC sessions from runtime-neutral requests.
@@ -150,9 +149,6 @@ func mergeConfig(base, override Config) Config {
 	}
 	if len(override.ExtraArgs) > 0 {
 		base.ExtraArgs = append([]string(nil), override.ExtraArgs...)
-	}
-	if len(override.EnvPassthrough) > 0 {
-		base.EnvPassthrough = append([]string(nil), override.EnvPassthrough...)
 	}
 	if len(override.Skills) > 0 {
 		base.Skills = append([]string(nil), override.Skills...)
