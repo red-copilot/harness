@@ -316,7 +316,10 @@ func (r *Runner) execute(run *Run, spec RunSpec, redactor *Redactor) {
 				status = StatusFailed
 			}
 		case <-run.ctx.Done():
-			if reason := run.budgetExceeded(); reason != "" {
+			if reason := run.controlError(); reason != "" {
+				status = StatusFailed
+				runErr = errors.New(reason)
+			} else if reason := run.budgetExceeded(); reason != "" {
 				status = StatusFailed
 				runErr = fmt.Errorf("budget exceeded: %s", reason)
 			} else if errors.Is(run.ctx.Err(), context.DeadlineExceeded) {
@@ -445,6 +448,7 @@ func (r *Runner) runOneSession(ctx context.Context, run *Run, redactor *Redactor
 	r.emitEvent(run, redactor, Event{
 		RunID: run.ID, SessionID: req.SessionID, Source: "harness", Type: "session.started", Time: time.Now().UTC(),
 	})
+	exploration := NewExplorationState(run.ID, req.SessionID, spec.Task, req.Target)
 	eventDone := make(chan struct{})
 	eventStream := session.Events()
 	go func() {
@@ -455,10 +459,49 @@ func (r *Runner) runOneSession(ctx context.Context, run *Run, redactor *Redactor
 				if !ok {
 					return
 				}
-				r.emitEvent(run, redactor, Event{
+				stored := r.emitEvent(run, redactor, Event{
 					RunID: run.ID, SessionID: req.SessionID, Source: "agent", Type: event.Type,
 					Time: time.Now().UTC(), Data: event.Data,
 				})
+				if stored.Seq == 0 {
+					run.setControlError(errors.New("persist agent event before exploration update"))
+					run.cancel()
+					return
+				}
+				if stored.Type == "turn_end" {
+					next, err := ReduceExploration(exploration, stored)
+					if err != nil {
+						run.setControlError(fmt.Errorf("reduce exploration: %w", err))
+						run.cancel()
+						return
+					}
+					exploration = next
+					if r.emitEvent(run, redactor, Event{
+						RunID: run.ID, SessionID: req.SessionID, Source: "control",
+						Type: "exploration.state.updated", Time: time.Now().UTC(), Data: mustJSON(exploration),
+					}).Seq == 0 {
+						run.setControlError(errors.New("persist exploration state"))
+						run.cancel()
+						return
+					}
+					explorationContext := BuildExplorationContext(exploration, 1)
+					if r.emitEvent(run, redactor, Event{
+						RunID: run.ID, SessionID: req.SessionID, Source: "control",
+						Type: "exploration.frontier.updated", Time: time.Now().UTC(), Data: mustJSON(explorationContext),
+					}).Seq == 0 {
+						run.setControlError(errors.New("persist exploration frontier"))
+						run.cancel()
+						return
+					}
+					if err := session.Steer(ctx, FormatExplorationContext(explorationContext)); err != nil {
+						if ctx.Err() != nil {
+							return
+						}
+						run.setControlError(fmt.Errorf("steer exploration frontier: %w", err))
+						run.cancel()
+						return
+					}
+				}
 				r.checkLiveBudget(run, spec.Budget, session)
 			case <-ctx.Done():
 				return
@@ -487,7 +530,8 @@ func (r *Runner) runOneSession(ctx context.Context, run *Run, redactor *Redactor
 	} else {
 		close(logDone)
 	}
-	prompt := buildPrompt(spec.Task, req.Target)
+	initialContext := BuildExplorationContext(exploration, 1)
+	prompt := buildPrompt(spec.Task, req.Target) + "\n\n" + FormatExplorationContext(initialContext)
 	if err := session.Prompt(ctx, prompt); err != nil {
 		result.Error = redactor.Redact(err.Error())
 		_ = session.Close(context.Background())
@@ -545,18 +589,19 @@ func (r *Runner) observeBackend(ctx context.Context, redactor *Redactor, run *Ru
 	}
 }
 
-func (r *Runner) emitEvent(run *Run, redactor *Redactor, event Event) {
+func (r *Runner) emitEvent(run *Run, redactor *Redactor, event Event) Event {
 	event.Data = redactor.RedactJSON(event.Data)
 	event.Raw = redactor.RedactJSON(event.Raw)
 	stored, err := r.store.AppendEvent(context.Background(), event)
 	if err != nil {
 		r.logger.Warn("persist event failed", "run_id", run.ID, "type", event.Type, "error", err)
-		return
+		return Event{}
 	}
 	select {
 	case run.events <- stored:
 	default:
 	}
+	return stored
 }
 
 func (r *Runner) checkLiveBudget(run *Run, budget Budget, session AgentSession) {

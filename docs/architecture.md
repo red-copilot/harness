@@ -16,9 +16,22 @@ The SDK is a Go modular monolith:
 1. The runner persists a queued run and starts one target provision operation.
 2. Each agent gets an isolated workspace and a process-scoped `AgentSession`.
 3. Pi runs as a long-lived JSONL RPC subprocess. The runner reads stdout continuously and records raw events and stderr in SQLite.
-4. `agent_settled` ends a Pi run. `agent_end` is only an intermediate observation.
-5. A backend completion or a caller-provided verifier produces the only authoritative verdict.
-6. Target, session processes and labeled Docker resources are closed in all outcomes.
+4. Each Pi `turn_end` is reduced into the session's exploration state. The controller then projects a bounded frontier and steers its focus before the next model call.
+5. `agent_settled` ends a Pi run. `agent_end` is only an intermediate observation.
+6. A backend completion or a caller-provided verifier produces the only authoritative verdict.
+7. Target, session processes and labeled Docker resources are closed in all outcomes.
+
+## Exploration control
+
+State and Frontier are deterministic projections over the canonical event log:
+
+- `ExplorationState` records action attempts, bounded untrusted observations and open exploration items.
+- `ReduceExploration` applies one `turn_end` event, rejects sequence regression and is idempotent for a replayed event.
+- `ProjectExplorationFrontier` filters and orders open candidates/questions; it does not persist a second mutable frontier.
+- The runner records `exploration.state.updated` and `exploration.frontier.updated`, then sends one bounded focus through Pi steering before the next LLM call.
+
+Tool output is always marked as an untrusted observation. Neither State nor
+Frontier can establish task success.
 
 ## Trust boundary
 

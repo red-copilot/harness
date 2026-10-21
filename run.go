@@ -19,11 +19,12 @@ type Run struct {
 	events chan Event
 	done   chan struct{}
 
-	mu        sync.RWMutex
-	sessions  map[string]AgentSession
-	result    Result
-	err       error
-	budgetErr string
+	mu         sync.RWMutex
+	sessions   map[string]AgentSession
+	result     Result
+	err        error
+	budgetErr  string
+	controlErr string
 }
 
 func newRun(runner *Runner, id string, ctx context.Context, cancel context.CancelFunc) *Run {
@@ -99,6 +100,23 @@ func (r *Run) budgetExceeded() string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.budgetErr
+}
+
+func (r *Run) setControlError(err error) {
+	if err == nil {
+		return
+	}
+	r.mu.Lock()
+	if r.controlErr == "" {
+		r.controlErr = err.Error()
+	}
+	r.mu.Unlock()
+}
+
+func (r *Run) controlError() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.controlErr
 }
 
 func (r *Run) finish(result Result, err error) {

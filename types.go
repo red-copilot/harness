@@ -133,7 +133,9 @@ type ProcessStarter interface {
 	Start(context.Context, ProcessSpec) (Process, error)
 }
 
-// AgentEvent is a normalized event emitted by any agent session.
+// AgentEvent is a normalized event emitted by any agent session. A session
+// participating in exploration control must emit turn_end after one assistant
+// turn and its tool calls complete.
 type AgentEvent struct {
 	Type string          `json:"type"`
 	Data json.RawMessage `json:"data,omitempty"`

@@ -19,6 +19,11 @@ handled. The SDK waits for `agent_settled`; it does not treat `agent_end` as
 completion. Provider failures and aborts after acceptance are observed through
 events and process exit.
 
+`turn_end` is the exploration action boundary. After Pi finishes one assistant
+turn and its tool calls, the runner reduces the turn into state and sends the
+next Frontier focus with `steer`. Pi delivers steering after the current turn's
+tool calls and before the next LLM call.
+
 Before launch, the session scans the mounted `/skills` directory and passes
 every directory containing `SKILL.md` to Pi with `--skill`. Adding another
 embedded or task-provided skill therefore makes it visible in Pi's available
