@@ -526,3 +526,54 @@ func TestBranchEngineExemptsReviewBranchesFromChildCap(t *testing.T) {
 		t.Fatalf("review branch was capped: %+v", events)
 	}
 }
+
+func TestBranchEngineCapsOrdinaryReviewTopicBranch(t *testing.T) {
+	target := Target{ID: "b-02", Addresses: []string{"10.0.0.1:80"}}
+	policy := DefaultExplorationPolicy()
+	policy.MaxChildrenPerBranch = 2
+	var events []BranchEvent
+	engine := NewBranchEngine(BranchEngineConfig{
+		RunID: "run-1", Task: Task{ID: "task-1", Objective: "find flag"}, Targets: []Target{target}, Policy: policy,
+	}, nil, func(event BranchEvent) { events = append(events, event) })
+	ordinary := Branch{
+		ID: "branch-review-lookalike", ParentID: "root", TaskID: "task-1", RunID: "run-1", Depth: 1,
+		Topic: "review.web.oa.alt", Scope: "b-02", Status: BranchResolved,
+	}
+	parent := Branch{
+		ID: "branch-parent", TaskID: "task-1", RunID: "run-1", Depth: 1,
+		Topic: "web.oa", Scope: "b-02", Status: BranchResolved,
+	}
+	engine.branches = append(engine.branches,
+		Branch{ID: "root", TaskID: "task-1", RunID: "run-1", Depth: 0, Topic: "root", Scope: "b-02", Status: BranchResolved},
+		ordinary,
+		parent,
+	)
+	engine.addReviewBranch(parent, Knowledge{Topic: "web.oa.alt", Scope: KnowledgeScopeTarget})
+
+	ordinaryIndex := engine.indexBranch(ordinary.ID)
+	if ordinaryIndex < 0 {
+		t.Fatalf("ordinary branch missing: %+v", engine.Branches())
+	}
+	proposals := []BranchProposal{
+		{ParentID: ordinary.ID, Topic: "ordinary.one", Goal: "ordinary one", Hypothesis: "one exists", Target: "b-02", SuccessCondition: "one found", FailureCondition: "one missing"},
+		{ParentID: ordinary.ID, Topic: "ordinary.two", Goal: "ordinary two", Hypothesis: "two exists", Target: "b-02", SuccessCondition: "two found", FailureCondition: "two missing"},
+		{ParentID: ordinary.ID, Topic: "ordinary.three", Goal: "ordinary three", Hypothesis: "three exists", Target: "b-02", SuccessCondition: "three found", FailureCondition: "three missing"},
+	}
+	engine.expandChildren(ordinaryIndex, Attempt{
+		ID: "attempt-ordinary", BranchID: ordinary.ID, Status: AttemptCompleted,
+		Outcome: AttemptLocalSuccess, ObservationIDs: []string{"obs-ordinary"},
+	}, proposals)
+
+	children := 0
+	for _, branch := range engine.Branches() {
+		if branch.ParentID == ordinary.ID {
+			children++
+		}
+	}
+	if children != policy.MaxChildrenPerBranch {
+		t.Fatalf("ordinary review-topic children = %d, want %d: %+v", children, policy.MaxChildrenPerBranch, engine.Branches())
+	}
+	if _, rejected := findBranchRejection(events, "child_limit_exceeded"); !rejected {
+		t.Fatalf("ordinary review-topic branch was not capped: %+v", events)
+	}
+}

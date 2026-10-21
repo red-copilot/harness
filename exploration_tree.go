@@ -507,10 +507,6 @@ func (e *BranchEngine) addReviewBranch(parent Branch, knowledge Knowledge) {
 	topic := "review." + normalizeTopic(knowledge.Topic)
 	for _, branch := range e.branches {
 		if branch.Topic == topic && branch.Scope == parent.Scope {
-			if e.reviewBranches == nil {
-				e.reviewBranches = make(map[string]struct{})
-			}
-			e.reviewBranches[branch.ID] = struct{}{}
 			return
 		}
 	}
