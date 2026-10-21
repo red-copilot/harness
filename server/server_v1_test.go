@@ -32,6 +32,23 @@ func TestServerAcceptsRunDescriptor(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
 	}
+	var accepted struct {
+		RunID string `json:"run_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &accepted); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		record, err := store.GetRun(context.Background(), accepted.RunID)
+		if err == nil && (record.Status == harness.StatusSucceeded || record.Status == harness.StatusFailed || record.Status == harness.StatusCancelled || record.Status == harness.StatusStagnated || record.Status == harness.StatusInterrupted || record.Status == harness.StatusTimedOut) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("run %s did not settle: %+v err=%v", accepted.RunID, record, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func TestServerRejectsUnknownFieldsAndUnsupportedIsolation(t *testing.T) {

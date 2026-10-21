@@ -1,7 +1,7 @@
 # Minimal Harness Architecture
 
 - Date: 2026-10-21
-- Status: Approved in conversation
+- Status: Superseded by `2026-10-21-first-principles-offensive-agent-sdk-design.md`
 - Change type: Internal refactor with intentional v1alpha1 Go API changes
 
 ## Intent

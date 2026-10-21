@@ -1,7 +1,7 @@
 # 第一性原理进攻性安全通用智能体 SDK v1 设计
 
 - 日期：2026-10-21
-- 状态：Approved in conversation；实现未开始
+- 状态：Implemented
 - 变更类型：公开 Go API 断代重构
 - 取代：`2026-10-21-minimal-harness-architecture-design.md` 和 `2026-10-21-exploration-convergence-design.md` 中与新契约冲突的部分
 - 影响面：根 `harness` 包、`pi`、`sandbox/docker`、`tsec`、`verify`、`store/sqlite`、`server`、CLI、Web、README 与架构文档

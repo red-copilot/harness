@@ -486,7 +486,7 @@ func (e *explorationEngine) mergeAttempt(ctx context.Context, execution attemptE
 	observationMap := make(map[string]Observation, len(observations))
 	for _, observation := range observations {
 		state.observations = append(state.observations, observation)
-		observationMap[strings.TrimPrefix(observation.ID, attempt.ID+":")] = observation
+		observationMap[strings.TrimPrefix(observation.ID, attempt.ID+":obs:")] = observation
 		attempt.ObservationIDs = append(attempt.ObservationIDs, observation.ID)
 		for _, artifact := range observation.Evidence {
 			state.artifacts = append(state.artifacts, artifact)
