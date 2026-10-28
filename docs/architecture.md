@@ -1,6 +1,16 @@
 # Architecture
 
-The SDK is a Go modular monolith:
+## Status and direction
+
+This file distinguishes the released baseline from the approved target architecture.
+
+- **Released baseline:** `main@0bbee5e`. Its current executable control path is one long-lived Agent session per `AgentSpec`; Pi `turn_end` events are reduced into `ExplorationState`, projected into a bounded Frontier, and delivered with `Steer`. `agent_settled` ends the Pi session, while success still comes only from a `Verifier` or backend completion.
+- **Approved target:** Fact/Intent v2, using `core` + `engine`, a serialized Reasoner, exactly two Executor slots, evidence-backed Facts, `RunPhase`/`RunOutcome`, and atomic `CanonicalWriter.Commit`/`Finalize` operations.
+- **Migration status:** the target is not the current `main` implementation. The implementation evidence is the reachable local commit `5bbddb9`; migration is a separate implementation task. There is no second writable Branch/Knowledge control path in the target architecture; legacy records remain read-only.
+
+For the derivation, route comparison, code-enforcement map, migration boundary and risks, see [`first-principles-architecture.md`](first-principles-architecture.md). The study is based on static code and test inspection; it does not claim that `main` has passed v2 or environment-dependent checks.
+
+The released baseline is a Go modular monolith:
 
 - `harness` owns run lifecycle, budgets, session fan-out, SQLite contracts and verdict handling.
 - `pi` implements the default `AgentSession` using Pi RPC.
@@ -53,3 +63,7 @@ sequence. The service marks unfinished runs `interrupted` on startup and cleans
 labeled orphan containers/networks.
 
 There is no checkpoint/replay in v1.
+
+## Directional rule
+
+The approved direction is to replace incremental Frontier steering with the Fact/Intent v2 control kernel. Do not add new exploration semantics to the released baseline: the target has one writable control path, a single board writer, evidence-backed Facts and an authoritative verdict boundary. Until the migration lands, the run flow above remains the truthful description of `main`.
