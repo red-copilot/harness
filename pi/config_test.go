@@ -16,10 +16,10 @@ import (
 	"github.com/red-copilot/harness"
 )
 
-func TestFactoryPlannerUsesReadOnlyTools(t *testing.T) {
+func TestFactoryPlannerCanOnlyReadAndWriteItsReport(t *testing.T) {
 	command := BuildCommand(harness.AgentSpec{ID: "planner"}, harness.AgentRoleReasoner, Config{})
 	joined := strings.Join(command, " ")
-	if !strings.Contains(joined, "--tools read") || strings.Contains(joined, "bash") {
+	if !strings.Contains(joined, "--tools read,write") || strings.Contains(joined, "bash") {
 		t.Fatalf("planner command = %v", command)
 	}
 }

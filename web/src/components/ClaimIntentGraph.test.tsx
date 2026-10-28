@@ -27,4 +27,15 @@ describe('ClaimIntentGraph', () => {
     expect(screen.getAllByText('slot-1').length).toBeGreaterThan(0)
     expect(screen.getByText('slot-2')).toBeInTheDocument()
   })
+
+  it('handles nullable collections from older server responses', () => {
+    const nullableGraph = {
+      ...graph,
+      intents: [],
+      attempts: [],
+      hints: null,
+    } as unknown as BoardResponse
+    render(<ClaimIntentGraph graph={nullableGraph} />)
+    expect(screen.getByText('No intents yet')).toBeInTheDocument()
+  })
 })

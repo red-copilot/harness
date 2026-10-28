@@ -143,6 +143,7 @@ func reasonPrompt(req ReasonRequest) string {
 	for _, hint := range req.Hints {
 		fmt.Fprintf(&out, "- %s\n", truncateUTF8(hint.Content, 512))
 	}
+	out.WriteString(reportProtocolInstruction)
 	out.WriteString(`Return exactly one JSON object and nothing else. Do not mark the Run successful; only the Verifier or backend completion may do that. A goal_candidate only requests verification.
 Example: {"frontier_version":1,"intents":[{"from":["origin"],"description":"one bounded exploration direction"}]}
 If the claims appear sufficient, return {"frontier_version":1,"goal_candidate":{"from":["claim-id"],"description":"why the evidence may satisfy the goal"}}.

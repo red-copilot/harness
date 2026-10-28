@@ -451,7 +451,18 @@ func (s *Server) board(w http.ResponseWriter, r *http.Request, runID string) {
 			reason.Active = false
 		}
 	}
-	writeJSON(w, http.StatusOK, boardResponse{Claims: claims, Intents: intents, Hints: hints, Attempts: attempts, Observations: observations, Artifacts: artifacts, Slots: slots, BoardRevision: revision, Reason: reason})
+	writeJSON(w, http.StatusOK, boardResponse{
+		Claims: nonNilSlice(claims), Intents: nonNilSlice(intents), Hints: nonNilSlice(hints),
+		Attempts: nonNilSlice(attempts), Observations: nonNilSlice(observations), Artifacts: nonNilSlice(artifacts),
+		Slots: nonNilSlice(slots), BoardRevision: revision, Reason: reason,
+	})
+}
+
+func nonNilSlice[T any](values []T) []T {
+	if values == nil {
+		return []T{}
+	}
+	return values
 }
 
 func (s *Server) downloadArtifact(w http.ResponseWriter, r *http.Request, runID, artifactID string) {

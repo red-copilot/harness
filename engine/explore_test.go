@@ -41,6 +41,7 @@ func (s *scriptedExploreSession) Abort(context.Context) error {
 	s.mu.Lock()
 	s.aborts++
 	s.mu.Unlock()
+	s.events <- AgentEvent{Kind: AgentEventSettled}
 	return nil
 }
 func (s *scriptedExploreSession) Close(context.Context) error { return nil }
@@ -203,6 +204,31 @@ func TestConcludeDoesNotRunAfterEventStreamClose(t *testing.T) {
 	}
 	if session.calls != 1 {
 		t.Fatalf("prompt calls = %d, want 1", session.calls)
+	}
+}
+
+func TestExplorePromptsRequireReportFile(t *testing.T) {
+	req := testExploreRequest()
+	strategy := defaultExploreStrategy{}
+	prompts := []struct {
+		name string
+		get  func() (string, error)
+	}{
+		{name: "execute", get: func() (string, error) { return strategy.ExecutePrompt(req) }},
+		{name: "conclude", get: func() (string, error) { return strategy.ConcludePrompt(req) }},
+	}
+	for _, tt := range prompts {
+		t.Run(tt.name, func(t *testing.T) {
+			prompt, err := tt.get()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{"/workspace/report.json", "assistant text is ignored", "30 seconds"} {
+				if !strings.Contains(strings.ToLower(prompt), strings.ToLower(want)) {
+					t.Fatalf("prompt missing %q:\n%s", want, prompt)
+				}
+			}
+		})
 	}
 }
 

@@ -24,6 +24,7 @@ func (defaultExploreStrategy) ExecutePrompt(req ExploreRequest) (string, error) 
 	for _, hint := range req.Hints {
 		fmt.Fprintf(&out, "- %s\n", truncateUTF8(hint.Content, 512))
 	}
+	out.WriteString(reportProtocolInstruction)
 	out.WriteString(`Return exactly one JSON object and nothing else.
 Example finding: {"intent_id":"INTENT_ID","phase":"concluded","claim":{"kind":"finding","description":"confirmed result","observation_refs":["obs-1"]},"observations":[{"local_id":"obs-1","kind":"adapter.namespace","summary":"observed result","target":"TARGET_ID","evidence_files":["relative/file"]}]}
 Example negative: {"intent_id":"INTENT_ID","phase":"concluded","claim":{"kind":"negative","description":"what was ruled out"}}
@@ -32,10 +33,11 @@ Only produce a finding or negative Claim. Do not create Intents, child nodes, Kn
 }
 
 func (defaultExploreStrategy) ConcludePrompt(req ExploreRequest) (string, error) {
-	return fmt.Sprintf(`Stop exploring immediately. Do not run another tool, scan, wait, or start any new action.
+	return fmt.Sprintf(`Stop exploring immediately. Do not run another investigative tool, scan, wait, or start any new action. Only use the file-writing tool to write the final report.
 Summarize only what was already confirmed for Intent %s.
 Return exactly one JSON object using the same schema as the execute phase. If nothing was confirmed, return a negative claim.
-Do not create Intents, child nodes, Knowledge, or a success verdict.`, req.Intent.ID), nil
+Do not create Intents, child nodes, Knowledge, or a success verdict.
+%s`, req.Intent.ID, reportProtocolInstruction), nil
 }
 
 func (defaultExploreStrategy) Parse(req ExploreRequest, turn TurnResult) (AttemptReport, error) {
@@ -104,6 +106,7 @@ func runExploreAttempt(ctx context.Context, session AgentSession, req ExploreReq
 		_ = abortSession(session)
 		return AttemptReport{}, "conclude", errors.Join(executeErr, parseErr, fmt.Errorf("abort execute turn: %w", err))
 	}
+	drainAbortedTurn(session, concludeCtx)
 	concludePrompt, err := strategy.ConcludePrompt(req)
 	if err != nil {
 		_ = abortSession(session)
@@ -127,6 +130,26 @@ func runExploreAttempt(ctx context.Context, session AgentSession, req ExploreReq
 		return AttemptReport{}, "conclude", err
 	}
 	return report, "conclude", nil
+}
+
+// drainAbortedTurn discards the settlement emitted for the turn that was just
+// aborted. Otherwise that stale agent_settled can be mistaken for completion of
+// the subsequent Conclude turn before the agent has written its report.
+func drainAbortedTurn(session AgentSession, ctx context.Context) {
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case event, ok := <-session.Events():
+			if !ok || event.Kind == AgentEventSettled {
+				return
+			}
+		case <-timer.C:
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 func shouldConclude(executeErr, parseErr error) bool {

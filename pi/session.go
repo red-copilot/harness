@@ -172,7 +172,9 @@ func BuildCommand(agent harness.AgentSpec, role harness.AgentRole, config Config
 	tools := append([]string(nil), config.Tools...)
 	if len(tools) == 0 {
 		if role == harness.AgentRoleReasoner {
-			tools = []string{"read"}
+			// The Reasoner cannot explore or run shell commands, but it must
+			// write the protocol report consumed by the engine.
+			tools = []string{"read", "write"}
 		} else {
 			tools = []string{"read", "bash", "edit", "write"}
 		}

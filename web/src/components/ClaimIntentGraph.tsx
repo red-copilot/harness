@@ -2,11 +2,14 @@ import { Card, Col, Empty, Row, Space, Tag, Typography } from 'antd'
 import type { BoardResponse } from '@/api/types'
 
 export function ClaimIntentGraph({ graph }: { graph: BoardResponse }) {
+  const claims = graph.claims ?? []
+  const intents = graph.intents ?? []
+  const hints = graph.hints ?? []
   const claimed = new Map<number, BoardResponse["intents"][number]>()
-  for (const intent of graph.intents) {
+  for (const intent of intents) {
     if (intent.state === 'claimed' && intent.slot) claimed.set(intent.slot, intent)
   }
-  const attempts = new Map(graph.attempts.map((attempt) => [String(attempt.intent_id ?? ''), attempt]))
+  const attempts = new Map((graph.attempts ?? []).map((attempt) => [String(attempt.intent_id ?? ''), attempt]))
 
   return (
     <div className="page-stack">
@@ -35,11 +38,11 @@ export function ClaimIntentGraph({ graph }: { graph: BoardResponse }) {
       </Card>
 
       <Card title="Claim / Intent graph">
-        {graph.claims.length === 0 ? (
+        {claims.length === 0 ? (
           <Empty description="No claims yet" />
         ) : (
           <Space orientation="vertical" size="middle" className="full-width">
-            {graph.claims.map((claim) => (
+            {claims.map((claim) => (
               <Card size="small" key={claim.id}>
                 <Space orientation="vertical" size="small" className="full-width">
                   <Space wrap>
@@ -62,11 +65,11 @@ export function ClaimIntentGraph({ graph }: { graph: BoardResponse }) {
       </Card>
 
       <Card title="Intents">
-        {graph.intents.length === 0 ? (
+        {intents.length === 0 ? (
           <Empty description="No intents yet" />
         ) : (
           <Space orientation="vertical" size="middle" className="full-width">
-            {graph.intents.map((intent) => (
+            {intents.map((intent) => (
               <Card size="small" key={intent.id}>
                 <Space orientation="vertical" size="small" className="full-width">
                   <Space wrap>
@@ -78,7 +81,7 @@ export function ClaimIntentGraph({ graph }: { graph: BoardResponse }) {
                     <Typography.Text code>{intent.id}</Typography.Text>
                   </Space>
                   <Typography.Text strong>{intent.description}</Typography.Text>
-                  <Typography.Text type="secondary">from: {intent.from_claim_ids.join(', ')}</Typography.Text>
+                  <Typography.Text type="secondary">from: {intent.from_claim_ids?.join(', ') ?? ''}</Typography.Text>
                   {intent.result_claim_id ? (
                     <Typography.Text type="secondary">result: {intent.result_claim_id}</Typography.Text>
                   ) : null}
@@ -89,10 +92,10 @@ export function ClaimIntentGraph({ graph }: { graph: BoardResponse }) {
         )}
       </Card>
 
-      {graph.hints.length > 0 ? (
+      {hints.length > 0 ? (
         <Card title="Hints">
           <Space orientation="vertical" size="small" className="full-width">
-            {graph.hints.map((hint) => (
+            {hints.map((hint) => (
               <Typography.Text key={String(hint.id ?? '')}>{String(hint.content ?? '')}</Typography.Text>
             ))}
           </Space>

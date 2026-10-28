@@ -42,6 +42,7 @@ func bootstrapPrompt(req ExploreRequest) string {
 	for _, hint := range req.Hints {
 		fmt.Fprintf(&out, "- %s\n", truncateUTF8(hint.Content, 512))
 	}
+	out.WriteString(reportProtocolInstruction)
 	out.WriteString(`Return exactly one JSON object and nothing else.
 Example finding: {"intent_id":"INTENT_ID","phase":"concluded","claim":{"kind":"finding","description":"confirmed result","observation_refs":["obs-1"]},"observations":[{"local_id":"obs-1","kind":"adapter.namespace","summary":"observed result","target":"TARGET_ID","evidence_files":["relative/file"]}]}
 Example negative: {"intent_id":"INTENT_ID","phase":"concluded","claim":{"kind":"negative","description":"what was ruled out"}}

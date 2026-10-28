@@ -19,8 +19,8 @@ func TestBootstrapPromptStartsWithOriginGoalAndHints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{req.Task.Objective, "authorized hint", "bootstrap"} {
-		if !strings.Contains(prompt, want) {
+	for _, want := range []string{req.Task.Objective, "authorized hint", "bootstrap", "/workspace/report.json", "assistant text is ignored", "30 seconds"} {
+		if !strings.Contains(strings.ToLower(prompt), strings.ToLower(want)) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
 	}

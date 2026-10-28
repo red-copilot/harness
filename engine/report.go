@@ -12,6 +12,8 @@ import (
 
 const maxReportJSONDepth = 32
 
+const reportProtocolInstruction = "Use a file-writing tool to replace /workspace/report.json with exactly one JSON object before you finish. Assistant text is ignored; JSON printed in the assistant response will not be parsed. Each tool invocation is hard-limited to 30 seconds; keep commands shorter and split long scans.\n"
+
 // clearReport removes the previous turn report. A stale report must never be
 // accepted as the settlement output of a later turn.
 func clearReport(workspace string) error {

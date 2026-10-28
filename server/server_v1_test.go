@@ -153,6 +153,31 @@ func TestGraphEndpointReturnsClaimIntentView(t *testing.T) {
 	}
 }
 
+func TestBoardEndpointUsesEmptyArraysForEmptyCollections(t *testing.T) {
+	store, runner := testServerRunner(t)
+	defer store.Close()
+	defer runner.Close(context.Background())
+	if err := store.CreateRun(context.Background(), harness.RunRecord{ID: "run-empty", Phase: harness.RunPhaseQueued, CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	handler := server.New(runner, store, func(harness.RunDescriptor) (harness.RunSpec, error) { return harness.RunSpec{}, nil }).Handler()
+	req := httptest.NewRequest(http.MethodGet, "/v1/runs/run-empty/board", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"claims", "intents", "hints", "attempts", "observations", "artifacts"} {
+		if string(body[field]) != "[]" {
+			t.Fatalf("%s = %s, want [] in %s", field, body[field], rec.Body.String())
+		}
+	}
+}
+
 func testServerRunner(t *testing.T) (*sqlite.Store, *harness.Runner) {
 	t.Helper()
 	store, err := sqlite.Open(filepath.Join(t.TempDir(), "harness.db"))
