@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatCost, formatDuration, formatPercent, formatWallTimeNs, totalUsage } from './format'
+import { formatBytes, formatCost, formatDateTime, formatDuration, formatPercent, formatWallTimeNs, isZeroTime, totalUsage, truncate } from './format'
 
 describe('format utilities', () => {
   it('formats durations and budgets', () => {
@@ -13,6 +13,20 @@ describe('format utilities', () => {
     expect(formatPercent(0.256)).toBe('25.6%')
     expect(formatCost(1.234)).toBe('$1.23')
     expect(formatCost(0.0012)).toBe('$0.0012')
+  })
+
+  it('formats bytes and truncates text', () => {
+    expect(formatBytes(512)).toBe('512 B')
+    expect(formatBytes(2048)).toBe('2.0 KiB')
+    expect(formatBytes(5 * 1024 * 1024)).toBe('5.0 MiB')
+    expect(formatBytes(undefined)).toBe('—')
+    expect(truncate('abcdef', 4)).toBe('abc…')
+    expect(truncate('abc', 4)).toBe('abc')
+  })
+
+  it('treats Go zero time as absent', () => {
+    expect(isZeroTime('0001-01-01T00:00:00Z')).toBe(true)
+    expect(formatDateTime('0001-01-01T00:00:00Z')).toBe('—')
   })
 
   it('aggregates usage', () => {

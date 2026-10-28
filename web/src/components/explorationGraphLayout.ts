@@ -41,9 +41,12 @@ export interface ExplorationGraphLayout {
   height: number
 }
 
+/** ExplorationBoard is the subset of the board the layout actually reads. */
+export type ExplorationBoard = Pick<BoardResponse, 'claims' | 'intents' | 'attempts' | 'observations' | 'artifacts'>
+
 const ROOT_NODE_ID = '__exploration_origin__'
 
-export function layoutExplorationGraph(board: BoardResponse): ExplorationGraphLayout {
+export function layoutExplorationGraph(board: ExplorationBoard): ExplorationGraphLayout {
   const claims = board.claims ?? []
   const intents = [...(board.intents ?? [])].sort(compareIntents)
   const attempts = board.attempts ?? []
@@ -104,9 +107,7 @@ export function layoutExplorationGraph(board: BoardResponse): ExplorationGraphLa
   const claimNodeID = new Map<string, string>()
   if (origin) claimNodeID.set(origin.id, ROOT_NODE_ID)
   for (const node of nodes) {
-    if (node.intent?.result_claim_id && nodeByID.has(node.id)) {
-      claimNodeID.set(node.intent.result_claim_id, node.id)
-    }
+    if (node.intent?.result_claim_id) claimNodeID.set(node.intent.result_claim_id, node.id)
   }
   for (const claim of claims) {
     if (!claimNodeID.has(claim.id) && claim.source_intent_id && nodeByID.has(claim.source_intent_id)) {
@@ -138,7 +139,7 @@ export function layoutExplorationGraph(board: BoardResponse): ExplorationGraphLa
     }
   }
 
-  const levels = assignLevels(nodes, parents, children)
+  const levels = assignLevels(nodes, nodeByID, parents, children)
   for (const node of nodes) node.level = levels.get(node.id) ?? 1
 
   const levelsToNodes = groupBy(nodes, (node) => node.level)
@@ -146,10 +147,10 @@ export function layoutExplorationGraph(board: BoardResponse): ExplorationGraphLa
   const maxLevel = Math.max(0, ...nodes.map((node) => node.level))
   for (let level = 1; level <= maxLevel; level++) {
     const levelNodes = levelsToNodes.get(level) ?? []
+    const barycenters = new Map(levelNodes.map((node) => [node.id, parentBarycenter(parents.get(node.id) ?? new Set(), orderByID)]))
     levelNodes.sort((left, right) => {
-      const leftBarycenter = parentBarycenter(parents.get(left.id) ?? new Set(), orderByID)
-      const rightBarycenter = parentBarycenter(parents.get(right.id) ?? new Set(), orderByID)
-      if (leftBarycenter !== rightBarycenter) return leftBarycenter - rightBarycenter
+      const difference = barycenters.get(left.id)! - barycenters.get(right.id)!
+      if (difference !== 0) return difference
       return compareIntentNodes(left, right)
     })
     levelNodes.forEach((node, order) => {
@@ -164,16 +165,13 @@ export function layoutExplorationGraph(board: BoardResponse): ExplorationGraphLa
   }
 
   const edges: ExplorationGraphEdge[] = []
-  for (const [childID, parentIDs] of parents) {
-    const child = nodeByID.get(childID)
-    if (!child) continue
-    for (const parentID of [...parentIDs].sort()) {
-      const parent = nodeByID.get(parentID)
-      if (!parent) continue
+  for (const child of nodes) {
+    for (const parentID of [...parents.get(child.id)!].sort()) {
+      const parent = nodeByID.get(parentID)!
       edges.push({
-        id: `${parentID}->${childID}`,
+        id: `${parentID}->${child.id}`,
         from: parentID,
-        to: childID,
+        to: child.id,
         path: edgePath(parent, child),
         root: parent.kind === 'origin',
         planned: child.intent?.state !== 'concluded',
@@ -190,6 +188,7 @@ export function layoutExplorationGraph(board: BoardResponse): ExplorationGraphLa
 
 function assignLevels(
   nodes: ExplorationGraphNode[],
+  nodeByID: Map<string, ExplorationGraphNode>,
   parents: Map<string, Set<string>>,
   children: Map<string, Set<string>>,
 ): Map<string, number> {
@@ -197,16 +196,18 @@ function assignLevels(
   const levels = new Map<string, number>(nodes.map((node) => [node.id, node.kind === 'origin' ? 0 : 1]))
   const ready = nodes.filter((node) => indegree.get(node.id) === 0).sort(compareIntentNodes)
   const visited = new Set<string>()
-  while (ready.length > 0) {
-    const node = ready.shift()!
+  // A cursor keeps processed nodes in place; new nodes are inserted into the
+  // still-sorted unprocessed suffix.
+  let cursor = 0
+  while (cursor < ready.length) {
+    const node = ready[cursor++]
     visited.add(node.id)
     for (const childID of [...(children.get(node.id) ?? [])].sort()) {
       levels.set(childID, Math.max(levels.get(childID) ?? 1, (levels.get(node.id) ?? 0) + 1))
       const next = (indegree.get(childID) ?? 0) - 1
       indegree.set(childID, next)
       if (next === 0) {
-        ready.push(nodes.find((candidate) => candidate.id === childID)!)
-        ready.sort(compareIntentNodes)
+        insertSorted(ready, nodeByID.get(childID)!, compareIntentNodes, cursor)
       }
     }
   }
@@ -220,13 +221,27 @@ function assignLevels(
   return levels
 }
 
+function insertSorted<T>(values: T[], value: T, compare: (left: T, right: T) => number, from: number): void {
+  let low = from
+  let high = values.length
+  while (low < high) {
+    const middle = (low + high) >> 1
+    if (compare(values[middle], value) <= 0) low = middle + 1
+    else high = middle
+  }
+  values.splice(low, 0, value)
+}
+
 function parentBarycenter(parentIDs: Set<string>, orderByID: Map<string, number>): number {
-  const orders = [...parentIDs].flatMap((id) => {
+  let sum = 0
+  let count = 0
+  for (const id of parentIDs) {
     const order = orderByID.get(id)
-    return order === undefined ? [] : [order]
-  })
-  if (orders.length === 0) return Number.MAX_SAFE_INTEGER
-  return orders.reduce((sum, order) => sum + order, 0) / orders.length
+    if (order === undefined) continue
+    sum += order
+    count++
+  }
+  return count === 0 ? Number.MAX_SAFE_INTEGER : sum / count
 }
 
 function compareIntents(left: Intent, right: Intent): number {

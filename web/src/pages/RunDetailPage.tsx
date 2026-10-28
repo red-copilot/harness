@@ -60,6 +60,7 @@ import {
   formatTokens,
   formatWallTimeNs,
   totalUsage,
+  truncate,
 } from '@/utils/format'
 import { prettyJson } from '@/utils/json'
 import { isActiveStatus, isTerminalStatus, runStatus } from '@/utils/status'
@@ -624,8 +625,7 @@ function logLine(log: LogRecord): string {
 }
 
 function eventPreview(value: unknown): string {
-  const text = prettyJson(value).replace(/\s+/g, ' ')
-  return text.length > 160 ? `${text.slice(0, 160)}…` : text
+  return truncate(prettyJson(value).replace(/\s+/g, ' '), 160)
 }
 
 function unique(values: string[]): string[] {

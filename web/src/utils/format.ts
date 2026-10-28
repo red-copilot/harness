@@ -15,8 +15,13 @@ export function localeTag(locale: UiLocale): string {
   return locale === 'zh' ? 'zh-CN' : 'en-US'
 }
 
+/** isZeroTime reports Go's zero time sentinel used for unset timestamps. */
+export function isZeroTime(value?: string | null): boolean {
+  return Boolean(value?.startsWith('0001-01-01'))
+}
+
 export function formatDateTime(value?: string | null, locale: UiLocale = 'zh'): string {
-  if (!value) return '—'
+  if (!value || isZeroTime(value)) return '—'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   return new Intl.DateTimeFormat(localeTag(locale), {
@@ -65,6 +70,26 @@ export function formatPercent(value?: number): string {
 export function formatWallTimeNs(value?: number): string {
   if (!value) return '—'
   return formatDuration(value / 1_000_000)
+}
+
+/** truncate shortens text to at most limit characters, ellipsis included. */
+export function truncate(value: string, limit: number): string {
+  if (value.length <= limit) return value
+  return `${value.slice(0, Math.max(0, limit - 1))}…`
+}
+
+const BYTE_UNITS = ['KiB', 'MiB', 'GiB'] as const
+
+export function formatBytes(value?: number): string {
+  if (value === undefined || !Number.isFinite(value)) return '—'
+  if (value < 1024) return `${Math.max(0, Math.round(value))} B`
+  let size = value / 1024
+  let unitIndex = 0
+  while (unitIndex < BYTE_UNITS.length - 1 && size >= 1024) {
+    size /= 1024
+    unitIndex++
+  }
+  return `${size.toFixed(1)} ${BYTE_UNITS[unitIndex]}`
 }
 
 export function totalUsage(usages: Array<Usage | undefined>): Usage {

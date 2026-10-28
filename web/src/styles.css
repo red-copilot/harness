@@ -1254,22 +1254,6 @@ body {
   gap: 10px;
 }
 
-.exploration-detail-row {
-  display: grid;
-  grid-template-columns: 110px 1fr;
-  gap: 10px;
-  align-items: start;
-  font-size: 13px;
-}
-
-.exploration-detail-label {
-  color: var(--muted);
-}
-
-.exploration-detail-value {
-  word-break: break-word;
-}
-
 .exploration-activity,
 .exploration-detail-facts {
   display: flex;
@@ -1292,7 +1276,6 @@ body {
   margin: 4px 0 0;
 }
 
-.exploration-detail-rows,
 .exploration-detail-list {
   display: flex;
   flex-direction: column;
@@ -1332,10 +1315,6 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-}
-
-.exploration-detail-value .ant-typography {
-  margin: 0;
 }
 
 .exploration-detail-hash {
