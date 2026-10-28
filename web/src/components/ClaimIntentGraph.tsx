@@ -1,106 +1,334 @@
-import { Card, Col, Empty, Row, Space, Tag, Typography } from 'antd'
-import type { BoardResponse } from '@/api/types'
+import { Alert, Card, Drawer, Tag, Typography } from 'antd'
+import { useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
+import type { Artifact, BoardResponse, Claim, Hint, IntentAttempt, Observation } from '@/api/types'
+import { useI18n } from '@/i18n/I18nContext'
+import type { MessageKey } from '@/i18n/messages'
+import { TimeText } from '@/components/TimeText'
+import {
+  layoutExplorationGraph,
+  type ExplorationGraphNode,
+} from './explorationGraphLayout'
 
 export function ClaimIntentGraph({ graph }: { graph: BoardResponse }) {
-  const claims = graph.claims ?? []
-  const intents = graph.intents ?? []
-  const hints = graph.hints ?? []
-  const claimed = new Map<number, BoardResponse["intents"][number]>()
-  for (const intent of intents) {
-    if (intent.state === 'claimed' && intent.slot) claimed.set(intent.slot, intent)
-  }
-  const attempts = new Map((graph.attempts ?? []).map((attempt) => [String(attempt.intent_id ?? ''), attempt]))
+  const { t } = useI18n()
+  const layout = useMemo(() => layoutExplorationGraph(graph), [graph])
+  const [selectedNodeID, setSelectedNodeID] = useState<string | null>(null)
+  const selectedNode = layout.nodes.find((node) => node.id === selectedNodeID)
 
   return (
-    <div className="page-stack">
-      <Card title="Execution slots">
-        <Row gutter={[16, 16]}>
-          {[1, 2].map((slot) => {
-            const intent = claimed.get(slot)
-            const attempt = intent ? attempts.get(intent.id) : undefined
-            return (
-              <Col xs={24} md={12} key={slot}>
-                <Card size="small" title={`slot-${slot}`}>
-                  {intent ? (
-                    <Space orientation="vertical" size="small">
-                      <Tag color="blue">{intent.executor_id ?? 'executor'}</Tag>
-                      <Typography.Text strong>{intent.description}</Typography.Text>
-                      <Typography.Text type="secondary">{String(attempt?.phase ?? 'claimed')}</Typography.Text>
-                    </Space>
-                  ) : (
-                    <Typography.Text type="secondary">Idle</Typography.Text>
-                  )}
-                </Card>
-              </Col>
-            )
-          })}
-        </Row>
-      </Card>
+    <Card
+      title={t('run.graph.title')}
+      extra={<Typography.Text type="secondary">{t('run.graph.revision', { revision: graph.board_revision ?? 0 })}</Typography.Text>}
+    >
+      <div className="exploration-graph">
+        <div className="exploration-graph-legend">
+          <span className="exploration-graph-legend-item exploration-graph-legend-root">
+            <span className="exploration-graph-legend-line" />{t('run.graph.initial')}
+          </span>
+          <span className="exploration-graph-legend-item exploration-graph-legend-derived">
+            <span className="exploration-graph-legend-line" />{t('run.graph.edge.derived')}
+          </span>
+          <span className="exploration-graph-legend-item exploration-graph-legend-planned">
+            <span className="exploration-graph-legend-line" />{t('run.graph.edge.planned')}
+          </span>
+          <span className="exploration-graph-legend-item exploration-graph-legend-fact">
+            <span className="exploration-graph-legend-line" />{t('run.graph.result.finding')}
+          </span>
+          <span className="exploration-graph-legend-item exploration-graph-legend-negative">
+            <span className="exploration-graph-legend-line" />{t('run.graph.result.negative')}
+          </span>
+        </div>
+        <Typography.Text type="secondary" className="exploration-graph-hint">
+          {t('run.graph.hint')}
+        </Typography.Text>
 
-      <Card title="Claim / Intent graph">
-        {claims.length === 0 ? (
-          <Empty description="No claims yet" />
-        ) : (
-          <Space orientation="vertical" size="middle" className="full-width">
-            {claims.map((claim) => (
-              <Card size="small" key={claim.id}>
-                <Space orientation="vertical" size="small" className="full-width">
-                  <Space wrap>
-                    <Tag color={claim.kind === 'finding' ? 'green' : claim.kind === 'negative' ? 'red' : 'default'}>
-                      {claim.kind}
-                    </Tag>
-                    <Typography.Text code>{claim.id}</Typography.Text>
-                  </Space>
-                  <Typography.Paragraph className="objective-text">{claim.description}</Typography.Paragraph>
-                  {claim.observation_ids?.length ? (
-                    <Typography.Text type="secondary">
-                      evidence: {claim.observation_ids.join(', ')}
-                    </Typography.Text>
-                  ) : null}
-                </Space>
-              </Card>
+        <div className="exploration-graph-scroll" data-testid="exploration-graph-scroll">
+          <div className="exploration-graph-board" style={{ width: layout.width, height: layout.height }}>
+            <svg
+              className="exploration-graph-edges"
+              width={layout.width}
+              height={layout.height}
+              viewBox={`0 0 ${layout.width} ${layout.height}`}
+              aria-hidden="true"
+            >
+              {layout.edges.map((edge) => (
+                <path
+                  key={edge.id}
+                  className={edgeClass(edge.root, edge.planned)}
+                  d={edge.path}
+                  data-testid={`exploration-edge-${edge.id}`}
+                />
+              ))}
+            </svg>
+            {layout.nodes.map((node) => (
+              <ExplorationNodeButton
+                key={node.id}
+                node={node}
+                selected={node.id === selectedNodeID}
+                onSelect={() => setSelectedNodeID(node.id)}
+              />
             ))}
-          </Space>
-        )}
-      </Card>
+          </div>
+        </div>
+        {layout.nodes.length === 1 ? (
+          <Typography.Text type="secondary" className="exploration-graph-hint">
+            {t('run.graph.waiting')}
+          </Typography.Text>
+        ) : null}
+      </div>
 
-      <Card title="Intents">
-        {intents.length === 0 ? (
-          <Empty description="No intents yet" />
-        ) : (
-          <Space orientation="vertical" size="middle" className="full-width">
-            {intents.map((intent) => (
-              <Card size="small" key={intent.id}>
-                <Space orientation="vertical" size="small" className="full-width">
-                  <Space wrap>
-                    <Tag color={intent.state === 'concluded' ? 'green' : intent.state === 'claimed' ? 'blue' : 'default'}>
-                      {intent.state}
-                    </Tag>
-                    <Tag>{String(intent.kind ?? 'explore')}</Tag>
-                    {intent.slot ? <Tag>slot-{intent.slot}</Tag> : null}
-                    <Typography.Text code>{intent.id}</Typography.Text>
-                  </Space>
-                  <Typography.Text strong>{intent.description}</Typography.Text>
-                  <Typography.Text type="secondary">from: {intent.from_claim_ids?.join(', ') ?? ''}</Typography.Text>
-                  {intent.result_claim_id ? (
-                    <Typography.Text type="secondary">result: {intent.result_claim_id}</Typography.Text>
-                  ) : null}
-                </Space>
-              </Card>
-            ))}
-          </Space>
-        )}
-      </Card>
+      <Drawer
+        open={Boolean(selectedNode)}
+        onClose={() => setSelectedNodeID(null)}
+        title={selectedNode ? nodeTitle(selectedNode, selectedNode.kind === 'origin' ? t('run.graph.originFallback') : t('run.graph.frontier')) : t('run.graph.detailTitle')}
+        size="min(560px, 100vw)"
+        destroyOnHidden
+      >
+        {selectedNode ? <ExplorationNodeDetail node={selectedNode} hints={graph.hints ?? []} /> : null}
+      </Drawer>
+    </Card>
+  )
+}
 
-      {hints.length > 0 ? (
-        <Card title="Hints">
-          <Space orientation="vertical" size="small" className="full-width">
-            {hints.map((hint) => (
-              <Typography.Text key={String(hint.id ?? '')}>{String(hint.content ?? '')}</Typography.Text>
-            ))}
-          </Space>
-        </Card>
+function ExplorationNodeButton({ node, selected, onSelect }: {
+  node: ExplorationGraphNode
+  selected: boolean
+  onSelect: () => void
+}) {
+  const { t } = useI18n()
+  const intent = node.intent
+  const result = node.resultClaim
+  const latestAttempt = node.attempts[node.attempts.length - 1]
+  const active = intent?.state === 'claimed' || latestAttempt?.phase === 'running'
+  const title = nodeTitle(node, node.kind === 'origin' ? t('run.graph.originFallback') : t('run.graph.frontier'))
+  const kindLabel = node.kind === 'origin'
+    ? t('run.graph.initial')
+    : t(intent?.kind === 'bootstrap' ? 'run.graph.kind.bootstrap' : 'run.graph.kind.explore')
+  const stateLabel = node.kind === 'origin'
+    ? t('run.graph.state.origin')
+    : t(`run.graph.state.${intent?.state ?? 'open'}` as MessageKey)
+  const resultLabel = result
+    ? t(result.kind === 'finding' ? 'run.graph.result.finding' : 'run.graph.result.negative')
+    : null
+  const classes = [
+    'exploration-graph-node',
+    `exploration-graph-node-${nodeTone(node, active)}`,
+    active ? 'exploration-graph-node-active' : '',
+    selected ? 'exploration-graph-node-selected' : '',
+  ].filter(Boolean).join(' ')
+
+  return (
+    <button
+      type="button"
+      className={classes}
+      style={{ left: node.x, top: node.y, width: node.width, height: node.height }}
+      onClick={onSelect}
+      aria-label={`${kindLabel}: ${title}`}
+      data-testid={node.kind === 'origin' ? 'exploration-node-origin' : `exploration-node-${node.id}`}
+      data-node-level={node.level}
+    >
+      <span className="exploration-graph-node-head">
+        <span className="exploration-graph-node-kind">{kindLabel}</span>
+        <Tag color={stateColor(node, active)}>{stateLabel}</Tag>
+      </span>
+      <span className="exploration-graph-node-title">{title}</span>
+      {result ? (
+        <span className="exploration-graph-node-result">
+          <Tag color={result.kind === 'finding' ? 'green' : 'red'}>{resultLabel}</Tag>
+          <span>{result.description}</span>
+        </span>
+      ) : node.kind === 'intent' ? (
+        <span className="exploration-graph-node-brief">{shortText(intent?.description ?? '', 96)}</span>
       ) : null}
+      <span className="exploration-graph-node-meta">
+        {node.kind === 'origin' ? t('run.graph.originMeta') : (
+          <>
+            <span>{t('run.graph.attempts', { count: node.attempts.length })}</span>
+            <span>{t('run.graph.observations', { count: node.observations.length })}</span>
+            <span>{t('run.graph.artifacts', { count: node.artifacts.length })}</span>
+          </>
+        )}
+      </span>
+    </button>
+  )
+}
+
+function ExplorationNodeDetail({ node, hints }: { node: ExplorationGraphNode; hints: Hint[] }) {
+  const { t } = useI18n()
+  const intent = node.intent
+  const result = node.resultClaim
+  return (
+    <div className="exploration-detail">
+      {node.unresolvedFrom.length > 0 ? (
+        <Alert type="warning" showIcon title={t('run.graph.detail.unresolved')} description={node.unresolvedFrom.join(', ')} />
+      ) : null}
+      <div className="exploration-detail-rows">
+        <DetailRow label={t('run.graph.detail.type')} value={node.kind === 'origin' ? t('run.graph.initial') : t('run.graph.frontier')} />
+        <DetailRow label={t('run.graph.detail.id')} value={<Typography.Text code copyable>{node.kind === 'origin' ? (node.origin?.id ?? 'origin') : intent?.id}</Typography.Text>} />
+        {intent ? <DetailRow label={t('run.graph.detail.state')} value={t(`run.graph.state.${intent.state}` as MessageKey)} /> : null}
+        {intent?.executor_id ? <DetailRow label={t('run.graph.detail.executor')} value={<Typography.Text code>{intent.executor_id}</Typography.Text>} /> : null}
+        {intent ? <DetailRow label={t('run.graph.detail.kind')} value={t(intent.kind === 'bootstrap' ? 'run.graph.kind.bootstrap' : 'run.graph.kind.explore')} /> : null}
+      </div>
+
+      {node.kind === 'origin' ? (
+        <DetailSection title={t('run.graph.detail.hints')}>
+          {hints.length === 0 ? <Typography.Text type="secondary">{t('run.graph.detail.none')}</Typography.Text> : hints.map((hint) => (
+            <div className="exploration-detail-item" key={hint.id}>
+              <Typography.Text>{hint.content}</Typography.Text>
+              <Typography.Text type="secondary">{hint.creator}</Typography.Text>
+            </div>
+          ))}
+        </DetailSection>
+      ) : (
+        <>
+          <DetailSection title={t('run.graph.detail.from')}>
+            {node.fromClaims.length === 0 ? <Typography.Text type="secondary">{t('run.graph.detail.none')}</Typography.Text> : node.fromClaims.map((claim) => (
+              <ClaimDetail claim={claim} key={claim.id} />
+            ))}
+          </DetailSection>
+          <DetailSection title={t('run.graph.detail.result')}>
+            {result ? <ClaimDetail claim={result} /> : <Typography.Text type="secondary">{t('run.graph.detail.none')}</Typography.Text>}
+          </DetailSection>
+          <DetailSection title={t('run.graph.detail.attempts')}>
+            {node.attempts.length === 0 ? <Typography.Text type="secondary">{t('run.graph.detail.none')}</Typography.Text> : node.attempts.map((attempt) => (
+              <AttemptDetail attempt={attempt} key={attempt.id} />
+            ))}
+          </DetailSection>
+          <DetailSection title={t('run.graph.detail.observations')}>
+            {node.observations.length === 0 ? <Typography.Text type="secondary">{t('run.graph.detail.none')}</Typography.Text> : node.observations.map((observation) => (
+              <ObservationDetail observation={observation} key={observation.id} />
+            ))}
+          </DetailSection>
+          <DetailSection title={t('run.graph.detail.artifacts')}>
+            {node.artifacts.length === 0 ? <Typography.Text type="secondary">{t('run.graph.detail.none')}</Typography.Text> : node.artifacts.map((artifact) => (
+              <ArtifactDetail artifact={artifact} key={artifact.id} />
+            ))}
+          </DetailSection>
+        </>
+      )}
     </div>
   )
+}
+
+function ClaimDetail({ claim }: { claim: Claim }) {
+  const { t } = useI18n()
+  return (
+    <div className="exploration-detail-item">
+      <div className="exploration-detail-item-head">
+        <Tag color={claim.kind === 'finding' ? 'green' : claim.kind === 'negative' ? 'red' : 'default'}>{claim.kind}</Tag>
+        <Typography.Text code>{claim.id}</Typography.Text>
+      </div>
+      <Typography.Text>{claim.description}</Typography.Text>
+      {claim.observation_ids?.length ? <Typography.Text type="secondary">{t('run.graph.detail.observations')}: {claim.observation_ids.join(', ')}</Typography.Text> : null}
+      {claim.artifact_ids?.length ? <Typography.Text type="secondary">{t('run.graph.detail.artifacts')}: {claim.artifact_ids.join(', ')}</Typography.Text> : null}
+    </div>
+  )
+}
+
+function AttemptDetail({ attempt }: { attempt: IntentAttempt }) {
+  const { t } = useI18n()
+  return (
+    <div className="exploration-detail-item">
+      <div className="exploration-detail-item-head">
+        <Tag color={attempt.phase === 'running' ? 'processing' : attempt.phase === 'failed' ? 'error' : 'default'}>{attempt.phase}</Tag>
+        <Typography.Text code>{attempt.id}</Typography.Text>
+      </div>
+      {attempt.conclusion ? <Typography.Text type="secondary">{t('run.graph.detail.conclusion')}: {attempt.conclusion}</Typography.Text> : null}
+      {attempt.started_at ? <Typography.Text type="secondary">{t('run.graph.detail.started')}: <TimeText value={attempt.started_at} /></Typography.Text> : null}
+      {attempt.finished_at && !isZeroTime(attempt.finished_at) ? <Typography.Text type="secondary">{t('run.graph.detail.finished')}: <TimeText value={attempt.finished_at} /></Typography.Text> : null}
+      {attempt.error ? <Typography.Text type="danger">{t('run.graph.detail.error')}: {attempt.error}</Typography.Text> : null}
+    </div>
+  )
+}
+
+function ObservationDetail({ observation }: { observation: Observation }) {
+  const { t } = useI18n()
+  return (
+    <div className="exploration-detail-item">
+      <div className="exploration-detail-item-head">
+        <Tag>{observation.kind}</Tag>
+        <Typography.Text code>{observation.id}</Typography.Text>
+      </div>
+      <Typography.Text>{observation.summary}</Typography.Text>
+      {observation.target ? <Typography.Text type="secondary">{t('run.graph.detail.target')}: {observation.target}</Typography.Text> : null}
+    </div>
+  )
+}
+
+function ArtifactDetail({ artifact }: { artifact: Artifact }) {
+  const { t } = useI18n()
+  return (
+    <div className="exploration-detail-item">
+      <div className="exploration-detail-item-head">
+        <Typography.Text strong>{artifact.name}</Typography.Text>
+        <Typography.Text code>{artifact.id}</Typography.Text>
+      </div>
+      <Typography.Text type="secondary">{t('run.graph.detail.size')}: {formatBytes(artifact.size)}</Typography.Text>
+      {artifact.sha256 ? <Typography.Text type="secondary" className="exploration-detail-hash">{t('run.graph.detail.hash')}: {artifact.sha256}</Typography.Text> : null}
+    </div>
+  )
+}
+
+function DetailSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="exploration-detail-section">
+      <Typography.Title level={5}>{title}</Typography.Title>
+      <div className="exploration-detail-list">{children}</div>
+    </section>
+  )
+}
+
+function DetailRow({ label, value }: { label: string; value: ReactNode }) {
+  return <div className="exploration-detail-row"><span className="exploration-detail-label">{label}</span><span className="exploration-detail-value">{value}</span></div>
+}
+
+function nodeTitle(node: ExplorationGraphNode, fallback: string): string {
+  return node.kind === 'origin'
+    ? (node.origin?.description || fallback)
+    : (node.intent?.description || fallback)
+}
+
+function nodeTone(node: ExplorationGraphNode, active: boolean): string {
+  if (node.kind === 'origin') return 'origin'
+  if (active) return 'frontier'
+  if (node.resultClaim?.kind === 'finding') return 'fact'
+  if (node.resultClaim?.kind === 'negative' || node.intent?.state === 'abandoned') return 'negative'
+  return node.intent?.state === 'open' ? 'open' : 'frontier'
+}
+
+function stateColor(node: ExplorationGraphNode, active: boolean): string {
+  if (active) return 'processing'
+  if (node.kind === 'origin') return 'blue'
+  if (node.resultClaim?.kind === 'finding') return 'green'
+  if (node.resultClaim?.kind === 'negative' || node.intent?.state === 'abandoned') return 'red'
+  return 'default'
+}
+
+function edgeClass(root: boolean, planned: boolean): string {
+  if (planned) return 'exploration-graph-edge exploration-graph-edge-planned'
+  return root
+    ? 'exploration-graph-edge exploration-graph-edge-root'
+    : 'exploration-graph-edge exploration-graph-edge-derived'
+}
+
+function shortText(value: string, limit: number): string {
+  return value.length > limit ? `${value.slice(0, limit - 1)}…` : value
+}
+
+function isZeroTime(value: string): boolean {
+  return value.startsWith('0001-01-01')
+}
+
+function formatBytes(value?: number): string {
+  if (value === undefined || !Number.isFinite(value)) return '—'
+  if (value < 1024) return `${Math.max(0, Math.round(value))} B`
+  const units = ['KiB', 'MiB', 'GiB']
+  let size = value / 1024
+  let unit = units[0]
+  for (let index = 1; index < units.length && size >= 1024; index++) {
+    size /= 1024
+    unit = units[index]
+  }
+  return `${size.toFixed(1)} ${unit}`
 }

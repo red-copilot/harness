@@ -1025,7 +1025,7 @@ body {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 8px;
 }
 
@@ -1058,6 +1058,10 @@ body {
 
 .exploration-graph-legend-fact .exploration-graph-legend-line {
   border-top-color: #10b981;
+}
+
+.exploration-graph-legend-negative .exploration-graph-legend-line {
+  border-top-color: #ef4444;
 }
 
 .exploration-graph-hint {
@@ -1118,6 +1122,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  box-sizing: border-box;
+  overflow: hidden;
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -1152,6 +1158,15 @@ body {
 .exploration-graph-node-fact {
   border-top: 3px solid #10b981;
   background: color-mix(in srgb, #10b981 5%, var(--surface));
+}
+
+.exploration-graph-node-negative {
+  border-top: 3px solid #ef4444;
+  background: color-mix(in srgb, #ef4444 5%, var(--surface));
+}
+
+.exploration-graph-node-open {
+  border-style: dashed;
 }
 
 .exploration-graph-node-active {
@@ -1189,6 +1204,30 @@ body {
 }
 
 .exploration-graph-node-code {
+  font-size: 11px;
+}
+
+.exploration-graph-node-result {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.exploration-graph-node-result .ant-tag {
+  margin-inline-end: 5px;
+}
+
+.exploration-graph-node-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: auto;
+  color: var(--muted);
   font-size: 11px;
 }
 
@@ -1251,6 +1290,57 @@ body {
 
 .exploration-detail-facts p {
   margin: 4px 0 0;
+}
+
+.exploration-detail-rows,
+.exploration-detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.exploration-detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.exploration-detail-section .ant-typography {
+  margin: 0;
+}
+
+.exploration-detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.exploration-detail-item > .ant-typography,
+.exploration-detail-item > .ant-typography-secondary {
+  margin: 0;
+}
+
+.exploration-detail-item-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.exploration-detail-value .ant-typography {
+  margin: 0;
+}
+
+.exploration-detail-hash {
+  overflow-wrap: anywhere;
+  word-break: break-all;
 }
 
 @keyframes exploration-node-in {

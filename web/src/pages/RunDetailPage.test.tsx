@@ -80,7 +80,22 @@ describe('RunDetailPage', () => {
         }),
       ),
       http.get('*/v1/runs/run_1/board', () =>
-        HttpResponse.json({ claims: [{ id: 'claim-1', run_id: 'run_1', task_id: 'demo', kind: 'finding', description: 'Verify the port observation' }], intents: [], hints: [], attempts: [], slots: [1], board_revision: 1, reason: { active: false, frontier_version: 1 } }),
+        HttpResponse.json({
+          claims: [
+            { id: 'origin', run_id: 'run_1', task_id: 'demo', kind: 'origin', description: 'Find and prove the flag' },
+            { id: 'claim-1', run_id: 'run_1', task_id: 'demo', kind: 'finding', description: 'Verify the port observation', source_intent_id: 'intent-1' },
+          ],
+          intents: [
+            { id: 'intent-1', run_id: 'run_1', kind: 'bootstrap', from_claim_ids: ['origin'], description: 'Probe the exposed port', state: 'concluded', result_claim_id: 'claim-1' },
+          ],
+          hints: [],
+          attempts: [],
+          observations: [],
+          artifacts: [],
+          slots: [1],
+          board_revision: 1,
+          reason: { active: false, frontier_version: 1 },
+        }),
       ),
       http.get('*/v1/runs/run_1/verdict', () =>
         HttpResponse.json({

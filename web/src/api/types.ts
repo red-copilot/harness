@@ -329,14 +329,16 @@ export interface IntentAttempt {
 }
 
 type GeneratedBoard = components["schemas"]["BoardResponse"]
-export type BoardResponse = GeneratedBoard & {
-  claims: NonNullable<GeneratedBoard["claims"]>
-  intents: NonNullable<GeneratedBoard["intents"]>
-  hints: NonNullable<GeneratedBoard["hints"]>
-  attempts: NonNullable<GeneratedBoard["attempts"]>
-  slots: NonNullable<GeneratedBoard["slots"]>
-  board_revision: NonNullable<GeneratedBoard["board_revision"]>
-  reason: NonNullable<GeneratedBoard["reason"]>
+export type BoardResponse = Omit<GeneratedBoard, 'claims' | 'intents' | 'hints' | 'attempts' | 'observations' | 'artifacts' | 'slots' | 'board_revision' | 'reason'> & {
+  claims: Claim[]
+  intents: Intent[]
+  hints: Hint[]
+  attempts: IntentAttempt[]
+  observations: Observation[]
+  artifacts: Artifact[]
+  slots: number[]
+  board_revision: number
+  reason: { active: boolean; frontier_version: number; free_slots?: number[] }
 }
 
 export interface RunRecord {
