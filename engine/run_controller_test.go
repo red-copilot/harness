@@ -87,7 +87,7 @@ func (s *controllerTestStore) Finalize(_ context.Context, record FinalizationRec
 func TestFinalizeFailureDoesNotPersistTerminalRunSeparately(t *testing.T) {
 	finalizeErr := errors.New("finalize transaction failed")
 	inner := &controllerTestStore{
-		runs:        map[string]RunRecord{"run-1": {ID: "run-1", Phase: RunPhaseRunning, Status: StatusRunning}},
+		runs:        map[string]RunRecord{"run-1": {ID: "run-1", Phase: RunPhaseRunning}},
 		finalizeErr: finalizeErr,
 	}
 	store := newRedactingStore(inner)
@@ -95,7 +95,7 @@ func TestFinalizeFailureDoesNotPersistTerminalRunSeparately(t *testing.T) {
 	runner := &Runner{store: store, redacting: store}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	controller := newRunController(runner, "run-1", ctx, cancel, t.TempDir(), Budget{}, NewRedactor())
+	controller := newRunController(runner, "run-1", ctx, cancel, t.TempDir(), Budget{}, NewRedactor(), nil)
 
 	controller.finishExecution(RunOutcomeFailed, errors.New("original failure"), &Verdict{Success: false})
 
@@ -120,14 +120,14 @@ func TestFinalizeFailureDoesNotPersistTerminalRunSeparately(t *testing.T) {
 func newFinalizationTestRun(t *testing.T) (*Run, *controllerTestStore) {
 	t.Helper()
 	inner := &controllerTestStore{runs: map[string]RunRecord{
-		"run-1": {ID: "run-1", Phase: RunPhaseRunning, Status: StatusRunning},
+		"run-1": {ID: "run-1", Phase: RunPhaseRunning},
 	}}
 	store := newRedactingStore(inner)
 	store.register("run-1", NewRedactor())
 	runner := &Runner{store: store, redacting: store}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	controller := newRunController(runner, "run-1", ctx, cancel, t.TempDir(), Budget{}, NewRedactor())
+	controller := newRunController(runner, "run-1", ctx, cancel, t.TempDir(), Budget{}, NewRedactor(), nil)
 	run := newRun(controller)
 	return run, inner
 }
@@ -183,7 +183,7 @@ func TestControllerIsSingleWriterUnderConcurrentCompletion(t *testing.T) {
 func TestControllerSerializesControlTransitionsThroughApply(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	controller := newRunController(nil, "run-1", ctx, cancel, t.TempDir(), Budget{MaxTokens: 1000}, NewRedactor())
+	controller := newRunController(nil, "run-1", ctx, cancel, t.TempDir(), Budget{MaxTokens: 1000}, NewRedactor(), nil)
 
 	if result := controller.apply(runTransition{kind: runTransitionStarted, at: time.Now().UTC()}); !result.applied {
 		t.Fatal("start transition was rejected")
@@ -230,7 +230,7 @@ func TestControllerSerializesControlTransitionsThroughApply(t *testing.T) {
 	const finalMessage = "single terminal write"
 	if result := controller.apply(runTransition{
 		kind: runTransitionFinalized, outcome: RunOutcomeFailed, err: controlErr,
-		result: Result{RunID: "run-1", Phase: RunPhaseTerminal, Outcome: RunOutcomeFailed, Status: StatusFailed, Error: finalMessage},
+		result: Result{RunID: "run-1", Phase: RunPhaseTerminal, Outcome: RunOutcomeFailed, Error: finalMessage},
 	}); !result.applied {
 		t.Fatalf("final transition rejected: %+v", result)
 	}
@@ -238,7 +238,7 @@ func TestControllerSerializesControlTransitionsThroughApply(t *testing.T) {
 		t.Fatal("post-finalization phase transition was accepted")
 	}
 	final, err := controller.waitResult()
-	if err != controlErr || final.Error != finalMessage || final.Status != StatusFailed {
+	if err != controlErr || final.Error != finalMessage {
 		t.Fatalf("final snapshot = %+v, err=%v", final, err)
 	}
 	if controller.transitionSeq != updates+9 {
@@ -249,7 +249,7 @@ func TestControllerSerializesControlTransitionsThroughApply(t *testing.T) {
 func TestControllerRejectsEventWritesWhileFinalizationOwnsStream(t *testing.T) {
 	release := make(chan struct{})
 	inner := &controllerTestStore{
-		runs:            map[string]RunRecord{"run-1": {ID: "run-1", Phase: RunPhaseRunning, Status: StatusRunning}},
+		runs:            map[string]RunRecord{"run-1": {ID: "run-1", Phase: RunPhaseRunning}},
 		finalizeStarted: make(chan struct{}), releaseFinalize: release,
 	}
 	store := newRedactingStore(inner)
@@ -257,7 +257,7 @@ func TestControllerRejectsEventWritesWhileFinalizationOwnsStream(t *testing.T) {
 	runner := &Runner{store: store, redacting: store}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	controller := newRunController(runner, "run-1", ctx, cancel, t.TempDir(), Budget{}, NewRedactor())
+	controller := newRunController(runner, "run-1", ctx, cancel, t.TempDir(), Budget{}, NewRedactor(), nil)
 	run := newRun(controller)
 
 	finished := make(chan struct{})
@@ -291,7 +291,7 @@ func TestInFlightCanonicalEventFailureDowngradesSuccess(t *testing.T) {
 	releaseAppend := make(chan struct{})
 	appendErr := errors.New("canonical append failed")
 	inner := &controllerTestStore{
-		runs:          map[string]RunRecord{"run-1": {ID: "run-1", Phase: RunPhaseRunning, Status: StatusRunning}},
+		runs:          map[string]RunRecord{"run-1": {ID: "run-1", Phase: RunPhaseRunning}},
 		appendStarted: make(chan struct{}), releaseAppend: releaseAppend, appendErr: appendErr,
 	}
 	store := newRedactingStore(inner)
@@ -299,7 +299,7 @@ func TestInFlightCanonicalEventFailureDowngradesSuccess(t *testing.T) {
 	runner := &Runner{store: store, redacting: store}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	controller := newRunController(runner, "run-1", ctx, cancel, t.TempDir(), Budget{}, NewRedactor())
+	controller := newRunController(runner, "run-1", ctx, cancel, t.TempDir(), Budget{}, NewRedactor(), nil)
 
 	emitDone := make(chan error, 1)
 	go func() {
@@ -319,7 +319,7 @@ func TestInFlightCanonicalEventFailureDowngradesSuccess(t *testing.T) {
 		t.Fatalf("append err = %v, want %v", err, appendErr)
 	}
 	result, err := controller.waitResult()
-	if result.Outcome != RunOutcomeFailed || result.Status != StatusFailed {
+	if result.Outcome != RunOutcomeFailed {
 		t.Fatalf("result = %+v, want failed due to canonical write", result)
 	}
 	if !errors.Is(err, appendErr) {
@@ -330,7 +330,7 @@ func TestInFlightCanonicalEventFailureDowngradesSuccess(t *testing.T) {
 func TestControllerRejectsRunPhaseRewind(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	controller := newRunController(nil, "run-1", ctx, cancel, t.TempDir(), Budget{}, NewRedactor())
+	controller := newRunController(nil, "run-1", ctx, cancel, t.TempDir(), Budget{}, NewRedactor(), nil)
 	if result := controller.apply(runTransition{kind: runTransitionPhase, phase: RunPhaseProvisioning}); !result.applied {
 		t.Fatalf("queued -> provisioning rejected: %+v", result)
 	}

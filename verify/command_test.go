@@ -24,8 +24,7 @@ printf '{"success":true,"score":42,"message":"verified","evidence":[{"kind":"fla
 	capture := filepath.Join(dir, "request.json")
 	verifier := verify.Command{Path: script, Env: []string{"CAPTURE=" + capture}}
 	verdict, err := verifier.Verify(context.Background(), harness.VerifyRequest{
-		RunID: "run_1", Task: harness.Task{ID: "task", Objective: "solve"},
-		Sessions: []harness.SessionResult{{ID: "s1", Status: harness.StatusSucceeded}},
+		RunID: "run_1", Task: harness.Task{ID: "task", Objective: "solve"}, EvidenceDir: dir,
 	})
 	if err != nil {
 		t.Fatalf("Verify: %v", err)

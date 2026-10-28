@@ -23,20 +23,21 @@ type Config struct {
 
 // RunSpec binds a serializable descriptor to runtime adapter instances.
 type RunSpec struct {
-	Task            core.Task
-	Target          core.TargetSpec
-	Reasoner        AgentSpec
-	Executors       []AgentSpec
-	Policy          core.RunPolicy
-	ReasonStrategy  core.ReasonStrategy
-	ExploreStrategy core.ExploreStrategy
-	Provisioner     TargetProvisioner
-	Backend         CompletionSource
-	Verifier        Verifier
-	Artifacts       ArtifactStore
-	SecretEnv       []string
-	KnownSecrets    []string
-	WorkspaceRoot   string
+	Task              core.Task
+	Target            core.TargetSpec
+	Reasoner          AgentSpec
+	Executor          AgentSpec
+	Policy            core.RunPolicy
+	ReasonStrategy    core.ReasonStrategy
+	ExploreStrategy   core.ExploreStrategy
+	Provisioner       TargetProvisioner
+	Backend           CompletionSource
+	Verifier          Verifier
+	Artifacts         ArtifactStore
+	SecretEnv         []string
+	KnownSecrets      []string
+	WorkspaceRoot     string
+	MaterializeSkills func(string) error
 }
 
 // ValidateRunSpec validates adapter-bound Run inputs before persistence.
@@ -63,21 +64,11 @@ func ValidateRunSpec(spec RunSpec) error {
 	if spec.Reasoner.Runtime == nil {
 		return errors.New("reasoner.runtime is required")
 	}
-	if len(spec.Executors) != 2 {
-		return errors.New("exactly 2 executors are required")
+	if strings.TrimSpace(spec.Executor.ID) == "" {
+		return errors.New("executor.id is required")
 	}
-	seen := map[string]struct{}{}
-	for i, executor := range spec.Executors {
-		if strings.TrimSpace(executor.ID) == "" {
-			return fmt.Errorf("executors[%d].id is required", i)
-		}
-		if _, ok := seen[executor.ID]; ok {
-			return fmt.Errorf("executors[%d].id is duplicated", i)
-		}
-		seen[executor.ID] = struct{}{}
-		if executor.Runtime == nil {
-			return fmt.Errorf("executors[%d].runtime is required", i)
-		}
+	if spec.Executor.Runtime == nil {
+		return errors.New("executor.runtime is required")
 	}
 	if spec.Artifacts == nil {
 		return errors.New("artifacts store is required")
@@ -90,16 +81,13 @@ func ValidateRunSpec(spec RunSpec) error {
 
 // Descriptor projects the serializable portion of a RunSpec.
 func (spec RunSpec) Descriptor() core.RunDescriptor {
-	executors := make([]core.AgentDescriptor, len(spec.Executors))
-	for i := range spec.Executors {
-		executors[i] = spec.Executors[i].Descriptor()
-	}
+	executor := spec.Executor.Descriptor()
 	return core.RunDescriptor{
 		SchemaVersion: core.CurrentSchemaVersion,
 		Task:          spec.Task,
 		Target:        spec.Target,
 		Reasoner:      spec.Reasoner.Descriptor(),
-		Executors:     executors,
+		Executor:      executor,
 		Policy:        core.NormalizeRunPolicy(spec.Policy),
 	}
 }

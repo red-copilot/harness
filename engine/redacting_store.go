@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"io"
 	"sync"
 
 	"github.com/red-copilot/harness/core"
@@ -81,8 +82,8 @@ func (s *redactingStore) AppendLog(ctx context.Context, record LogRecord) (LogRe
 
 func (s *redactingStore) Commit(ctx context.Context, commit Commit) ([]Event, error) {
 	r := s.redactor(commit.RunID)
-	for i := range commit.Facts {
-		commit.Facts[i] = core.RedactFact(r, commit.Facts[i])
+	for i := range commit.Claims {
+		commit.Claims[i] = core.RedactClaim(r, commit.Claims[i])
 	}
 	for i := range commit.Intents {
 		commit.Intents[i] = core.RedactIntent(r, commit.Intents[i])
@@ -133,8 +134,8 @@ func (s *redactingStore) ListLogs(ctx context.Context, runID string, after int64
 func (s *redactingStore) GetVerdict(ctx context.Context, runID string) (VerdictRecord, error) {
 	return s.inner.GetVerdict(ctx, runID)
 }
-func (s *redactingStore) ListFacts(ctx context.Context, runID string) ([]Fact, error) {
-	return s.inner.ListFacts(ctx, runID)
+func (s *redactingStore) ListClaims(ctx context.Context, runID string) ([]Claim, error) {
+	return s.inner.ListClaims(ctx, runID)
 }
 func (s *redactingStore) ListIntents(ctx context.Context, runID string) ([]Intent, error) {
 	return s.inner.ListIntents(ctx, runID)
@@ -150,6 +151,10 @@ func (s *redactingStore) ListBlackboardObservations(ctx context.Context, runID s
 }
 func (s *redactingStore) ListArtifacts(ctx context.Context, runID string) ([]Artifact, error) {
 	return s.inner.ListArtifacts(ctx, runID)
+}
+
+func (s *redactingStore) OpenArtifact(ctx context.Context, artifactID string) (io.ReadCloser, error) {
+	return s.inner.OpenArtifact(ctx, artifactID)
 }
 func (s *redactingStore) MarkInterrupted(ctx context.Context) error {
 	return s.inner.MarkInterrupted(ctx)

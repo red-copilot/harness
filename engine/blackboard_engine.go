@@ -18,7 +18,7 @@ type boardAttemptResult struct {
 	slot       int
 	intent     Intent
 	attempt    IntentAttempt
-	report     ExploreReport
+	report     AttemptReport
 	conclusion string
 	usage      Usage
 	err        error
@@ -44,6 +44,7 @@ type blackboardEngine struct {
 
 	results chan boardAttemptResult
 	reasons chan boardReasonResult
+	hints   chan Hint
 	slots   [3]*boardSlot
 
 	reasonInFlight bool
@@ -67,16 +68,18 @@ func newBlackboardEngine(runner *Runner, controller *runController, spec RunSpec
 	if explore == nil {
 		explore = defaultExploreStrategy{}
 	}
+	hints := make(chan Hint, 8)
+	controller.hints = hints
 	return &blackboardEngine{
 		runner: runner, controller: controller, spec: spec, target: target,
 		board: newBoardState(controller.id, spec, target), reason: reason, explore: explore,
-		results: make(chan boardAttemptResult, 2), reasons: make(chan boardReasonResult, 1),
+		results: make(chan boardAttemptResult, 2), reasons: make(chan boardReasonResult, 1), hints: hints,
 	}
 }
 
 func validateBlackboardRunSpec(spec RunSpec) error {
-	if len(spec.Executors) != 2 {
-		return fmt.Errorf("blackboard engine requires exactly 2 executors, got %d", len(spec.Executors))
+	if spec.Executor.Runtime == nil {
+		return errors.New("blackboard engine requires one executor")
 	}
 	if spec.Artifacts == nil {
 		return errors.New("blackboard engine requires an artifact store")
@@ -104,7 +107,7 @@ func (e *blackboardEngine) run(ctx context.Context) (runErr error) {
 	bootstrapEnabled := e.board.policy.Exploration.BootstrapEnabled
 	if bootstrapEnabled == nil || *bootstrapEnabled {
 		bootstrap, err := e.board.createIntent(Intent{
-			Kind: IntentBootstrap, FromFactIDs: []string{"origin"},
+			Kind: IntentBootstrap, FromClaimIDs: []string{"origin"},
 			Description: "Try to solve the whole authorized task directly before graph expansion.",
 		})
 		if err != nil {
@@ -154,6 +157,10 @@ func (e *blackboardEngine) run(ctx context.Context) (runErr error) {
 			if err := e.handleReason(ctx, result); err != nil {
 				return err
 			}
+		case hint := <-e.hints:
+			if err := e.handleHint(ctx, hint); err != nil {
+				return err
+			}
 		case <-ticker.C:
 		}
 	}
@@ -165,13 +172,11 @@ func (e *blackboardEngine) startSessions(ctx context.Context) error {
 		return err
 	}
 	e.planner = planner
-	for i, spec := range e.spec.Executors {
-		session, err := e.startSession(ctx, AgentRoleExecutor, spec, fmt.Sprintf("executor-%d", i+1))
-		if err != nil {
-			return err
-		}
-		e.executors = append(e.executors, session)
+	executor, err := e.startSession(ctx, AgentRoleExecutor, e.spec.Executor, "executor")
+	if err != nil {
+		return err
 	}
+	e.executors = append(e.executors, executor)
 	return nil
 }
 
@@ -233,9 +238,9 @@ func (e *blackboardEngine) closeSessions() error {
 
 func (e *blackboardEngine) persistInitial() error {
 	snapshot := e.board.snapshot()
-	events := make([]Event, 0, len(snapshot.Facts)+len(snapshot.Hints))
-	for _, fact := range snapshot.Facts {
-		event, err := e.controller.canonicalEvent("blackboard", EventFactCreated, FactCreatedPayload{Fact: fact})
+	events := make([]Event, 0, len(snapshot.Claims)+len(snapshot.Hints))
+	for _, claim := range snapshot.Claims {
+		event, err := e.controller.canonicalEvent("blackboard", EventClaimCreated, ClaimCreatedPayload{Claim: claim})
 		if err != nil {
 			return err
 		}
@@ -250,7 +255,7 @@ func (e *blackboardEngine) persistInitial() error {
 	}
 	return e.controller.commitBoard(context.Background(), Commit{
 		Revision: snapshot.FrontierVersion,
-		Facts:    snapshot.Facts,
+		Claims:   snapshot.Claims,
 		Hints:    snapshot.Hints,
 		Events:   events,
 	})
@@ -295,7 +300,7 @@ func (e *blackboardEngine) startIntent(ctx context.Context, slot int, intent Int
 	if e.slots[slot] != nil {
 		return fmt.Errorf("slot %d is already occupied", slot)
 	}
-	claimed, err := e.board.claimIntent(intent.ID, slot, fmt.Sprintf("executor-%d", slot), time.Now().UTC())
+	claimed, err := e.board.claimIntent(intent.ID, slot, "executor", time.Now().UTC())
 	if err != nil {
 		return err
 	}
@@ -357,7 +362,7 @@ func (e *blackboardEngine) startIntent(ctx context.Context, slot int, intent Int
 func (e *blackboardEngine) exploreRequest(intent Intent) ExploreRequest {
 	snapshot := e.board.snapshot()
 	return ExploreRequest{
-		Task: e.board.task, Target: e.board.target, Intent: intent, Facts: boundedFactsWithPolicy(snapshot.Facts, e.board.policy),
+		Task: e.board.task, Target: e.board.target, Intent: intent, Claims: boundedClaimsWithPolicy(snapshot.Claims, e.board.policy),
 		Hints: boundedHints(snapshot.Hints, e.board.policy), Budget: AttemptBudget{
 			MaxToolCalls: e.board.policy.Exploration.MaxToolCallsPerAttempt,
 			MaxWallTime:  e.board.policy.Exploration.MaxWallTimePerAttempt,
@@ -375,9 +380,9 @@ func (e *blackboardEngine) startReason(ctx context.Context, freeSlots []int) {
 	snapshot := e.board.snapshot()
 	hints := snapshot.Hints
 	req := buildReasonContext(snapshot, e.board.target, hints, freeSlots, nil, e.board.policy)
-	dropped := (len(snapshot.Facts) - len(req.Facts)) + (len(snapshot.Hints) - len(req.Hints))
+	dropped := (len(snapshot.Claims) - len(req.Claims)) + (len(snapshot.Hints) - len(req.Hints))
 	if dropped > 0 {
-		_ = e.emit(EventContextTruncated, ContextTruncatedPayload{Context: "reason", Candidates: len(snapshot.Facts) + len(snapshot.Hints), Kept: len(req.Facts) + len(req.Hints), Dropped: dropped})
+		_ = e.emit(EventContextTruncated, ContextTruncatedPayload{Context: "reason", Candidates: len(snapshot.Claims) + len(snapshot.Hints), Kept: len(req.Claims) + len(req.Hints), Dropped: dropped})
 	}
 	e.wg.Add(1)
 	go func() {
@@ -399,12 +404,18 @@ func (e *blackboardEngine) startReason(ctx context.Context, freeSlots []int) {
 		}
 		prompt, err := e.reason.Prompt(req)
 		if err == nil {
+			err = clearReport(e.controller.sessionWorkspace("planner"))
+		}
+		if err == nil {
 			var turn TurnResult
 			turn, err = runAgentTurn(reasonCtx, e.planner, prompt, TurnLimits{
 				MaxToolCalls:      e.board.policy.Exploration.MaxReasonerToolCalls,
 				MaxAssistantBytes: e.board.policy.Context.MaxAssistantBytes,
 				ToolTimeout:       DefaultToolCallTimeout,
 			}, e.eventSink("planner"), true)
+			if err == nil {
+				turn.Report, err = readReport(e.controller.sessionWorkspace("planner"), e.board.policy.Evidence.MaxReportBytes)
+			}
 			if err == nil {
 				var report ReasonReport
 				report, err = e.reason.Parse(req, turn)
@@ -414,6 +425,18 @@ func (e *blackboardEngine) startReason(ctx context.Context, freeSlots []int) {
 		}
 		e.reasons <- boardReasonResult{freeSlots: append([]int(nil), freeSlots...), usage: usageDelta(usageBefore, e.planner.Usage()), err: err}
 	}()
+}
+
+func (e *blackboardEngine) handleHint(ctx context.Context, hint Hint) error {
+	added, err := e.board.addHint(hint, e.board.policy.Context.MaxHintBytes)
+	if err != nil {
+		return err
+	}
+	event, err := e.controller.canonicalEvent("operator", EventHintCreated, HintCreatedPayload{Hint: added})
+	if err != nil {
+		return err
+	}
+	return e.controller.commitBoard(ctx, Commit{Revision: e.board.frontierVersion(), Hints: []Hint{added}, Events: []Event{event}})
 }
 
 func (e *blackboardEngine) handleReason(ctx context.Context, result boardReasonResult) error {
@@ -519,12 +542,12 @@ func (e *blackboardEngine) handleAttempt(ctx context.Context, result boardAttemp
 		return e.finishAttemptBookkeeping()
 	}
 
-	var fact Fact
+	var claim Claim
 	var observations []Observation
 	var artifacts []Artifact
-	haveFact := false
-	if result.report.Fact != nil {
-		if result.report.Fact.Kind == FactFinding {
+	haveClaim := false
+	if result.report.Claim != nil {
+		if result.report.Claim.Kind == ClaimFinding {
 			collected, collectedArtifacts, err := e.collectEvidence(ctx, result)
 			if err != nil {
 				result.attempt.Phase = IntentAttemptFailed
@@ -571,32 +594,32 @@ func (e *blackboardEngine) handleAttempt(ctx context.Context, result boardAttemp
 			for _, artifact := range artifacts {
 				artifactIDs = append(artifactIDs, artifact.ID)
 			}
-			fact, err = e.board.addFact(Fact{Kind: FactFinding, Description: result.report.Fact.Description, SourceIntentID: result.intent.ID, ObservationIDs: observationIDs, ArtifactIDs: artifactIDs})
+			claim, err = e.board.addClaim(Claim{Kind: ClaimFinding, Description: result.report.Claim.Description, SourceIntentID: result.intent.ID, ObservationIDs: observationIDs, ArtifactIDs: artifactIDs})
 			if err != nil {
 				return err
 			}
-			haveFact = true
+			haveClaim = true
 			e.stagnant = 0
 		} else {
 			var err error
-			fact, err = e.board.addFact(Fact{Kind: result.report.Fact.Kind, Description: result.report.Fact.Description, SourceIntentID: result.intent.ID})
+			claim, err = e.board.addClaim(Claim{Kind: result.report.Claim.Kind, Description: result.report.Claim.Description, SourceIntentID: result.intent.ID})
 			if err != nil {
 				return err
 			}
-			haveFact = true
+			haveClaim = true
 			if result.intent.Kind != IntentBootstrap {
 				e.stagnant++
 			}
 		}
 	}
 
-	facts := []Fact(nil)
-	if haveFact {
-		facts = []Fact{fact}
+	claims := []Claim(nil)
+	if haveClaim {
+		claims = []Claim{claim}
 	}
 	updated, intentEventType := e.board.findIntent(result.intent.ID), EventType("")
-	if result.report.Fact != nil {
-		concluded, err := e.board.concludeIntent(result.intent.ID, fact.ID, time.Now().UTC())
+	if result.report.Claim != nil {
+		concluded, err := e.board.concludeIntent(result.intent.ID, claim.ID, time.Now().UTC())
 		if err != nil {
 			return err
 		}
@@ -604,7 +627,7 @@ func (e *blackboardEngine) handleAttempt(ctx context.Context, result boardAttemp
 		result.attempt.Phase = IntentAttemptConcluded
 		intentEventType = EventIntentConcluded
 	} else {
-		abandoned, _ := e.board.abandonIntent(result.intent.ID, "no fact produced", time.Now().UTC())
+		abandoned, _ := e.board.abandonIntent(result.intent.ID, "no claim produced", time.Now().UTC())
 		updated = &abandoned
 		result.attempt.Phase = IntentAttemptFailed
 		intentEventType = EventIntentAbandoned
@@ -617,12 +640,12 @@ func (e *blackboardEngine) handleAttempt(ctx context.Context, result boardAttemp
 	if err != nil {
 		return err
 	}
-	if haveFact {
-		factEvent, eventErr := e.controller.canonicalEvent("blackboard", EventFactCreated, FactCreatedPayload{Fact: fact})
+	if haveClaim {
+		claimEvent, eventErr := e.controller.canonicalEvent("blackboard", EventClaimCreated, ClaimCreatedPayload{Claim: claim})
 		if eventErr != nil {
 			return eventErr
 		}
-		events = append(events, factEvent)
+		events = append(events, claimEvent)
 	}
 	for _, observation := range observations {
 		event, eventErr := e.controller.canonicalEvent("blackboard", EventObservationCreated, ObservationCreatedPayload{Observation: observation})
@@ -638,7 +661,7 @@ func (e *blackboardEngine) handleAttempt(ctx context.Context, result boardAttemp
 		}
 		events = append(events, event)
 	}
-	if err := e.controller.commitBoard(ctx, Commit{Revision: e.board.frontierVersion(), Facts: facts, Intents: []Intent{*updated}, Attempts: []IntentAttempt{result.attempt}, Observations: observations, Artifacts: artifacts, Events: events}); err != nil {
+	if err := e.controller.commitBoard(ctx, Commit{Revision: e.board.frontierVersion(), Claims: claims, Intents: []Intent{*updated}, Attempts: []IntentAttempt{result.attempt}, Observations: observations, Artifacts: artifacts, Events: events}); err != nil {
 		return err
 	}
 	return e.finishAttemptBookkeeping()

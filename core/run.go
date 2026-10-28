@@ -182,9 +182,8 @@ type Result struct {
 	RunID          string          `json:"run_id"`
 	Phase          RunPhase        `json:"phase"`
 	Outcome        RunOutcome      `json:"outcome,omitempty"`
-	Status         Status          `json:"status"`
 	Verdict        *Verdict        `json:"verdict,omitempty"`
-	Facts          []Fact          `json:"facts,omitempty"`
+	Claims         []Claim         `json:"claims,omitempty"`
 	Intents        []Intent        `json:"intents,omitempty"`
 	Hints          []Hint          `json:"hints,omitempty"`
 	IntentAttempts []IntentAttempt `json:"intent_attempts,omitempty"`
@@ -198,7 +197,7 @@ type Result struct {
 }
 
 // CurrentSchemaVersion is the only descriptor schema this build accepts.
-const CurrentSchemaVersion = 2
+const CurrentSchemaVersion = 3
 
 // ValidateDescriptor rejects descriptors from unknown schema generations.
 func ValidateDescriptor(descriptor RunDescriptor) error {
@@ -211,20 +210,20 @@ func ValidateDescriptor(descriptor RunDescriptor) error {
 	if descriptor.Target.ID == "" {
 		return fmt.Errorf("descriptor target id is required")
 	}
-	if len(descriptor.Executors) != 2 {
-		return fmt.Errorf("descriptor requires exactly 2 executors")
+	if descriptor.Executor.ID == "" {
+		return fmt.Errorf("descriptor executor id is required")
 	}
 	return nil
 }
 
 // RunDescriptor is the serializable portion of a Run.
 type RunDescriptor struct {
-	SchemaVersion int               `json:"schema_version" yaml:"schema_version"`
-	Task          Task              `json:"task" yaml:"task"`
-	Target        TargetSpec        `json:"target" yaml:"target"`
-	Reasoner      AgentDescriptor   `json:"reasoner" yaml:"reasoner"`
-	Executors     []AgentDescriptor `json:"executors" yaml:"executors"`
-	Policy        RunPolicy         `json:"policy" yaml:"policy"`
+	SchemaVersion int             `json:"schema_version" yaml:"schema_version"`
+	Task          Task            `json:"task" yaml:"task"`
+	Target        TargetSpec      `json:"target" yaml:"target"`
+	Reasoner      AgentDescriptor `json:"reasoner" yaml:"reasoner"`
+	Executor      AgentDescriptor `json:"executor" yaml:"executor"`
+	Policy        RunPolicy       `json:"policy" yaml:"policy"`
 }
 
 // SweepRecord is a persisted batch summary. Sweeps orchestrate ordinary Runs
@@ -264,7 +263,6 @@ type RunRecord struct {
 	ID         string          `json:"id"`
 	Phase      RunPhase        `json:"phase"`
 	Outcome    RunOutcome      `json:"outcome,omitempty"`
-	Status     Status          `json:"status"`
 	Spec       json.RawMessage `json:"spec,omitempty"`
 	Result     json.RawMessage `json:"result,omitempty"`
 	Error      string          `json:"error,omitempty"`
@@ -296,9 +294,8 @@ type ProvisionRequest struct {
 }
 
 type VerifyRequest struct {
-	RunID         string
-	Task          Task
-	Target        TargetBinding
-	Sessions      []SessionResult
-	WorkspaceRoot string
+	RunID       string
+	Task        Task
+	Target      TargetBinding
+	EvidenceDir string
 }

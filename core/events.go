@@ -24,7 +24,7 @@ const (
 	EventAuthorityProgress     EventType = "authority.progress"
 	EventAuthorityCompleted    EventType = "authority.completed"
 	EventAuthorityObserveError EventType = "authority.observe_error"
-	EventFactCreated           EventType = "fact.created"
+	EventClaimCreated          EventType = "claim.created"
 	EventHintCreated           EventType = "hint.created"
 	EventReasonStarted         EventType = "reason.started"
 	EventReasonCompleted       EventType = "reason.completed"
@@ -46,8 +46,7 @@ type RunCreatedPayload struct {
 }
 
 type RunPhasePayload struct {
-	Phase  RunPhase `json:"phase"`
-	Status Status   `json:"status"`
+	Phase RunPhase `json:"phase"`
 }
 
 type RunProvisionedPayload struct {
@@ -88,8 +87,8 @@ type AuthorityErrorPayload struct {
 	Error string `json:"error"`
 }
 
-type FactCreatedPayload struct {
-	Fact Fact `json:"fact"`
+type ClaimCreatedPayload struct {
+	Claim Claim `json:"claim"`
 }
 
 type HintCreatedPayload struct {
@@ -117,7 +116,6 @@ type IntentRejectedPayload struct {
 
 type RunFinalizedPayload struct {
 	Outcome RunOutcome `json:"outcome"`
-	Status  Status     `json:"status"`
 	Error   string     `json:"error,omitempty"`
 }
 
@@ -139,7 +137,7 @@ var eventContracts = map[EventType]eventContract{
 	EventAuthorityProgress:     {version: 1, payload: AuthorityProgressPayload{}},
 	EventAuthorityCompleted:    {version: 1, payload: AuthorityProgressPayload{}},
 	EventAuthorityObserveError: {version: 1, payload: AuthorityErrorPayload{}},
-	EventFactCreated:           {version: 1, payload: FactCreatedPayload{}},
+	EventClaimCreated:          {version: 1, payload: ClaimCreatedPayload{}},
 	EventHintCreated:           {version: 1, payload: HintCreatedPayload{}},
 	EventReasonStarted:         {version: 1, payload: ReasonPayload{}},
 	EventReasonCompleted:       {version: 1, payload: ReasonPayload{}},

@@ -1,3 +1,5 @@
+import type { components } from './generated'
+
 export const RUN_STATUSES = [
   'queued',
   'provisioning',
@@ -27,27 +29,12 @@ export const EVENT_TYPES = [
   'run.finalized',
   'agent.session.started',
   'agent.event',
-  'exploration.branch.created',
-  'exploration.branch.updated',
-  'exploration.branch.rejected',
-  'exploration.attempt.started',
-  'exploration.attempt.completed',
-  'exploration.attempt.failed',
-  'exploration.context.truncated',
   'artifact.stored',
   'observation.created',
-  'knowledge.promoted',
-  'knowledge.supported',
-  'knowledge.contested',
-  'knowledge.refuted',
-  'knowledge.review_required',
-  'knowledge.review_resolved',
-  'knowledge.review_rejected',
-  'knowledge.rejected',
   'authority.progress',
   'authority.completed',
   'authority.observe_error',
-  'fact.created',
+  'claim.created',
   'hint.created',
   'reason.started',
   'reason.completed',
@@ -75,27 +62,12 @@ export const EVENT_SCHEMA_VERSIONS: Record<EventType, number> = {
   'run.finalized': 1,
   'agent.session.started': 1,
   'agent.event': 2,
-  'exploration.branch.created': 1,
-  'exploration.branch.updated': 1,
-  'exploration.branch.rejected': 1,
-  'exploration.attempt.started': 1,
-  'exploration.attempt.completed': 1,
-  'exploration.attempt.failed': 1,
-  'exploration.context.truncated': 1,
   'artifact.stored': 1,
   'observation.created': 1,
-  'knowledge.promoted': 1,
-  'knowledge.supported': 1,
-  'knowledge.contested': 1,
-  'knowledge.refuted': 1,
-  'knowledge.review_required': 1,
-  'knowledge.review_resolved': 1,
-  'knowledge.review_rejected': 1,
-  'knowledge.rejected': 1,
   'authority.progress': 1,
   'authority.completed': 1,
   'authority.observe_error': 1,
-  'fact.created': 1,
+  'claim.created': 1,
   'hint.created': 1,
   'reason.started': 1,
   'reason.completed': 1,
@@ -204,7 +176,7 @@ export interface ExplorationPolicy {
 export interface ContextPolicy {
   max_board_items: number
   max_board_bytes: number
-  max_fact_bytes: number
+  max_claim_bytes: number
   max_intent_bytes: number
   max_hint_bytes: number
   max_assistant_bytes: number
@@ -230,7 +202,7 @@ export interface RunDescriptor {
   task: Task
   target: Target
   reasoner: AgentSpec
-  executors: AgentSpec[]
+  executor: AgentSpec
   policy?: RunPolicy
 }
 
@@ -271,45 +243,10 @@ export interface Artifact {
   created_at?: string
 }
 
-export interface Branch {
-  id: string
-  parent_id?: string
-  run_id: string
-  task_id: string
-  kind: 'root' | 'hypothesis' | 'review'
-  depth: number
-  topic: string
-  goal?: string
-  hypothesis?: string
-  success_condition?: string
-  failure_condition?: string
-  scope?: string
-  review_of?: string[]
-  phase: 'open' | 'active' | 'closed'
-  outcome?: 'pending' | 'supported' | 'refuted' | 'blocked' | 'inconclusive' | 'abandoned' | 'resolved'
-  priority?: number
-  created_at?: string
-  updated_at?: string
-}
-
-export interface Attempt {
-  id: string
-  run_id: string
-  branch_id: string
-  session_id?: string
-  phase: 'running' | 'completed' | 'truncated' | 'failed' | 'cancelled'
-  outcome?: 'supported' | 'refuted' | 'blocked' | 'inconclusive'
-  observation_ids?: string[]
-  started_at?: string
-  finished_at?: string
-  error?: string
-}
-
 export interface Observation {
   id: string
   run_id: string
   intent_id?: string
-  branch_id?: string
   attempt_id: string
   kind: string
   summary: string
@@ -318,45 +255,16 @@ export interface Observation {
   created_at?: string
 }
 
-export interface KnowledgeSource {
-  run_id: string
-  attempt_id: string
-  session_id: string
-  observation: string
-}
-
-export interface Knowledge {
-  id: string
-  task_id: string
-  run_id: string
-  topic: string
-  kind: string
-  statement: string
-  target?: string
-  trust: 'observed' | 'corroborated' | 'contested' | 'refuted'
-  scope: 'run' | 'target' | 'task'
-  sources?: KnowledgeSource[]
-  contradicts?: string[]
-  valid_from?: string
-  last_validated?: string
-  expires_at?: string
-  version?: number
-}
-
 export interface RunResult {
   run_id: string
   phase?: RunPhase
   outcome?: RunOutcome
-  status: RunStatus
   verdict?: Verdict
-  facts?: Fact[]
+  claims?: Claim[]
   intents?: Intent[]
   hints?: Hint[]
   intent_attempts?: IntentAttempt[]
-  branches?: Branch[]
-  attempts?: Attempt[]
   observations?: Observation[]
-  knowledge?: Knowledge[]
   artifacts?: Artifact[]
   sessions?: SessionResult[]
   usage?: Usage
@@ -365,16 +273,16 @@ export interface RunResult {
   finished_at?: string
 }
 
-export type FactKind = 'origin' | 'goal' | 'finding' | 'negative'
+export type ClaimKind = 'origin' | 'goal' | 'finding' | 'negative'
 export type IntentKind = 'bootstrap' | 'explore'
 export type IntentState = 'open' | 'claimed' | 'concluded' | 'abandoned'
 export type IntentAttemptPhase = 'running' | 'concluded' | 'failed' | 'cancelled' | 'timed_out'
 
-export interface Fact {
+export interface Claim {
   id: string
   run_id: string
   task_id: string
-  kind: FactKind
+  kind: ClaimKind
   description: string
   source_intent_id?: string
   observation_ids?: string[]
@@ -386,13 +294,13 @@ export interface Intent {
   id: string
   run_id: string
   kind: IntentKind
-  from_fact_ids: string[]
+  from_claim_ids: string[]
   description: string
   state: IntentState
   slot?: number
   executor_id?: string
   attempt_ids?: string[]
-  result_fact_id?: string
+  result_claim_id?: string
   created_at?: string
   claimed_at?: string
   concluded_at?: string
@@ -420,25 +328,21 @@ export interface IntentAttempt {
   error?: string
 }
 
-export interface GraphResponse {
-  facts: Fact[]
-  intents: Intent[]
-  hints: Hint[]
-  attempts: IntentAttempt[]
-  slots: number[]
-  board_revision: number
-  reason: {
-    active: boolean
-    frontier_version: number
-    free_slots?: number[]
-  }
+type GeneratedBoard = components["schemas"]["BoardResponse"]
+export type BoardResponse = GeneratedBoard & {
+  claims: NonNullable<GeneratedBoard["claims"]>
+  intents: NonNullable<GeneratedBoard["intents"]>
+  hints: NonNullable<GeneratedBoard["hints"]>
+  attempts: NonNullable<GeneratedBoard["attempts"]>
+  slots: NonNullable<GeneratedBoard["slots"]>
+  board_revision: NonNullable<GeneratedBoard["board_revision"]>
+  reason: NonNullable<GeneratedBoard["reason"]>
 }
 
 export interface RunRecord {
   id: string
   phase?: RunPhase
   outcome?: RunOutcome
-  status: RunStatus
   spec?: RunDescriptor | null
   result?: RunResult | null
   error?: string

@@ -15,7 +15,7 @@ import (
 	"github.com/red-copilot/harness/store/sqlite"
 )
 
-func TestServerAcceptsV2Descriptor(t *testing.T) {
+func TestServerAcceptsV3Descriptor(t *testing.T) {
 	store, runner := testServerRunner(t)
 	defer store.Close()
 	defer runner.Close(context.Background())
@@ -23,17 +23,14 @@ func TestServerAcceptsV2Descriptor(t *testing.T) {
 		spec := harness.RunSpec{
 			Task: descriptor.Task, Target: descriptor.Target,
 			Reasoner: harness.AgentSpec{ID: descriptor.Reasoner.ID, Runtime: noopRuntime{}},
-			Executors: []harness.AgentSpec{
-				{ID: descriptor.Executors[0].ID, Runtime: noopRuntime{}},
-				{ID: descriptor.Executors[1].ID, Runtime: noopRuntime{}},
-			},
-			Policy: descriptor.Policy, Artifacts: store, Verifier: fakeVerifier{},
+			Executor: harness.AgentSpec{ID: descriptor.Executor.ID, Runtime: noopRuntime{}},
+			Policy:   descriptor.Policy, Artifacts: store, Verifier: fakeVerifier{},
 			ReasonStrategy: noIntentReasonStrategy{},
 		}
 		return spec, harness.ValidateRunSpec(spec)
 	}
 	handler := server.New(runner, store, builder).Handler()
-	body := `{"schema_version":2,"task":{"id":"task","objective":"x"},"target":{"id":"target","isolation":"caller_managed"},"reasoner":{"id":"reasoner"},"executors":[{"id":"exec-1"},{"id":"exec-2"}],"policy":{"budget":{"wall_time":1000000000},"exploration":{"max_open_intents":2}}}`
+	body := `{"schema_version":3,"task":{"id":"task","objective":"x"},"target":{"id":"target","isolation":"caller_managed"},"reasoner":{"id":"reasoner"},"executor":{"id":"exec"},"policy":{"budget":{"wall_time":1000000000},"exploration":{"max_open_intents":1}}}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/runs", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -72,9 +69,9 @@ func TestServerRejectsUnknownFieldsAndV1Descriptor(t *testing.T) {
 		return harness.RunSpec{Task: descriptor.Task, Target: descriptor.Target, Artifacts: store, Verifier: fakeVerifier{}}, nil
 	}).Handler()
 	for _, body := range []string{
-		`{"schema_version":2,"unknown":true}`,
+		`{"schema_version":3,"unknown":true}`,
 		`{"schema_version":1,"task":{"id":"task","objective":"x"},"target":{"id":"target"},"planner":{"id":"planner"},"executors":[{"id":"exec"}]}`,
-		`{"schema_version":2,"task":{"id":"task","objective":"x"},"target":{"id":"target","isolation":"network_isolated"},"reasoner":{"id":"reasoner"},"executors":[{"id":"exec-1"},{"id":"exec-2"}]}`,
+		`{"schema_version":3,"task":{"id":"task","objective":"x"},"target":{"id":"target","isolation":"network_isolated"},"reasoner":{"id":"reasoner"},"executor":{"id":"exec"}}`,
 	} {
 		req := httptest.NewRequest(http.MethodPost, "/v1/runs", strings.NewReader(body))
 		rec := httptest.NewRecorder()
@@ -89,7 +86,7 @@ func TestSSEReplaysAfterSequence(t *testing.T) {
 	store, runner := testServerRunner(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
-	if err := store.CreateRun(ctx, harness.RunRecord{ID: "run-1", Phase: harness.RunPhaseQueued, Status: harness.StatusQueued, CreatedAt: now}); err != nil {
+	if err := store.CreateRun(ctx, harness.RunRecord{ID: "run-1", Phase: harness.RunPhaseQueued, CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 	first, _ := store.AppendEvent(ctx, harness.Event{RunID: "run-1", Source: "test", Type: harness.EventAgent, Time: now, Data: json.RawMessage(`{"n":1}`)})
@@ -104,17 +101,17 @@ func TestSSEReplaysAfterSequence(t *testing.T) {
 	}
 }
 
-func TestGraphEndpointReturnsFactIntentView(t *testing.T) {
+func TestGraphEndpointReturnsClaimIntentView(t *testing.T) {
 	store, runner := testServerRunner(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
-	if err := store.CreateRun(ctx, harness.RunRecord{ID: "run-graph", Phase: harness.RunPhaseRunning, Status: harness.StatusRunning, CreatedAt: now}); err != nil {
+	if err := store.CreateRun(ctx, harness.RunRecord{ID: "run-graph", Phase: harness.RunPhaseRunning, CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SaveFact(ctx, harness.Fact{ID: "fact-1", RunID: "run-graph", TaskID: "task", Kind: harness.FactNegative, Description: "none", CreatedAt: now}); err != nil {
+	if err := store.SaveClaim(ctx, harness.Claim{ID: "claim-1", RunID: "run-graph", TaskID: "task", Kind: harness.ClaimNegative, Description: "none", CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SaveIntent(ctx, harness.Intent{ID: "intent-1", RunID: "run-graph", Kind: harness.IntentExplore, FromFactIDs: []string{"fact-1"}, Description: "probe", State: harness.IntentClaimed, Slot: 1, ExecutorID: "executor-1", CreatedAt: now}); err != nil {
+	if err := store.SaveIntent(ctx, harness.Intent{ID: "intent-1", RunID: "run-graph", Kind: harness.IntentExplore, FromClaimIDs: []string{"claim-1"}, Description: "probe", State: harness.IntentClaimed, Slot: 1, ExecutorID: "executor-1", CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.SaveHint(ctx, harness.Hint{ID: "hint-1", RunID: "run-graph", Content: "focus", Creator: "operator", CreatedAt: now}); err != nil {
@@ -128,14 +125,14 @@ func TestGraphEndpointReturnsFactIntentView(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := server.New(runner, store, func(harness.RunDescriptor) (harness.RunSpec, error) { return harness.RunSpec{}, nil }).Handler()
-	req := httptest.NewRequest(http.MethodGet, "/v1/runs/run-graph/graph", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/runs/run-graph/board", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
 	}
 	var graph struct {
-		Facts         []harness.Fact   `json:"facts"`
+		Claims        []harness.Claim  `json:"claims"`
 		Intents       []harness.Intent `json:"intents"`
 		Hints         []harness.Hint   `json:"hints"`
 		Slots         []int            `json:"slots"`
@@ -148,7 +145,7 @@ func TestGraphEndpointReturnsFactIntentView(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &graph); err != nil {
 		t.Fatal(err)
 	}
-	if len(graph.Facts) != 1 || len(graph.Intents) != 1 || len(graph.Hints) != 1 || len(graph.Slots) != 1 || graph.Slots[0] != 2 {
+	if len(graph.Claims) != 1 || len(graph.Intents) != 1 || len(graph.Hints) != 1 || len(graph.Slots) != 0 {
 		t.Fatalf("graph = %+v", graph)
 	}
 	if !graph.Reason.Active || graph.Reason.FrontierVersion != 4 {
@@ -189,7 +186,7 @@ func (noopSession) Steer(context.Context, string) error { return nil }
 func (noopSession) Reset(context.Context) error         { return nil }
 func (noopSession) Events() <-chan harness.AgentEvent {
 	c := make(chan harness.AgentEvent, 2)
-	c <- harness.AgentEvent{Kind: harness.AgentEventMessage, Text: `{"phase":"concluded","fact":{"kind":"negative","description":"none"}}`}
+	c <- harness.AgentEvent{Kind: harness.AgentEventMessage, Text: `{"phase":"concluded","claim":{"kind":"negative","description":"none"}}`}
 	c <- harness.AgentEvent{Kind: harness.AgentEventSettled}
 	return c
 }
@@ -226,7 +223,7 @@ func (sweepOnlyRuntime) NewSession(_ context.Context, req harness.RuntimeRequest
 	if req.Role == harness.AgentRoleReasoner {
 		return newFixedSession("reason"), nil
 	}
-	return newFixedSession(`{"phase":"concluded","fact":{"kind":"negative","description":"none"}}`), nil
+	return newFixedSession(`{"phase":"concluded","claim":{"kind":"negative","description":"none"}}`), nil
 }
 
 type fixedSession struct {
@@ -264,7 +261,7 @@ func TestServerTSecSweepUsesV2RunEngine(t *testing.T) {
 		return makeTestRunSpec(descriptor, store), nil
 	}
 	sweepBuilder := func(req server.SweepRequest) (server.SweepPlan, error) {
-		if len(req.Descriptor.Executors) != 2 || req.Challenges[0] != "web_1" {
+		if req.Descriptor.Executor.ID == "" || req.Challenges[0] != "web_1" {
 			return server.SweepPlan{}, context.Canceled
 		}
 		return server.SweepPlan{
@@ -278,7 +275,7 @@ func TestServerTSecSweepUsesV2RunEngine(t *testing.T) {
 		}, nil
 	}
 	handler := server.New(runner, store, builder, sweepBuilder).Handler()
-	body := `{"descriptor":{"schema_version":2,"task":{"id":"task","objective":"x"},"target":{"id":"target","isolation":"caller_managed"},"reasoner":{"id":"reasoner"},"executors":[{"id":"exec-1"},{"id":"exec-2"}]},"tsec":{"base_url":"https://example.test"},"challenges":["web_1"],"parallel":1}`
+	body := `{"descriptor":{"schema_version":3,"task":{"id":"task","objective":"x"},"target":{"id":"target","isolation":"caller_managed"},"reasoner":{"id":"reasoner"},"executor":{"id":"exec"}},"tsec":{"base_url":"https://example.test"},"challenges":["web_1"],"parallel":1}`
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/tsec/sweeps", strings.NewReader(body)))
 	if rec.Code != http.StatusAccepted {
@@ -322,11 +319,8 @@ func makeTestRunSpec(descriptor harness.RunDescriptor, store harness.ArtifactSto
 	return harness.RunSpec{
 		Task: descriptor.Task, Target: descriptor.Target,
 		Reasoner: harness.AgentSpec{ID: descriptor.Reasoner.ID, Runtime: sweepOnlyRuntime{}},
-		Executors: []harness.AgentSpec{
-			{ID: descriptor.Executors[0].ID, Runtime: sweepOnlyRuntime{}},
-			{ID: descriptor.Executors[1].ID, Runtime: sweepOnlyRuntime{}},
-		},
-		Policy: descriptor.Policy, Artifacts: store, Verifier: fakeVerifier{},
+		Executor: harness.AgentSpec{ID: descriptor.Executor.ID, Runtime: sweepOnlyRuntime{}},
+		Policy:   descriptor.Policy, Artifacts: store, Verifier: fakeVerifier{},
 		ReasonStrategy: noIntentSweepReasonStrategy{},
 	}
 }

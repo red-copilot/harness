@@ -147,8 +147,8 @@ func RedactResult(r *Redactor, result Result) Result {
 	for i := range result.Artifacts {
 		result.Artifacts[i] = RedactArtifact(r, result.Artifacts[i])
 	}
-	for i := range result.Facts {
-		result.Facts[i] = RedactFact(r, result.Facts[i])
+	for i := range result.Claims {
+		result.Claims[i] = RedactClaim(r, result.Claims[i])
 	}
 	for i := range result.Intents {
 		result.Intents[i] = RedactIntent(r, result.Intents[i])
@@ -165,19 +165,19 @@ func RedactResult(r *Redactor, result Result) Result {
 	return result
 }
 
-func RedactFact(r *Redactor, fact Fact) Fact {
-	fact.ID = r.Redact(fact.ID)
-	fact.RunID = r.Redact(fact.RunID)
-	fact.TaskID = r.Redact(fact.TaskID)
-	fact.Description = r.Redact(fact.Description)
-	fact.SourceIntentID = r.Redact(fact.SourceIntentID)
-	for i := range fact.ObservationIDs {
-		fact.ObservationIDs[i] = r.Redact(fact.ObservationIDs[i])
+func RedactClaim(r *Redactor, claim Claim) Claim {
+	claim.ID = r.Redact(claim.ID)
+	claim.RunID = r.Redact(claim.RunID)
+	claim.TaskID = r.Redact(claim.TaskID)
+	claim.Description = r.Redact(claim.Description)
+	claim.SourceIntentID = r.Redact(claim.SourceIntentID)
+	for i := range claim.ObservationIDs {
+		claim.ObservationIDs[i] = r.Redact(claim.ObservationIDs[i])
 	}
-	for i := range fact.ArtifactIDs {
-		fact.ArtifactIDs[i] = r.Redact(fact.ArtifactIDs[i])
+	for i := range claim.ArtifactIDs {
+		claim.ArtifactIDs[i] = r.Redact(claim.ArtifactIDs[i])
 	}
-	return fact
+	return claim
 }
 
 func RedactIntent(r *Redactor, intent Intent) Intent {
@@ -185,10 +185,10 @@ func RedactIntent(r *Redactor, intent Intent) Intent {
 	intent.RunID = r.Redact(intent.RunID)
 	intent.Description = r.Redact(intent.Description)
 	intent.ExecutorID = r.Redact(intent.ExecutorID)
-	intent.ResultFactID = r.Redact(intent.ResultFactID)
+	intent.ResultClaimID = r.Redact(intent.ResultClaimID)
 	intent.Error = r.Redact(intent.Error)
-	for i := range intent.FromFactIDs {
-		intent.FromFactIDs[i] = r.Redact(intent.FromFactIDs[i])
+	for i := range intent.FromClaimIDs {
+		intent.FromClaimIDs[i] = r.Redact(intent.FromClaimIDs[i])
 	}
 	for i := range intent.AttemptIDs {
 		intent.AttemptIDs[i] = r.Redact(intent.AttemptIDs[i])

@@ -2,7 +2,7 @@ import type {
   EventRecord,
   HealthResponse,
   LogQuery,
-  GraphResponse,
+  BoardResponse,
   LogRecord,
   Overview,
   RunRecord,
@@ -62,8 +62,8 @@ export function getSweep(sweepId: string, signal?: AbortSignal): Promise<SweepSt
   return request<SweepState>(`/v1/tsec/sweeps/${encodeURIComponent(sweepId)}`, { signal, cache: 'no-store' })
 }
 
-export function getRunGraph(runId: string, signal?: AbortSignal): Promise<GraphResponse> {
-  return request<GraphResponse>(`/v1/runs/${encodeURIComponent(runId)}/graph`, { signal, cache: 'no-store' })
+export function getRunBoard(runId: string, signal?: AbortSignal): Promise<BoardResponse> {
+  return request<BoardResponse>(`/v1/runs/${encodeURIComponent(runId)}/board`, { signal, cache: 'no-store' })
 }
 
 export async function getVerdict(

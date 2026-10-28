@@ -70,9 +70,9 @@ type (
 	EvidencePolicy             = core.EvidencePolicy
 	AttemptBudget              = core.AttemptBudget
 	Redactor                   = core.Redactor
-	Fact                       = core.Fact
-	FactKind                   = core.FactKind
-	FactProposal               = core.FactProposal
+	Claim                      = core.Claim
+	ClaimKind                  = core.ClaimKind
+	ClaimProposal              = core.ClaimProposal
 	Intent                     = core.Intent
 	IntentKind                 = core.IntentKind
 	IntentState                = core.IntentState
@@ -84,7 +84,7 @@ type (
 	ReasonReport               = core.ReasonReport
 	ReasonRequest              = core.ReasonRequest
 	ReasonStrategy             = core.ReasonStrategy
-	ExploreReport              = core.ExploreReport
+	AttemptReport              = core.AttemptReport
 	ExploreRequest             = core.ExploreRequest
 	ExploreStrategy            = core.ExploreStrategy
 	Observation                = core.Observation
@@ -104,7 +104,7 @@ type (
 	ObservationCreatedPayload  = core.ObservationCreatedPayload
 	AuthorityProgressPayload   = core.AuthorityProgressPayload
 	AuthorityErrorPayload      = core.AuthorityErrorPayload
-	FactCreatedPayload         = core.FactCreatedPayload
+	ClaimCreatedPayload        = core.ClaimCreatedPayload
 	HintCreatedPayload         = core.HintCreatedPayload
 	IntentPayload              = core.IntentPayload
 	IntentAttemptPayload       = core.IntentAttemptPayload
@@ -147,10 +147,10 @@ const (
 	AgentEventSettled          = core.AgentEventSettled
 	AgentEventEnd              = core.AgentEventEnd
 	AgentEventError            = core.AgentEventError
-	FactOrigin                 = core.FactOrigin
-	FactGoal                   = core.FactGoal
-	FactFinding                = core.FactFinding
-	FactNegative               = core.FactNegative
+	ClaimOrigin                = core.ClaimOrigin
+	ClaimGoal                  = core.ClaimGoal
+	ClaimFinding               = core.ClaimFinding
+	ClaimNegative              = core.ClaimNegative
 	IntentBootstrap            = core.IntentBootstrap
 	IntentExplore              = core.IntentExplore
 	IntentOpen                 = core.IntentOpen
@@ -174,7 +174,7 @@ const (
 	EventAuthorityProgress     = core.EventAuthorityProgress
 	EventAuthorityCompleted    = core.EventAuthorityCompleted
 	EventAuthorityObserveError = core.EventAuthorityObserveError
-	EventFactCreated           = core.EventFactCreated
+	EventClaimCreated          = core.EventClaimCreated
 	EventHintCreated           = core.EventHintCreated
 	EventReasonStarted         = core.EventReasonStarted
 	EventReasonCompleted       = core.EventReasonCompleted
@@ -215,10 +215,10 @@ var (
 	NewEvent                 = core.NewEvent
 	EventSchemaVersion       = core.EventSchemaVersion
 	EventTypes               = core.EventTypes
-	ValidateFact             = core.ValidateFact
+	ValidateClaim            = core.ValidateClaim
 	ValidateIntent           = core.ValidateIntent
 	ValidateIntentTransition = core.ValidateIntentTransition
 	ValidateReasonReport     = core.ValidateReasonReport
-	ValidateExploreReport    = core.ValidateExploreReport
+	ValidateAttemptReport    = core.ValidateAttemptReport
 	ValidateDescriptor       = core.ValidateDescriptor
 )

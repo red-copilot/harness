@@ -32,7 +32,7 @@ import {
 import type { ColumnsType } from 'antd/es/table'
 import { useCallback, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { ApiError, getRun, getRunGraph, getVerdict } from '@/api/client'
+import { ApiError, getRun, getRunBoard, getVerdict } from '@/api/client'
 import type {
   EventRecord,
   LogRecord,
@@ -42,8 +42,7 @@ import type {
   VerdictRecord,
 } from '@/api/types'
 import { EmptyState } from '@/components/EmptyState'
-import { ExplorationTimeline } from '@/components/ExplorationTimeline'
-import { FactIntentGraph } from '@/components/FactIntentGraph'
+import { ClaimIntentGraph } from '@/components/ClaimIntentGraph'
 import { JsonViewer } from '@/components/JsonViewer'
 import { LogViewer } from '@/components/LogViewer'
 import { PageError } from '@/components/PageError'
@@ -63,7 +62,7 @@ import {
   totalUsage,
 } from '@/utils/format'
 import { prettyJson } from '@/utils/json'
-import { isActiveStatus, isTerminalStatus } from '@/utils/status'
+import { isActiveStatus, isTerminalStatus, runStatus } from '@/utils/status'
 
 type RunTab = 'overview' | 'exploration' | 'events' | 'logs' | 'verdict'
 
@@ -83,11 +82,11 @@ export default function RunDetailPage() {
     enabled: Boolean(runId),
     refetchInterval: (query) => {
       const data = query.state.data as RunRecord | undefined
-      return data && isTerminalStatus(data.status) ? false : 2000
+      return data && isTerminalStatus(runStatus(data)) ? false : 2000
     },
   })
   const run = runQuery.data
-  const live = run ? isActiveStatus(run.status) : false
+  const live = run ? isActiveStatus(runStatus(run)) : false
   const onFinished = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ['run', runId] })
     void queryClient.invalidateQueries({ queryKey: ['verdict', runId] })
@@ -95,7 +94,7 @@ export default function RunDetailPage() {
     void queryClient.invalidateQueries({ queryKey: ['overview'] })
     void queryClient.invalidateQueries({ queryKey: ['run-graph', runId] })
   }, [queryClient, runId])
-  const eventsState = useRunEvents(runId, paused, onFinished, Boolean(run && isTerminalStatus(run.status)))
+  const eventsState = useRunEvents(runId, paused, onFinished, Boolean(run && isTerminalStatus(runStatus(run))))
   const logsState = useRunLogs(runId, live)
   const verdictQuery = useQuery({
     queryKey: ['verdict', runId],
@@ -105,7 +104,7 @@ export default function RunDetailPage() {
   })
   const graphQuery = useQuery({
     queryKey: ['run-graph', runId],
-    queryFn: ({ signal }) => getRunGraph(runId!, signal),
+    queryFn: ({ signal }) => getRunBoard(runId!, signal),
     enabled: Boolean(runId),
     refetchInterval: live ? 2000 : false,
     retry: false,
@@ -145,7 +144,7 @@ export default function RunDetailPage() {
           <Typography.Title level={2} className="mono-text">
             {run.id}
           </Typography.Title>
-          <StatusTag status={run.status} />
+          <StatusTag status={runStatus(run)} />
           {live ? <Badge status="processing" text={t('common.live')} /> : null}
           <Button
             type="text"
@@ -177,12 +176,7 @@ export default function RunDetailPage() {
           {
             key: 'exploration',
             label: t('run.tab.exploration'),
-            children:
-              graphQuery.data && graphQuery.data.facts.length > 0 ? (
-                <FactIntentGraph graph={graphQuery.data} />
-              ) : (
-                <ExplorationTimeline events={eventsState.events} />
-              ),
+            children: graphQuery.data ? <ClaimIntentGraph graph={graphQuery.data} /> : null,
           },
           {
             key: 'events',
@@ -241,7 +235,7 @@ function RunOverview({ run, verdict }: { run: RunRecord; verdict: VerdictRecord 
             <Typography.Text code>{run.id}</Typography.Text>
           </Descriptions.Item>
           <Descriptions.Item label={t('common.status')}>
-            <StatusTag status={run.status} />
+            <StatusTag status={runStatus(run)} />
           </Descriptions.Item>
           <Descriptions.Item label={t('common.task')}>{run.spec?.task?.id ?? '—'}</Descriptions.Item>
           <Descriptions.Item label={t('common.agents')}>
@@ -265,7 +259,7 @@ function RunOverview({ run, verdict }: { run: RunRecord; verdict: VerdictRecord 
               items={[
                 { color: 'gray', content: <span>{t('common.created')} · <TimeText value={run.created_at} /></span> },
                 { color: run.started_at ? 'blue' : 'gray', content: <span>{t('common.started')} · <TimeText value={run.started_at} /></span> },
-                { color: run.status === 'succeeded' ? 'green' : run.finished_at ? 'red' : 'gray', content: <span>{t('common.finished')} · <TimeText value={run.finished_at} /></span> },
+                { color: runStatus(run) === 'succeeded' ? 'green' : run.finished_at ? 'red' : 'gray', content: <span>{t('common.finished')} · <TimeText value={run.finished_at} /></span> },
                 ...(verdict ? [{ color: verdict.success ? 'green' : 'red', content: <span>{t('common.verdict')} · {verdict.success ? t('run.verdictSuccess') : t('run.verdictFailure')}</span> }] : []),
               ]}
             />

@@ -1,4 +1,4 @@
-package engine
+package pi
 
 import (
 	"fmt"
@@ -10,7 +10,9 @@ import (
 	embedded "github.com/red-copilot/harness/skills"
 )
 
-func prepareEmbeddedSkills(dst string) error {
+// MaterializeSkills copies the pinned Pi skill catalog into a Run-owned
+// read-only mount source.
+func MaterializeSkills(dst string) error {
 	return fs.WalkDir(embedded.FS, ".", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err

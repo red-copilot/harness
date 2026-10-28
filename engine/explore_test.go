@@ -28,7 +28,7 @@ func (s *scriptedExploreSession) Prompt(ctx context.Context, prompt string) erro
 		<-ctx.Done()
 		return ctx.Err()
 	}
-	s.events <- AgentEvent{Kind: AgentEventMessage, Text: `{"intent_id":"intent-1","phase":"concluded","fact":{"kind":"negative","description":"nothing confirmed"}}`}
+	s.events <- AgentEvent{Kind: AgentEventMessage, Text: `{"intent_id":"intent-1","phase":"concluded","claim":{"kind":"negative","description":"nothing confirmed"}}`}
 	s.events <- AgentEvent{Kind: AgentEventSettled}
 	return nil
 }
@@ -88,10 +88,10 @@ func (defaultExploreTestStrategy) ExecutePrompt(ExploreRequest) (string, error) 
 func (defaultExploreTestStrategy) ConcludePrompt(ExploreRequest) (string, error) {
 	return "conclude", nil
 }
-func (defaultExploreTestStrategy) Parse(_ ExploreRequest, turn TurnResult) (ExploreReport, error) {
-	var report ExploreReport
+func (defaultExploreTestStrategy) Parse(_ ExploreRequest, turn TurnResult) (AttemptReport, error) {
+	var report AttemptReport
 	if err := json.Unmarshal([]byte(strings.TrimSpace(turn.AssistantText)), &report); err != nil {
-		return ExploreReport{}, err
+		return AttemptReport{}, err
 	}
 	if report.IntentID == "" {
 		report.IntentID = "intent-1"
@@ -109,14 +109,14 @@ func testExploreRequest() ExploreRequest {
 func TestExploreParseRequiresFindingEvidence(t *testing.T) {
 	strategy := defaultExploreStrategy{}
 	for _, body := range []string{
-		`{"intent_id":"intent-1","phase":"concluded","fact":{"kind":"finding","description":"done"}}`,
-		`{"intent_id":"intent-1","phase":"concluded","fact":{"kind":"goal","description":"done"}}`,
+		`{"intent_id":"intent-1","phase":"concluded","claim":{"kind":"finding","description":"done"}}`,
+		`{"intent_id":"intent-1","phase":"concluded","claim":{"kind":"goal","description":"done"}}`,
 	} {
 		if _, err := strategy.Parse(testExploreRequest(), TurnResult{AssistantText: body}); err == nil {
 			t.Fatalf("invalid explore report accepted: %s", body)
 		}
 	}
-	if _, err := strategy.Parse(testExploreRequest(), TurnResult{AssistantText: `{"intent_id":"intent-1","phase":"concluded","fact":{"kind":"negative","description":"nothing"}}`}); err != nil {
+	if _, err := strategy.Parse(testExploreRequest(), TurnResult{Report: []byte(`{"intent_id":"intent-1","phase":"concluded","claim":{"kind":"negative","description":"nothing"}}`)}); err != nil {
 		t.Fatalf("negative report rejected: %v", err)
 	}
 }
@@ -129,7 +129,7 @@ func TestConcludeRunsAfterExecuteTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if phase != "conclude" || report.Fact == nil || report.Fact.Kind != FactNegative {
+	if phase != "conclude" || report.Claim == nil || report.Claim.Kind != ClaimNegative {
 		t.Fatalf("phase=%q report=%+v", phase, report)
 	}
 	session.mu.Lock()
@@ -175,8 +175,8 @@ type blockingExploreStrategy struct{}
 
 func (blockingExploreStrategy) ExecutePrompt(ExploreRequest) (string, error)  { return "execute", nil }
 func (blockingExploreStrategy) ConcludePrompt(ExploreRequest) (string, error) { return "conclude", nil }
-func (blockingExploreStrategy) Parse(ExploreRequest, TurnResult) (ExploreReport, error) {
-	return ExploreReport{}, errors.New("not used")
+func (blockingExploreStrategy) Parse(ExploreRequest, TurnResult) (AttemptReport, error) {
+	return AttemptReport{}, errors.New("not used")
 }
 
 type closedEventsSession struct {
@@ -206,21 +206,17 @@ func TestConcludeDoesNotRunAfterEventStreamClose(t *testing.T) {
 	}
 }
 
-func TestExploreParserExtractsEmbeddedJSON(t *testing.T) {
+func TestExploreParserRejectsNarrativeJSON(t *testing.T) {
 	req := testExploreRequest()
-	turn := TurnResult{AssistantText: "Summary first.\n{\"intent_id\":\"intent-1\",\"phase\":\"concluded\",\"fact\":{\"kind\":\"negative\",\"description\":\"nothing\"}}\nDone."}
-	report, err := (defaultExploreStrategy{}).Parse(req, turn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if report.Fact == nil || report.Fact.Kind != FactNegative {
-		t.Fatalf("report = %+v", report)
+	turn := TurnResult{Report: []byte("Summary first.\n{\"intent_id\":\"intent-1\",\"phase\":\"concluded\",\"claim\":{\"kind\":\"negative\",\"description\":\"nothing\"}}\nDone.")}
+	if _, err := (defaultExploreStrategy{}).Parse(req, turn); err == nil {
+		t.Fatal("narrative report accepted")
 	}
 }
 
 func TestExploreParserAcceptsPromptIntentPlaceholder(t *testing.T) {
 	req := testExploreRequest()
-	turn := TurnResult{AssistantText: `{"intent_id":"INTENT_ID","phase":"concluded","fact":{"kind":"negative","description":"nothing"}}`}
+	turn := TurnResult{Report: []byte(`{"intent_id":"INTENT_ID","phase":"concluded","claim":{"kind":"negative","description":"nothing"}}`)}
 	report, err := (defaultExploreStrategy{}).Parse(req, turn)
 	if err != nil {
 		t.Fatal(err)

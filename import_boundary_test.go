@@ -73,6 +73,9 @@ func TestEngineDoesNotImportAdaptersOrSurfaces(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, imported := range paths {
+			if strings.Contains(imported, ".") && imported != modulePath+"/core" {
+				t.Fatalf("%s imports non-core dependency %q", path, imported)
+			}
 			for _, bad := range forbidden {
 				if imported == bad || strings.HasPrefix(imported, bad+"/") {
 					t.Fatalf("%s imports forbidden control surface %q", path, imported)

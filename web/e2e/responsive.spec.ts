@@ -31,13 +31,13 @@ const runs = [
     status: 'succeeded',
     created_at: '2026-10-21T09:00:00Z',
     finished_at: '2026-10-21T09:01:00Z',
-    spec: { task: { id: 'mobile-check', objective: 'Verify the responsive console' }, reasoner: { id: 'reasoner' }, executors: [{ id: 'executor-1' }, { id: 'executor-2' }] },
+    spec: { task: { id: 'mobile-check', objective: 'Verify the responsive console' }, reasoner: { id: 'reasoner' }, executor: { id: 'executor' } },
   },
   {
     id: 'run_running',
     status: 'running',
     created_at: '2026-10-21T09:03:00Z',
-    spec: { task: { id: 'live-check', objective: 'Inspect a live run' }, reasoner: { id: 'reasoner' }, executors: [{ id: 'executor-1' }, { id: 'executor-2' }] },
+    spec: { task: { id: 'live-check', objective: 'Inspect a live run' }, reasoner: { id: 'reasoner' }, executor: { id: 'executor' } },
   },
 ]
 

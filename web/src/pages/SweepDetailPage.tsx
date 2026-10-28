@@ -5,6 +5,7 @@ import { Alert, Button, Card, Descriptions, Result, Space, Table, Typography } f
 import type { ColumnsType } from 'antd/es/table'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ApiError, getSweep } from '@/api/client'
+import { runStatus } from '@/utils/status'
 import type { RunResult } from '@/api/types'
 import { EmptyState } from '@/components/EmptyState'
 import { PageError } from '@/components/PageError'
@@ -82,7 +83,7 @@ function SweepResults({ results }: { results: RunResult[] }) {
       dataIndex: 'run_id',
       render: (runId: string) => <Typography.Text code>{runId}</Typography.Text>,
     },
-    { title: t('common.status'), dataIndex: 'status', render: (status: RunResult['status']) => <StatusTag status={status} /> },
+    { title: t('common.status'), dataIndex: 'status', render: (_: unknown, result: RunResult) => <StatusTag status={runStatus(result)} /> },
     {
       title: t('common.verdict'),
       key: 'verdict',

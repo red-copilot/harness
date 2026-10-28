@@ -28,13 +28,13 @@ The client uses:
 
 Rate limits, duplicate instances and capacity errors fail closed. Live TSec/VPN tests are environment-dependent and are not part of the default unit suite.
 
-## Fact / Intent benchmark configuration
+## Claim / Intent benchmark configuration
 
-Use two Executor entries and the Fact/Intent policy:
+Use one Executor entry and the Claim/Intent v3 policy:
 
 ```yaml
 policy:
-  max_open_intents: 2
+  max_open_intents: 1
   max_total_intents: 20
   max_attempts_per_intent: 3
   max_tool_calls_per_attempt: 30
@@ -47,4 +47,4 @@ policy:
 ```
 
 `BENCHMARK_TOKEN` stays in the agent environment for the submission skill but
-is redacted from Fact, Intent, attempt, event, log and result persistence.
+is redacted from Claim, Intent, attempt, event, log and result persistence.

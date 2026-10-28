@@ -5,10 +5,12 @@
 - 研究方式：基于本仓库代码、测试与设计的静态证据
 - 历史发布基线：`main@0bbee5e`
 - v2 实现底稿：`5bbddb9`
-- 当前实现：Fact/Intent v2（schema v6）
+- 当前实现：Claim/Intent v3（schema v7）
 - 读者：Red Harness 维护者与架构师
 
-> **结论先行：** Fact/Intent v2 是唯一控制架构，并已一次性切换。`main@0bbee5e` 的单 Agent、`ExplorationState` 与 Frontier steering 已退役；Branch 树和 writable Knowledge 不保留为第二控制语义。旧 Branch/Knowledge 数据只保存在切换前的验证备份中。
+> **v3 update (2026-10-28):** The current implementation is Claim/Intent v3 with one Executor, strict `report.json`, SQLite schema v7 containing artifact bytes, and generated OpenAPI contracts. See `docs/superpowers/specs/2026-10-28-first-principles-harness-v3-design.md`. The v2 comparison below is retained as historical design evidence.
+
+> **结论先行：** Claim/Intent v3 是唯一控制架构，并已一次性切换。`main@0bbee5e` 的单 Agent、`ExplorationState` 与 Frontier steering 已退役；Branch 树和 writable Knowledge 不保留为第二控制语义。旧 Branch/Knowledge 数据只保存在切换前的验证备份中。
 
 > 本文比较的是架构，不宣称任一实现已经通过完整 Go、race、Web、Docker 或 live TSec/VPN 验证。下文列出的测试是静态阅读到的代码证据，并非本次运行结果。
 
@@ -34,19 +36,19 @@ Red Harness 的本质不是替模型思考，而是为一个不可信 Agent 建�
 | 路线 | 代表证据 | 信任与控制的根本问题 | 结论 |
 |---|---|---|---|
 | 单 Agent + Frontier steering | `main@0bbee5e`；`state.go`、`frontier.go`、`runner.go` | 一个长上下文同时承载语义状态与噪声；“投影”不能天然提供跨上下文的事实边界；生产路径没有 v2 的证据先于 Fact 机制 | 保留为已发布基线，不再演进 |
-| Branch v1/v2 | `717a05a`、`adad229` 等提交，以及已提交的 expansion/收敛设计与计划 | 能把并行分支和父子约束机械化，但“分支”容易把执行拓扑误当作认知事实；最终仍需要从执行结果中提炼可复用事实 | 可视为通往 Fact/Intent 的中间态，不作为目标架构 |
-| Fact/Intent v2 | `5bbddb9`；`core/`、`engine/`、schema v6 | 把“执行结束”与“证明了什么”分开；Fact 有 Observation/Artifact 来源；单写者按 revision 提交；成功仍只由 Verifier/backend 产生 | **选定目标架构，立即切换** |
+| Branch v1/v2 | `717a05a`、`adad229` 等提交，以及已提交的 expansion/收敛设计与计划 | 能把并行分支和父子约束机械化，但“分支”容易把执行拓扑误当作认知事实；最终仍需要从执行结果中提炼可复用事实 | 可视为通往 Claim/Intent 的中间态，不作为目标架构 |
+| Claim/Intent v3 | `5bbddb9`；`core/`、`engine/`、schema v7 | 把“执行结束”与“证明了什么”分开；Fact 有 Observation/Artifact 来源；单写者按 revision 提交；成功仍只由 Verifier/backend 产生 | **选定目标架构，立即切换** |
 
-v2 的胜出不是因为“双槽”或“blackboard”这个名称，而是因为它把不可信输入与 canonical 状态之间的转换变成了显式、可测试的协议。其核心价值是：
+v2 的胜出不是因为“单槽”或“blackboard”这个名称，而是因为它把不可信输入与 canonical 状态之间的转换变成了显式、可测试的协议。其核心价值是：
 
-- 模型只提交 Fact/Intent 提议；ID、状态转换、容量和授权由代码生成或校验。
+- 模型只提交 Claim/Intent 提议；ID、状态转换、容量和授权由代码生成或校验。
 - Finding Fact 必须引用当前 Attempt 的 Observation；Observation 必须引用已归档 Artifact。
 - 执行者只返回不可变结果；`engine` 循环是 board 状态的唯一写者。
 - `CanonicalWriter.Commit` 与 `Finalize` 把 board revision、规范化记录、历史和事件放进原子边界。
 - `RunPhase` 与 `RunOutcome` 分离，成功需要成功 verdict；失败路径不会被“看起来完成”覆盖。
 - 切换前先验证 SQLite 备份，再创建全新 v2 数据库；旧历史保留在备份中。
 
-v2 也有明确的未解成本：固定两个 Executor 是产品选择，不是自然定律；Reason/Explore/Conclude 协议复杂度上升；Reasoner 失败上限可能降低探索覆盖率；没有 checkpoint/resume；TSec `BENCHMARK_TOKEN` 仍是容器信任边界内的产品例外。静态研究不能证明这些取舍在真实 TSec 题目上总体更优。
+v2 也有明确的未解成本：固定一个 Executor 是产品选择，不是自然定律；Reason/Explore/Conclude 协议复杂度上升；Reasoner 失败上限可能降低探索覆盖率；没有 checkpoint/resume；TSec `BENCHMARK_TOKEN` 仍是容器信任边界内的产品例外。静态研究不能证明这些取舍在真实 TSec 题目上总体更优。
 
 ## 2. 证据层级与范围
 
@@ -79,7 +81,7 @@ v2 也有明确的未解成本：固定两个 Executor 是产品选择，不是�
 
 - **不可约约束**：如果违反，系统就不再满足其安全/信任目的。例如“模型输出不是成功”。
 - **派生不变量**：由约束和设计选择推出、可在代码中局部执行的规则。例如“Finding Fact 必须引用 Observation”。
-- **产品参数**：可变化且有成本的配置。例如“恰好两个 Executor”、“最多 20 个 Intent”、“board context 64 KiB”。
+- **产品参数**：可变化且有成本的配置。例如“恰好一个 Executor”、“最多 20 个 Intent”、“board context 64 KiB”。
 
 `2 个 Executor`、`20 个 Intent`、`64 KiB`、`10 分钟 Attempt` 都是产品参数，不是第一性原理。把它们称为公理会制造虚假的必然性，掩盖吞吐、覆盖率和成本的取舍。
 
@@ -116,7 +118,7 @@ v2 也有明确的未解成本：固定两个 Executor 是产品选择，不是�
 | C9 | 授权身份与运行绑定分离 | 容器名、IP、端口或 challenge 实例不能替换 Target ID |
 | C10 | 只有 Verifier 或 backend terminal completion 能建立成功 | 所有其他“完成”信号只能是观测或触发验证 |
 
-这些约束并不要求固定使用 Fact/Intent。它们只要求同一组可验证性质。Fact/Intent v2 是一种满足方式；Branch v2 也可能满足部分要求，但必须通过同样的硬门禁才能进入目标架构。
+这些约束并不要求固定使用 Claim/Intent。它们只要求同一组可验证性质。Claim/Intent v3 是一种满足方式；Branch v2 也可能满足部分要求，但必须通过同样的硬门禁才能进入目标架构。
 
 ## 4. v2 约束到代码强制点
 
@@ -168,7 +170,7 @@ prompt 可以建议模型不要伪造 Fact，却不能阻止模型输出一个�
 硬门禁问题：
 
 - 一个模型的上下文同时承载语义判断和原始工具输出，难以从结构上证明“证据先于 Fact”。
-- 没有独立的 Fact/Intent 归一化层；“已知事实”和“下一步探索”主要靠 prompt 与投影维持。
+- 没有独立的 Claim/Intent 归一化层；“已知事实”和“下一步探索”主要靠 prompt 与投影维持。
 - 并发与探索宽度没有 v2 的显式 slot/claim 协议，不能从当前代码推出同样的可复现行为。
 - 对已完成事实的追溯、跨 session 的来源和 board revision 没有 v2 那样直接的强制点。
 - 不能把 `ExplorationState` 称为 canonical 事实源；它是控制投影，不能替代 Verifier。
@@ -201,14 +203,14 @@ prompt 可以建议模型不要伪造 Fact，却不能阻止模型输出一个�
 
 结论：Branch v2 是有价值的历史中间态，适合证明并发/展开约束可以机械化，但不是最终目标。若作为长期主线，会迫使系统同时维护树语义和事实语义，增加双控制路径风险。
 
-### 5.3 `5bbddb9` Fact/Intent v2：目标架构
+### 5.3 `5bbddb9` Claim/Intent v3：目标架构
 
 证据：
 
 - `core/`：`RunDescriptor`、`RunPhase/RunOutcome`、`RunPolicy`、`Fact`、`Intent`、`Hint`、`Observation`、`Artifact`、`Verdict`、typed events。
 - `engine/ports.go`：`CanonicalWriter.Commit/Finalize`、`TargetProvisioner`、`CompletionSource`、`Verifier`、`ArtifactStore`。
 - `engine/blackboard.go` 和 `engine/blackboard_engine.go`：两槽 board、Bootstrap、Reason、Explore、Result 收敛。
-- `store/sqlite`：schema v6、board commit、Intent/Attempt version、原子 Finalize。
+- `store/sqlite`：schema v7、board commit、Intent/Attempt version、原子 Finalize。
 - 设计文档 `docs/superpowers/specs/2026-10-28-first-principles-harness-v2-design.md` 标为 Implemented，但本文仍以代码与测试为实证据。
 
 关键推导：
@@ -216,7 +218,7 @@ prompt 可以建议模型不要伪造 Fact，却不能阻止模型输出一个�
 1. **执行结束 ≠ 语义完成。** `IntentAttemptPhase` 描述 running/concluded/failed/cancelled/timed_out；Fact 描述 finding/negative。两者分离后，超时或工具结束不能被直接解释为“成功”。
 2. **Reasoner 是提议者，不是事实作者。** Reason report 只能提出 Intent 或 goal candidate；ID、容量、claim、conclusion 和来源 Fact 由 board 校验。
 3. **证据链是单向的。** `evidence file → Artifact → Observation → Fact`。Finding Fact 必须引用 Observation，Observation 必须引用当前 Attempt 的 Artifact。
-4. **并发是 slot 资源，不是树深度。** 两个固定 Executor slot 各自最多一个 active Attempt；完成一个即可补位，不需要 round barrier。
+4. **并发是 slot 资源，不是树深度。** 一个固定 Executor slot 各自最多一个 active Attempt；完成一个即可补位，不需要 round barrier。
 5. **单写者让 revision 有意义。** `boardState` 只在 engine loop 中变更；`Commit` 携带 revision，规范化记录、历史版本和事件同时提交。
 6. **成功仍然不属于 board。** `goal_candidate` 只触发 Verifier；backend terminal completion 是外部权威；`finishExecution` 再次要求成功 verdict。
 
@@ -227,7 +229,7 @@ prompt 可以建议模型不要伪造 Fact，却不能阻止模型输出一个�
 - 它把 SQLite 定位为 canonical audit，而不是可随意重建的 cache。
 - 它不声称网络 ACL；`caller_managed` 明确留给调用方。
 
-结论：Fact/Intent v2 是明确推荐的目标架构。它不是以“双槽”作为第一性原理，而是以可验证的提议、证据来源、单写者和权威裁决作为第一性原理；双槽和 blackboard 只是满足这些约束的一组产品选择。
+结论：Claim/Intent v3 是明确推荐的目标架构。它不是以“单槽”作为第一性原理，而是以可验证的提议、证据来源、单写者和权威裁决作为第一性原理；单槽和 blackboard 只是满足这些约束的一组产品选择。
 
 ## 6. 目标架构
 
@@ -265,7 +267,7 @@ Caller / CLI / HTTP / Web
 
 目标契约以 v2 为准：
 
-- `core.RunDescriptor`：`SchemaVersion=2`、`Task`、单一 `TargetSpec`、`Reasoner`、恰好两个 `Executors`、`RunPolicy`。
+- `core.RunDescriptor`：`SchemaVersion=3`、`Task`、单一 `TargetSpec`、`Reasoner`、恰好两个 `Executors`、`RunPolicy`。
 - `engine.RunSpec`：在 descriptor 之上绑定 runtime、backend、Verifier、artifact store 和 workspace。
 - `RunPhase`：`queued → provisioning → running → finalizing → verifying → terminal`。
 - `RunOutcome`：`succeeded | failed | cancelled | timed_out | stagnated | interrupted`。
@@ -301,27 +303,27 @@ Caller / CLI / HTTP / Web
 
 ### 7.1 一次性切换
 
-决策：**立即切换 Fact/Intent v2。**
+决策：**立即切换 Claim/Intent v3。**
 
 - v2 成为唯一可写控制语义。
 - `main@0bbee5e` 的 `ExplorationState`/Frontier 不再扩展，不进入新运行路径。
 - `Planner` 改名为 `Reasoner`，不再产生子节点。
-- 恰好两个 Executors；不再有 writable Branch/Knowledge 控制路径。
+- 恰好一个 Executors；不再有 writable Branch/Knowledge 控制路径。
 - 旧 Branch/Knowledge 数据不作为新的可写控制路径；生产切换后仅保存在验证备份中。
 - 不保留双写、双 CLI 配置或长期兼容层；迁移应是可审计的断代，而不是长期双路径。
 
 ### 7.2 数据库和回滚
 
-- 生产切换采用备份后重建：先验证备份的 SHA-256、大小和关键表行数，再创建全新 schema v6 数据库。
+- 生产切换采用备份后重建：先验证备份的 SHA-256、大小和关键表行数，再创建全新 schema v7 数据库。
 - 旧 Run/Event/Branch/Knowledge 不复制到新可写库；其审计留存在验证过的备份中。
-- schema v6 由 v2 二进制创建；`OpenFresh` 拒绝覆盖已有数据库或 WAL/SHM。
+- schema v7 由 v2 二进制创建；`OpenFresh` 拒绝覆盖已有数据库或 WAL/SHM。
 - 数据库升级视为单向边界：旧二进制回滚必须先恢复备份，不能继续写新 schema。
 - 新库初始化失败、备份校验失败或不支持的新 version 必须 fail closed。
 
 ### 7.3 迁移顺序
 
 1. 冻结旧控制语义；停止新增 Branch/Knowledge 写者。
-2. 准备 v2 descriptor、`harness/v2` 配置和两个 Executor。
+2. 准备 v2 descriptor、`harness/v3` 配置和一个 Executor。
 3. 备份并验证 SQLite；记录 SHA-256、大小与关键表行数，确认备份完整。
 4. 以 `OpenFresh` 创建全新 v2 库并启用 Reasoner/RunController；旧历史只从备份恢复。
 5. 观察 Reasoner 失败、slot 补位、证据归档、cleanup 和 Verifier/backend 竞争。
@@ -332,7 +334,7 @@ Caller / CLI / HTTP / Web
 
 | 风险 | 影响 | 处置 |
 |---|---|---|
-| 双槽固定并发 | 任务可能需要更多并行假设；两槽可能限制吞吐 | 视为产品参数；先测量真实任务，再决定是否扩展；不要把它写成第一性原理 |
+| 单槽固定并发 | 任务可能需要更多并行假设；两槽可能限制吞吐 | 视为产品参数；先测量真实任务，再决定是否扩展；不要把它写成第一性原理 |
 | Plan/Execute/Conclude 协议复杂 | 多阶段状态和超时增加实现/理解成本 | 用 Attempt phase、单一 engine loop 和明确 timeout 约束；保持失败关闭 |
 | Reasoner 失败上限 | 可能过早停止探索，降低覆盖率 | 记录失败事件，基于真实基线调参；不能以放宽成功权威换取覆盖率 |
 | 上下文截断 | 有界上下文会丢失长尾证据，影响模型判断 | 保留 origin/goal 与确定性排序；记录 truncation；评估 artifact 可访问性 |
@@ -341,7 +343,7 @@ Caller / CLI / HTTP / Web
 | SQLite 单向升级 | 旧二进制回滚可能无法继续写入 | 切换前验证备份；回滚恢复备份；新库不复制旧 Run |
 | 静态验证不足 | 本文发现的是代码级强制点，不证明 Docker/TSec/race 全通过 | 迁移验收阶段运行完整矩阵；Docker/live 检查只有在实际执行后才可声称通过 |
 | 模型语义质量 | 结构合法不代表推理正确；Fact 仍可能语义错误 | 只把 Fact 当后续提案的来源，不让其成为成功；用 Verifier/backend 裁定 |
-| Web/事件兼容 | 新 board 与旧 Branch 同时可读，展示可能混淆 | 旧事件只读 fallback；新 Run 只写 Fact/Intent 事件；未知事件局部忽略 |
+| Web/事件兼容 | 新 board 与旧 Branch 同时可读，展示可能混淆 | 旧事件只读 fallback；新 Run 只写 Claim/Intent 事件；未知事件局部忽略 |
 
 ## 9. 验收结论与后续
 
@@ -356,10 +358,10 @@ Caller / CLI / HTTP / Web
 
 结论：
 
-1. **Fact/Intent v2 是唯一控制架构，且已成为当前实现。**
+1. **Claim/Intent v3 是唯一控制架构，且已成为当前实现。**
 2. **`main@0bbee5e` 是发布基线，不是目标实现。**
 3. **Branch v1/v2 是重要中间态，但不是第二生产控制路径。**
 4. **已切换；旧 Branch/Knowledge 仅保留在验证备份中，不进入新可写库。**
 5. **完整 Go/race/Web/Docker/live TSec 验证必须在实施阶段实际运行后才能报告通过。**
 
-本文保留架构研究与路线比较；具体实现、schema v6、当前测试结果和迁移操作以代码、`docs/architecture.md` 与 `docs/migration-v2.md` 为准。
+本文保留架构研究与路线比较；具体实现、schema v7、当前测试结果和迁移操作以代码、`docs/architecture.md` 与 `docs/migration-v2.md` 为准。

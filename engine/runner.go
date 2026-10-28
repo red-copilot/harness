@@ -74,7 +74,7 @@ func (r *Runner) Start(ctx context.Context, spec RunSpec) (*Run, error) {
 	spec.Policy = NormalizeRunPolicy(spec.Policy)
 	// The planner and every executor hold a live session for the whole Run, so
 	// MaxSessions is enforced here rather than by prompting the model.
-	if required := 1 + len(spec.Executors); required > r.maxSessions {
+	if required := 2; required > r.maxSessions {
 		return nil, fmt.Errorf("run requires %d sessions but runner allows %d", required, r.maxSessions)
 	}
 	runID, err := randomID()
@@ -101,12 +101,12 @@ func (r *Runner) Start(ctx context.Context, spec RunSpec) (*Run, error) {
 	if workspaceRoot == "" {
 		workspaceRoot = r.workspaceRoot
 	}
-	controller := newRunController(r, runID, runCtx, cancel, filepath.Join(workspaceRoot, runID), spec.Policy.Budget, redactor)
+	controller := newRunController(r, runID, runCtx, cancel, filepath.Join(workspaceRoot, runID), spec.Policy.Budget, redactor, spec.MaterializeSkills)
 	run := newRun(controller)
 	descriptor := spec.Descriptor()
 	specJSON, _ := json.Marshal(descriptor)
 	specJSON = redactor.RedactJSON(specJSON)
-	if err := r.store.CreateRun(ctx, RunRecord{ID: runID, Phase: RunPhaseQueued, Status: StatusQueued, Spec: specJSON, CreatedAt: now}); err != nil {
+	if err := r.store.CreateRun(ctx, RunRecord{ID: runID, Phase: RunPhaseQueued, Spec: specJSON, CreatedAt: now}); err != nil {
 		r.redacting.unregister(runID)
 		return nil, fmt.Errorf("create run: %w", err)
 	}

@@ -71,7 +71,7 @@ func TestSSEDoesNotMissFinalEventWhenRunEndsDuringInitialReplay(t *testing.T) {
 		Task:      harness.Task{ID: "task", Objective: "test"},
 		Target:    harness.TargetSpec{ID: "target", Isolation: harness.IsolationCallerManaged},
 		Reasoner:  harness.AgentSpec{ID: "planner", Runtime: blockingRuntime{}},
-		Executors: []harness.AgentSpec{{ID: "exec-1", Runtime: blockingRuntime{}}, {ID: "exec-2", Runtime: blockingRuntime{}}},
+		Executor:  harness.AgentSpec{ID: "exec", Runtime: blockingRuntime{}},
 		Policy:    harness.DefaultRunPolicy(),
 		Verifier:  successVerifier{},
 		Artifacts: sqliteStore,

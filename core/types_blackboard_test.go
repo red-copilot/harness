@@ -5,25 +5,25 @@ import (
 	"time"
 )
 
-func TestFindingFactRequiresObservation(t *testing.T) {
-	fact := Fact{
-		ID: "fact-1", RunID: "run-1", TaskID: "task-1", Kind: FactFinding,
+func TestFindingClaimRequiresObservation(t *testing.T) {
+	claim := Claim{
+		ID: "claim-1", RunID: "run-1", TaskID: "task-1", Kind: ClaimFinding,
 		Description: "found an exposed service", CreatedAt: time.Now().UTC(),
 	}
-	if err := ValidateFact(fact); err == nil {
+	if err := ValidateClaim(claim); err == nil {
 		t.Fatal("finding without observation accepted")
 	}
-	fact.ObservationIDs = []string{"observation-1"}
-	if err := ValidateFact(fact); err != nil {
+	claim.ObservationIDs = []string{"observation-1"}
+	if err := ValidateClaim(claim); err != nil {
 		t.Fatalf("evidence-backed finding rejected: %v", err)
 	}
 }
 
 func TestReasonReportCannotExceedFreeSlots(t *testing.T) {
 	report := ReasonReport{Intents: []IntentProposal{
-		{From: []string{"fact-origin"}, Description: "first"},
-		{From: []string{"fact-origin"}, Description: "second"},
-		{From: []string{"fact-origin"}, Description: "third"},
+		{From: []string{"claim-origin"}, Description: "first"},
+		{From: []string{"claim-origin"}, Description: "second"},
+		{From: []string{"claim-origin"}, Description: "third"},
 	}}
 	if err := ValidateReasonReport(report, 2); err == nil {
 		t.Fatal("three intents accepted for two free slots")
@@ -36,8 +36,8 @@ func TestReasonReportCannotExceedFreeSlots(t *testing.T) {
 
 func TestReasonReportRejectsIntentsAndGoalCandidateTogether(t *testing.T) {
 	report := ReasonReport{
-		Intents:       []IntentProposal{{From: []string{"fact-1"}, Description: "explore"}},
-		GoalCandidate: &GoalCandidate{From: []string{"fact-1"}, Description: "goal"},
+		Intents:       []IntentProposal{{From: []string{"claim-1"}, Description: "explore"}},
+		GoalCandidate: &GoalCandidate{From: []string{"claim-1"}, Description: "goal"},
 	}
 	if err := ValidateReasonReport(report, 2); err == nil {
 		t.Fatal("intents and goal candidate accepted together")
@@ -69,26 +69,26 @@ func TestIntentTransitions(t *testing.T) {
 	}
 }
 
-func TestExploreReportOnlyProducesFindingOrNegative(t *testing.T) {
-	base := ExploreReport{IntentID: "intent-1", Phase: IntentAttemptConcluded}
-	for _, kind := range []FactKind{FactOrigin, FactGoal, ""} {
+func TestAttemptReportOnlyProducesFindingOrNegative(t *testing.T) {
+	base := AttemptReport{IntentID: "intent-1", Phase: IntentAttemptConcluded}
+	for _, kind := range []ClaimKind{ClaimOrigin, ClaimGoal, ""} {
 		report := base
-		report.Fact = &FactProposal{Kind: kind, Description: "result"}
-		if err := ValidateExploreReport(report); err == nil {
-			t.Fatalf("explore fact kind %q accepted", kind)
+		report.Claim = &ClaimProposal{Kind: kind, Description: "result"}
+		if err := ValidateAttemptReport(report); err == nil {
+			t.Fatalf("explore claim kind %q accepted", kind)
 		}
 	}
-	base.Fact = &FactProposal{Kind: FactFinding, Description: "result"}
-	if err := ValidateExploreReport(base); err == nil {
-		t.Fatal("finding fact without observation refs accepted")
+	base.Claim = &ClaimProposal{Kind: ClaimFinding, Description: "result"}
+	if err := ValidateAttemptReport(base); err == nil {
+		t.Fatal("finding claim without observation refs accepted")
 	}
-	base.Fact.ObservationRefs = []string{"obs-1"}
-	if err := ValidateExploreReport(base); err != nil {
+	base.Claim.ObservationRefs = []string{"obs-1"}
+	if err := ValidateAttemptReport(base); err != nil {
 		t.Fatalf("evidence-backed finding rejected: %v", err)
 	}
-	base.Fact = &FactProposal{Kind: FactNegative, Description: "nothing found"}
-	if err := ValidateExploreReport(base); err != nil {
-		t.Fatalf("negative fact rejected: %v", err)
+	base.Claim = &ClaimProposal{Kind: ClaimNegative, Description: "nothing found"}
+	if err := ValidateAttemptReport(base); err != nil {
+		t.Fatalf("negative claim rejected: %v", err)
 	}
 }
 

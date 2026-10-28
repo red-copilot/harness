@@ -20,21 +20,18 @@ func (v *recordingVerifier) Verify(context.Context, harness.VerifyRequest) (harn
 	return harness.Verdict{Success: true}, nil
 }
 
-type twoSlotReasonStrategy struct {
+type singleReasonStrategy struct {
 	mu    sync.Mutex
 	calls int
 }
 
-func (s *twoSlotReasonStrategy) Prompt(harness.ReasonRequest) (string, error) { return "reason", nil }
-func (s *twoSlotReasonStrategy) Parse(req harness.ReasonRequest, _ harness.TurnResult) (harness.ReasonReport, error) {
+func (s *singleReasonStrategy) Prompt(harness.ReasonRequest) (string, error) { return "reason", nil }
+func (s *singleReasonStrategy) Parse(req harness.ReasonRequest, _ harness.TurnResult) (harness.ReasonReport, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
 	if s.calls == 1 {
-		return harness.ReasonReport{FrontierVersion: req.FrontierVersion, Intents: []harness.IntentProposal{
-			{From: []string{"origin"}, Description: "first"},
-			{From: []string{"origin"}, Description: "second"},
-		}}, nil
+		return harness.ReasonReport{FrontierVersion: req.FrontierVersion, Intents: []harness.IntentProposal{{From: []string{"origin"}, Description: "first"}}}, nil
 	}
 	return harness.ReasonReport{FrontierVersion: req.FrontierVersion}, nil
 }
@@ -43,37 +40,35 @@ func TestBlackboardEngineRunsBootstrapReasonAndTwoSettledSlots(t *testing.T) {
 	store := newMemoryStore()
 	spec := integrationSpec(t, store)
 	spec.Verifier = fakeVerifier{verdict: harness.Verdict{Success: true, Message: "verified"}}
-	spec.ReasonStrategy = &twoSlotReasonStrategy{}
-	spec.Executors[0].ID = "executor-1"
-	spec.Executors[1].ID = "executor-2"
-	spec.Policy.Exploration.MaxOpenIntents = 2
+	spec.ReasonStrategy = &singleReasonStrategy{}
+	spec.Executor.ID = "executor-1"
+	spec.Policy.Exploration.MaxOpenIntents = 1
 	spec.Policy.Exploration.MaxTotalIntents = 4
 	spec.Policy.Exploration.MaxAttemptsPerIntent = 1
 	spec.Policy.Exploration.StagnationRounds = 1
 	spec.Policy.Exploration.MaxWallTimePerAttempt = time.Second
 	spec.Policy.Exploration.ConcludeTimeout = 100 * time.Millisecond
-	planner := &fakeRuntime{new: func(harness.RuntimeRequest) harness.AgentSession {
-		return promptSession("reason")
+	planner := &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
+		return promptReportSession(req.WorkspaceDir, `{"frontier_version":1,"intents":[{"from":["origin"],"description":"probe"}]}`)
 	}}
-	executor := &fakeRuntime{new: func(harness.RuntimeRequest) harness.AgentSession {
-		return promptSession(`{"phase":"concluded","fact":{"kind":"negative","description":"test"}}`)
+	executor := &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
+		return promptReportSession(req.WorkspaceDir, `{"phase":"concluded","claim":{"kind":"negative","description":"test"}}`)
 	}}
 	spec.Reasoner.Runtime = planner
-	spec.Executors[0].Runtime = executor
-	spec.Executors[1].Runtime = executor
+	spec.Executor.Runtime = executor
 
 	result, err := newTestRunner(t, store).Run(context.Background(), spec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Facts) < 4 {
-		t.Fatalf("facts = %+v intents=%+v attempts=%+v, want bootstrap plus two slot conclusions", result.Facts, result.Intents, result.IntentAttempts)
+	if len(result.Claims) < 2 {
+		t.Fatalf("claims = %+v intents=%+v attempts=%+v, want bootstrap plus one concluded intent", result.Claims, result.Intents, result.IntentAttempts)
 	}
-	if len(result.Intents) < 3 {
-		t.Fatalf("intents = %+v, want bootstrap plus two admitted intents", result.Intents)
+	if len(result.Intents) < 2 {
+		t.Fatalf("intents = %+v, want bootstrap plus one admitted intent", result.Intents)
 	}
-	if len(result.IntentAttempts) < 3 {
-		t.Fatalf("attempts = %+v, want bootstrap plus two slot attempts", result.IntentAttempts)
+	if len(result.IntentAttempts) < 2 {
+		t.Fatalf("attempts = %+v, want bootstrap plus one attempt", result.IntentAttempts)
 	}
 }
 
@@ -82,18 +77,17 @@ func TestBlackboardEngineSkipsBootstrapWhenDisabled(t *testing.T) {
 	spec := integrationSpec(t, store)
 	disabled := false
 	spec.Policy.Exploration.BootstrapEnabled = &disabled
-	spec.Policy.Exploration.MaxOpenIntents = 2
+	spec.Policy.Exploration.MaxOpenIntents = 1
 	spec.Policy.Exploration.MaxAttemptsPerIntent = 1
 	spec.Policy.Exploration.StagnationRounds = 1
-	spec.ReasonStrategy = &twoSlotReasonStrategy{}
-	spec.Reasoner.Runtime = &fakeRuntime{new: func(harness.RuntimeRequest) harness.AgentSession {
-		return promptSession("reason")
+	spec.ReasonStrategy = &singleReasonStrategy{}
+	spec.Reasoner.Runtime = &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
+		return promptReportSession(req.WorkspaceDir, `{"frontier_version":1,"intents":[{"from":["origin"],"description":"probe"}]}`)
 	}}
-	executor := &fakeRuntime{new: func(harness.RuntimeRequest) harness.AgentSession {
-		return promptSession(`{"phase":"concluded","fact":{"kind":"negative","description":"explored"}}`)
+	executor := &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
+		return promptReportSession(req.WorkspaceDir, `{"phase":"concluded","claim":{"kind":"negative","description":"explored"}}`)
 	}}
-	spec.Executors[0].Runtime = executor
-	spec.Executors[1].Runtime = executor
+	spec.Executor.Runtime = executor
 
 	result, err := newTestRunner(t, store).Run(context.Background(), spec)
 	if err != nil {
@@ -114,16 +108,18 @@ func TestBlackboardEngineStopsAtMaxAttemptsPerIntent(t *testing.T) {
 	spec := integrationSpec(t, store)
 	spec.Verifier = fakeVerifier{verdict: harness.Verdict{Success: false}}
 	spec.ReasonStrategy = noIntentReasonStrategy{}
-	spec.Executors[0].ID = "executor-1"
-	spec.Executors[1].ID = "executor-2"
+	spec.Executor.ID = "executor-1"
 	spec.Policy.Exploration.MaxAttemptsPerIntent = 2
 	spec.Policy.Exploration.StagnationRounds = 1
 	spec.Policy.Exploration.MaxWallTimePerAttempt = time.Second
 	spec.Policy.Exploration.ConcludeTimeout = 100 * time.Millisecond
-	spec.Reasoner.Runtime = &fakeRuntime{new: func(harness.RuntimeRequest) harness.AgentSession { return promptSession("reason") }}
-	executor := &fakeRuntime{new: func(harness.RuntimeRequest) harness.AgentSession { return promptSession("not json") }}
-	spec.Executors[0].Runtime = executor
-	spec.Executors[1].Runtime = executor
+	spec.Reasoner.Runtime = &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
+		return promptReportSession(req.WorkspaceDir, `{"frontier_version":1,"intents":[]}`)
+	}}
+	executor := &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
+		return promptReportSession(req.WorkspaceDir, "not json")
+	}}
+	spec.Executor.Runtime = executor
 	result, err := newTestRunner(t, store).Run(context.Background(), spec)
 	if err != nil {
 		t.Fatal(err)
@@ -141,17 +137,19 @@ func TestBlackboardEngineStopsOnEvidenceValidationFailure(t *testing.T) {
 	spec := integrationSpec(t, store)
 	spec.Verifier = fakeVerifier{verdict: harness.Verdict{Success: false}}
 	spec.ReasonStrategy = noIntentReasonStrategy{}
-	spec.Executors[0].ID = "executor-1"
-	spec.Executors[1].ID = "executor-2"
+	spec.Executor.ID = "executor-1"
 	spec.Policy.Exploration.MaxAttemptsPerIntent = 2
 	spec.Policy.Exploration.StagnationRounds = 1
 	spec.Policy.Exploration.MaxWallTimePerAttempt = time.Second
 	spec.Policy.Exploration.ConcludeTimeout = 100 * time.Millisecond
-	spec.Reasoner.Runtime = &fakeRuntime{new: func(harness.RuntimeRequest) harness.AgentSession { return promptSession("reason") }}
-	bad := `{"phase":"concluded","fact":{"kind":"finding","description":"found","observation_refs":["obs-1"]},"observations":[{"local_id":"obs-1","kind":"test","summary":"result","target":"TARGET_ID","evidence_files":["proof.txt"]}]}`
-	executor := &fakeRuntime{new: func(harness.RuntimeRequest) harness.AgentSession { return promptSession(bad) }}
-	spec.Executors[0].Runtime = executor
-	spec.Executors[1].Runtime = executor
+	spec.Reasoner.Runtime = &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
+		return promptReportSession(req.WorkspaceDir, `{"frontier_version":1,"intents":[]}`)
+	}}
+	bad := `{"phase":"concluded","claim":{"kind":"finding","description":"found","observation_refs":["obs-1"]},"observations":[{"local_id":"obs-1","kind":"test","summary":"result","target":"TARGET_ID","evidence_files":["proof.txt"]}]}`
+	executor := &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
+		return promptReportSession(req.WorkspaceDir, bad)
+	}}
+	spec.Executor.Runtime = executor
 	result, err := newTestRunner(t, store).Run(context.Background(), spec)
 	if err != nil {
 		t.Fatal(err)
@@ -172,18 +170,17 @@ func TestArtifactStoreFailureTerminatesRunWithoutVerification(t *testing.T) {
 	verifier := &recordingVerifier{}
 	spec.Verifier = verifier
 	spec.ReasonStrategy = noIntentReasonStrategy{}
-	spec.Reasoner.Runtime = &fakeRuntime{new: func(harness.RuntimeRequest) harness.AgentSession {
-		return promptSession("reason")
+	spec.Reasoner.Runtime = &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
+		return promptReportSession(req.WorkspaceDir, `{"frontier_version":1,"intents":[{"from":["origin"],"description":"probe"}]}`)
 	}}
-	finding := `{"phase":"concluded","fact":{"kind":"finding","description":"confirmed","observation_refs":["obs-1"]},"observations":[{"local_id":"obs-1","kind":"test","summary":"result","target":"target-1","evidence_files":["proof.txt"]}]}`
+	finding := `{"phase":"concluded","claim":{"kind":"finding","description":"confirmed","observation_refs":["obs-1"]},"observations":[{"local_id":"obs-1","kind":"test","summary":"result","target":"target-1","evidence_files":["proof.txt"]}]}`
 	executor := &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
 		if err := os.WriteFile(filepath.Join(req.WorkspaceDir, "proof.txt"), []byte("proof"), 0o600); err != nil {
 			t.Errorf("write evidence: %v", err)
 		}
-		return promptSession(finding)
+		return promptReportSession(req.WorkspaceDir, finding)
 	}}
-	spec.Executors[0].Runtime = executor
-	spec.Executors[1].Runtime = executor
+	spec.Executor.Runtime = executor
 
 	result, err := newTestRunner(t, store).Run(context.Background(), spec)
 	if err == nil || !strings.Contains(err.Error(), "artifact store") {

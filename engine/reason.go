@@ -1,14 +1,13 @@
 package engine
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 )
 
 const (
-	maxReasonFacts = 64
-	maxReasonHints = 16
+	maxReasonClaims = 64
+	maxReasonHints  = 16
 )
 
 type defaultReasonStrategy struct{}
@@ -18,12 +17,8 @@ func (defaultReasonStrategy) Prompt(req ReasonRequest) (string, error) {
 }
 
 func (defaultReasonStrategy) Parse(req ReasonRequest, turn TurnResult) (ReasonReport, error) {
-	trimmed := stripCodeFence(turn.AssistantText)
-	if strings.TrimSpace(trimmed) == "" {
-		return ReasonReport{}, fmt.Errorf("reason returned no JSON")
-	}
 	var report ReasonReport
-	if err := json.Unmarshal([]byte(extractJSONObject(trimmed)), &report); err != nil {
+	if err := decodeReport(turn.Report, &report); err != nil {
 		return ReasonReport{}, fmt.Errorf("parse reason report: %w", err)
 	}
 	if report.FrontierVersion == 0 {
@@ -40,7 +35,7 @@ func buildReasonContext(snapshot boardSnapshot, target TargetBinding, hints []Hi
 	if len(hints) == 0 {
 		hints = snapshot.Hints
 	}
-	facts := boundedFactsWithPolicy(snapshot.Facts, policy)
+	claims := boundedClaimsWithPolicy(snapshot.Claims, policy)
 	intents := make([]Intent, 0, 2)
 	for _, intent := range snapshot.Intents {
 		if intent.State == IntentOpen || intent.State == IntentClaimed {
@@ -54,54 +49,54 @@ func buildReasonContext(snapshot boardSnapshot, target TargetBinding, hints []Hi
 	return ReasonRequest{
 		Task:            snapshot.Task,
 		Target:          target,
-		Facts:           facts,
+		Claims:          claims,
 		Intents:         intents,
 		Hints:           append([]Hint(nil), hints...),
 		FreeSlots:       append([]int(nil), freeSlots...),
 		FrontierVersion: snapshot.FrontierVersion,
-		RecentFacts:     recentFacts(facts, 8),
+		RecentClaims:    recentClaims(claims, 8),
 		Policy:          policy,
 	}
 }
 
-func boundedFacts(facts []Fact, limit int) []Fact {
-	if limit <= 0 || len(facts) <= limit {
-		return cloneFacts(facts)
+func boundedClaims(claims []Claim, limit int) []Claim {
+	if limit <= 0 || len(claims) <= limit {
+		return cloneClaims(claims)
 	}
-	out := make([]Fact, 0, limit)
-	for _, fact := range facts {
-		if fact.Kind == FactOrigin || fact.Kind == FactGoal {
-			out = append(out, fact)
+	out := make([]Claim, 0, limit)
+	for _, claim := range claims {
+		if claim.Kind == ClaimOrigin || claim.Kind == ClaimGoal {
+			out = append(out, claim)
 		}
 	}
-	for _, fact := range facts {
+	for _, claim := range claims {
 		if len(out) >= limit {
 			break
 		}
-		if fact.Kind == FactOrigin || fact.Kind == FactGoal {
+		if claim.Kind == ClaimOrigin || claim.Kind == ClaimGoal {
 			continue
 		}
-		out = append(out, fact)
+		out = append(out, claim)
 	}
-	return cloneFacts(out)
+	return cloneClaims(out)
 }
 
-func boundedFactsWithPolicy(facts []Fact, policy RunPolicy) []Fact {
+func boundedClaimsWithPolicy(claims []Claim, policy RunPolicy) []Claim {
 	limit := policy.Context.MaxBoardItems
-	if limit <= 0 || limit > maxReasonFacts {
-		limit = maxReasonFacts
+	if limit <= 0 || limit > maxReasonClaims {
+		limit = maxReasonClaims
 	}
-	base := boundedFacts(facts, limit)
-	out := make([]Fact, 0, len(base))
+	base := boundedClaims(claims, limit)
+	out := make([]Claim, 0, len(base))
 	var used int64
-	for _, fact := range base {
-		fact.Description = truncateUTF8(fact.Description, policy.Context.MaxFactBytes)
-		cost := int64(len(fact.Description) + len(fact.ID) + 32)
+	for _, claim := range base {
+		claim.Description = truncateUTF8(claim.Description, policy.Context.MaxClaimBytes)
+		cost := int64(len(claim.Description) + len(claim.ID) + 32)
 		if len(out) >= 2 && policy.Context.MaxBoardBytes > 0 && used+cost > policy.Context.MaxBoardBytes {
 			continue
 		}
 		used += cost
-		out = append(out, fact)
+		out = append(out, claim)
 	}
 	return out
 }
@@ -118,17 +113,17 @@ func boundedHints(hints []Hint, policy RunPolicy) []Hint {
 	return out
 }
 
-func recentFacts(facts []Fact, limit int) []Fact {
-	if limit <= 0 || len(facts) <= limit {
-		return cloneFacts(facts)
+func recentClaims(claims []Claim, limit int) []Claim {
+	if limit <= 0 || len(claims) <= limit {
+		return cloneClaims(claims)
 	}
-	return cloneFacts(facts[len(facts)-limit:])
+	return cloneClaims(claims[len(claims)-limit:])
 }
 
 func reasonPrompt(req ReasonRequest) string {
 	var out strings.Builder
 	out.WriteString("You are the Reason task for an authorized security run.\n")
-	out.WriteString("Read the Fact/Intent graph and choose the next exploration Intents.\n")
+	out.WriteString("Read the Claim/Intent graph and choose the next exploration Intents.\n")
 	fmt.Fprintf(&out, "Objective: %s\nTarget: id=%s addresses=%s\n", req.Task.Objective, req.Target.TargetID, strings.Join(req.Target.Addresses, ","))
 	fmt.Fprintf(&out, "Frontier version: %d\n", req.FrontierVersion)
 	fmt.Fprintf(&out, "Free slots: %s\n", formatSlotList(req.FreeSlots))
@@ -136,9 +131,9 @@ func reasonPrompt(req ReasonRequest) string {
 	if req.Progress.Total > 0 {
 		fmt.Fprintf(&out, "Authoritative progress: %d/%d\n", req.Progress.Progress, req.Progress.Total)
 	}
-	out.WriteString("Facts:\n")
-	for _, fact := range req.Facts {
-		fmt.Fprintf(&out, "- id=%s kind=%s description=%s\n", fact.ID, fact.Kind, truncateUTF8(fact.Description, 1024))
+	out.WriteString("Claims:\n")
+	for _, claim := range req.Claims {
+		fmt.Fprintf(&out, "- id=%s kind=%s description=%s\n", claim.ID, claim.Kind, truncateUTF8(claim.Description, 1024))
 	}
 	out.WriteString("Open or claimed Intents:\n")
 	for _, intent := range req.Intents {
@@ -150,7 +145,7 @@ func reasonPrompt(req ReasonRequest) string {
 	}
 	out.WriteString(`Return exactly one JSON object and nothing else. Do not mark the Run successful; only the Verifier or backend completion may do that. A goal_candidate only requests verification.
 Example: {"frontier_version":1,"intents":[{"from":["origin"],"description":"one bounded exploration direction"}]}
-If the facts appear sufficient, return {"frontier_version":1,"goal_candidate":{"from":["fact-id"],"description":"why the evidence may satisfy the goal"}}.
+If the claims appear sufficient, return {"frontier_version":1,"goal_candidate":{"from":["claim-id"],"description":"why the evidence may satisfy the goal"}}.
 Do not create more Intents than free slots, do not create child nodes, and do not repeat an existing open Intent.`)
 	return out.String()
 }

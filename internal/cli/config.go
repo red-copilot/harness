@@ -99,7 +99,7 @@ type FileConfig struct {
 	Task          harness.Task     `json:"task" yaml:"task"`
 	Target        TargetFileConfig `json:"target" yaml:"target"`
 	Reasoner      AgentFileSpec    `json:"reasoner" yaml:"reasoner"`
-	Executors     []AgentFileSpec  `json:"executors" yaml:"executors"`
+	Executor      AgentFileSpec    `json:"executor" yaml:"executor"`
 	Policy        PolicyFile       `json:"policy,omitempty" yaml:"policy,omitempty"`
 	Budget        BudgetFile       `json:"budget,omitempty" yaml:"budget,omitempty"`
 	SecretEnv     []string         `json:"secret_env,omitempty" yaml:"secret_env,omitempty"`
@@ -129,9 +129,9 @@ func LoadConfig(path string) (*FileConfig, error) {
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
 	if cfg.APIVersion == "" {
-		cfg.APIVersion = "harness/v2"
+		cfg.APIVersion = "harness/v3"
 	}
-	if cfg.APIVersion != "harness/v2" {
+	if cfg.APIVersion != "harness/v3" {
 		return nil, fmt.Errorf("unsupported apiVersion %q", cfg.APIVersion)
 	}
 	if cfg.Target.Isolation == "" {
@@ -151,26 +151,23 @@ func LoadConfig(path string) (*FileConfig, error) {
 	return &cfg, nil
 }
 
-// Descriptor projects the serializable v2 Run contract. Adapter instances are
+// Descriptor projects the serializable v3 Run contract. Adapter instances are
 // deliberately absent and are composed only by ToRunSpec at the deployment edge.
 func (c *FileConfig) Descriptor() (harness.RunDescriptor, error) {
 	reasoner, err := c.Reasoner.descriptor()
 	if err != nil {
 		return harness.RunDescriptor{}, fmt.Errorf("reasoner: %w", err)
 	}
-	executors := make([]harness.AgentDescriptor, len(c.Executors))
-	for i := range c.Executors {
-		executors[i], err = c.Executors[i].descriptor()
-		if err != nil {
-			return harness.RunDescriptor{}, fmt.Errorf("executor %d: %w", i, err)
-		}
+	executor, err := c.Executor.descriptor()
+	if err != nil {
+		return harness.RunDescriptor{}, fmt.Errorf("executor: %w", err)
 	}
 	return harness.RunDescriptor{
 		SchemaVersion: harness.CurrentSchemaVersion,
 		Task:          c.Task,
 		Target:        harness.TargetSpec{ID: c.Target.ID, Addresses: append([]string(nil), c.Target.Addresses...), Isolation: harness.IsolationMode(c.Target.Isolation)},
 		Reasoner:      reasoner,
-		Executors:     executors,
+		Executor:      executor,
 		Policy:        c.Policy.toRunPolicy(),
 	}, nil
 }
@@ -183,10 +180,7 @@ func (c *FileConfig) ToRunSpec(artifacts harness.ArtifactStore) (harness.RunSpec
 	target := harness.TargetSpec{ID: c.Target.ID, Addresses: append([]string(nil), c.Target.Addresses...), Isolation: harness.IsolationMode(c.Target.Isolation)}
 	policy := c.Policy.toRunPolicy()
 	policy.Budget = harness.Budget{WallTime: time.Duration(c.Budget.WallTimeSeconds) * time.Second, MaxTokens: c.Budget.MaxTokens, MaxModelCalls: c.Budget.MaxModelCalls, MaxToolCalls: c.Budget.MaxToolCalls, MaxCostUSD: c.Budget.MaxCostUSD}
-	spec := harness.RunSpec{Task: c.Task, Target: target, Policy: policy, Artifacts: artifacts, SecretEnv: append([]string(nil), c.SecretEnv...), WorkspaceRoot: c.WorkspaceRoot}
-	if len(c.Executors) != 2 {
-		return harness.RunSpec{}, errors.New("exactly 2 executors are required")
-	}
+	spec := harness.RunSpec{Task: c.Task, Target: target, Policy: policy, Artifacts: artifacts, SecretEnv: append([]string(nil), c.SecretEnv...), WorkspaceRoot: c.WorkspaceRoot, MaterializeSkills: pi.MaterializeSkills}
 	var err error
 	reasoner, convertErr := c.Reasoner.toHarness()
 	if convertErr != nil {
@@ -196,17 +190,15 @@ func (c *FileConfig) ToRunSpec(artifacts harness.ArtifactStore) (harness.RunSpec
 	if err != nil {
 		return harness.RunSpec{}, fmt.Errorf("reasoner: %w", err)
 	}
-	for i := range c.Executors {
-		executor, convertErr := c.Executors[i].toHarness()
-		if convertErr != nil {
-			return harness.RunSpec{}, fmt.Errorf("executor %d: %w", i, convertErr)
-		}
-		executor, err = composeAgent(executor)
-		if err != nil {
-			return harness.RunSpec{}, fmt.Errorf("executor %d: %w", i, err)
-		}
-		spec.Executors = append(spec.Executors, executor)
+	executor, convertErr := c.Executor.toHarness()
+	if convertErr != nil {
+		return harness.RunSpec{}, fmt.Errorf("executor: %w", convertErr)
 	}
+	executor, err = composeAgent(executor)
+	if err != nil {
+		return harness.RunSpec{}, fmt.Errorf("executor: %w", err)
+	}
+	spec.Executor = executor
 	switch c.Target.Kind {
 	case "", "external":
 	case "image":
@@ -241,9 +233,7 @@ func (c *FileConfig) ToRunSpec(artifacts harness.ArtifactStore) (harness.RunSpec
 		spec.Backend = backend
 		spec.KnownSecrets = appendUniqueString(spec.KnownSecrets, token)
 		spec.SecretEnv = appendUniqueString(spec.SecretEnv, c.TSec.TokenEnv)
-		for i := range spec.Executors {
-			spec.Executors[i].EnvFrom = appendUniqueString(spec.Executors[i].EnvFrom, c.TSec.BaseURLEnv, c.TSec.TokenEnv)
-		}
+		spec.Executor.EnvFrom = appendUniqueString(spec.Executor.EnvFrom, c.TSec.BaseURLEnv, c.TSec.TokenEnv)
 	default:
 		return harness.RunSpec{}, fmt.Errorf("unsupported target kind %q", c.Target.Kind)
 	}

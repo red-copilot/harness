@@ -42,7 +42,7 @@ func TestCreateBackupAndVerifyManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := source.CreateRun(context.Background(), harness.RunRecord{ID: "legacy-run", Phase: harness.RunPhaseQueued, Status: harness.StatusQueued, CreatedAt: time.Now().UTC()}); err != nil {
+	if err := source.CreateRun(context.Background(), harness.RunRecord{ID: "legacy-run", Phase: harness.RunPhaseQueued, CreatedAt: time.Now().UTC()}); err != nil {
 		t.Fatal(err)
 	}
 	if err := source.Close(); err != nil {
@@ -124,8 +124,8 @@ func TestInitializeFreshFromVerifiedBackup(t *testing.T) {
 	if err := store.db.QueryRow(`SELECT version FROM schema_meta`).Scan(&gotVersion); err != nil {
 		t.Fatal(err)
 	}
-	if gotVersion != 6 {
-		t.Fatalf("version=%d want 6", gotVersion)
+	if gotVersion != 7 {
+		t.Fatalf("version=%d want 7", gotVersion)
 	}
 	var runs int
 	if err := store.db.QueryRow(`SELECT COUNT(*) FROM runs`).Scan(&runs); err != nil {

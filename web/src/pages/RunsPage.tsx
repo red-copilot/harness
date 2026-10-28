@@ -6,6 +6,7 @@ import { useMemo, useState } from 'react'
 import { getRuns } from '@/api/client'
 import { RUN_STATUSES } from '@/api/types'
 import type { RunRecord, RunStatus } from '@/api/types'
+import { runStatus } from '@/utils/status'
 import { EmptyState } from '@/components/EmptyState'
 import { PageError } from '@/components/PageError'
 import { PageHeader } from '@/components/PageHeader'
@@ -83,7 +84,7 @@ export default function RunsPage() {
 function filterRuns(runs: RunRecord[], statuses: RunStatus[], search: string): RunRecord[] {
   const needle = search.trim().toLowerCase()
   return runs.filter((run) => {
-    if (statuses.length > 0 && !statuses.includes(run.status)) return false
+    if (statuses.length > 0 && !statuses.includes(runStatus(run))) return false
     if (!needle) return true
     const haystack = [
       run.id,

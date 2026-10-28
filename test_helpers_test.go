@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -21,7 +23,7 @@ type memoryStore struct {
 	events               []harness.Event
 	logs                 []harness.LogRecord
 	verdicts             map[string]harness.VerdictRecord
-	facts                []harness.Fact
+	claims               []harness.Claim
 	intents              []harness.Intent
 	hints                []harness.Hint
 	intentAttempts       []harness.IntentAttempt
@@ -41,21 +43,21 @@ func (s *memoryStore) CreateRun(_ context.Context, record harness.RunRecord) err
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.runs[record.ID] = record
-	s.statusLog = append(s.statusLog, record.Status)
+	s.statusLog = append(s.statusLog, harness.StatusForRunState(record.Phase, record.Outcome))
 	return nil
 }
 func (s *memoryStore) UpdateRun(_ context.Context, record harness.RunRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.runs[record.ID] = record
-	s.statusLog = append(s.statusLog, record.Status)
+	s.statusLog = append(s.statusLog, harness.StatusForRunState(record.Phase, record.Outcome))
 	return nil
 }
 func (s *memoryStore) Finalize(_ context.Context, record harness.FinalizationRecord) (harness.Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.runs[record.Run.ID] = record.Run
-	s.statusLog = append(s.statusLog, record.Run.Status)
+	s.statusLog = append(s.statusLog, harness.StatusForRunState(record.Run.Phase, record.Run.Outcome))
 	if record.Verdict != nil {
 		s.verdicts[record.Verdict.RunID] = *record.Verdict
 	}
@@ -132,7 +134,7 @@ func (s *memoryStore) Commit(_ context.Context, commit harness.Commit) ([]harnes
 	if commit.Revision > s.boardRevision {
 		s.boardRevision = commit.Revision
 	}
-	s.facts = append(s.facts, commit.Facts...)
+	s.claims = append(s.claims, commit.Claims...)
 	for _, intent := range commit.Intents {
 		replaced := false
 		for i := range s.intents {
@@ -167,19 +169,19 @@ func (s *memoryStore) Commit(_ context.Context, commit harness.Commit) ([]harnes
 	return append([]harness.Event(nil), commit.Events...), nil
 }
 
-func (s *memoryStore) SaveFact(_ context.Context, fact harness.Fact) error {
+func (s *memoryStore) SaveClaim(_ context.Context, claim harness.Claim) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.facts = append(s.facts, fact)
+	s.claims = append(s.claims, claim)
 	return nil
 }
-func (s *memoryStore) ListFacts(_ context.Context, runID string) ([]harness.Fact, error) {
+func (s *memoryStore) ListClaims(_ context.Context, runID string) ([]harness.Claim, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var out []harness.Fact
-	for _, fact := range s.facts {
-		if fact.RunID == runID {
-			out = append(out, fact)
+	var out []harness.Claim
+	for _, claim := range s.claims {
+		if claim.RunID == runID {
+			out = append(out, claim)
 		}
 	}
 	return out, nil
@@ -270,6 +272,10 @@ func (s *memoryStore) SaveArtifact(_ context.Context, artifact harness.Artifact)
 	s.artifacts = append(s.artifacts, artifact)
 	return nil
 }
+func (s *memoryStore) OpenArtifact(context.Context, string) (io.ReadCloser, error) {
+	return io.NopCloser(bytes.NewReader(nil)), nil
+}
+
 func (s *memoryStore) ListArtifacts(_ context.Context, runID string) ([]harness.Artifact, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -363,13 +369,34 @@ func promptSession(text string) *fakeSession {
 	return s
 }
 
+func promptReportSession(workspace, report string) *fakeSession {
+	s := promptSession("")
+	s.prompt = func(ctx context.Context, _ string) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if err := os.MkdirAll(workspace, 0o700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(workspace, "report.json"), []byte(report), 0o600); err != nil {
+			return err
+		}
+		s.events <- harness.AgentEvent{Kind: harness.AgentEventMessage, Text: "report written"}
+		s.events <- harness.AgentEvent{Kind: harness.AgentEventSettled}
+		return nil
+	}
+	return s
+}
+
 func integrationSpec(t *testing.T, store harness.Store) harness.RunSpec {
 	t.Helper()
-	reasonerRuntime := &fakeRuntime{new: func(harness.RuntimeRequest) harness.AgentSession {
-		return promptSession(`{"frontier_version":1,"intents":[{"from":["origin"],"description":"probe"}]}`)
+	reasonerRuntime := &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
+		return promptReportSession(req.WorkspaceDir, `{"frontier_version":1,"intents":[{"from":["origin"],"description":"probe"}]}`)
 	}}
-	executorRuntime := &fakeRuntime{new: func(harness.RuntimeRequest) harness.AgentSession {
-		return promptSession(`{"phase":"concluded","fact":{"kind":"negative","description":"no signal"}}`)
+	executorRuntime := &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
+		return promptReportSession(req.WorkspaceDir, `{"phase":"concluded","claim":{"kind":"negative","description":"no signal"}}`)
 	}}
 	policy := harness.DefaultRunPolicy()
 	policy.Exploration.MaxAttemptsPerIntent = 1
@@ -379,13 +406,10 @@ func integrationSpec(t *testing.T, store harness.Store) harness.RunSpec {
 	policy.Exploration.MaxReasonerWallTime = 250 * time.Millisecond
 	policy.Exploration.MaxReasonerFailures = 1
 	return harness.RunSpec{
-		Task:     harness.Task{ID: "task-1", Objective: "test the authorized target"},
-		Target:   harness.TargetSpec{ID: "target-1", Addresses: []string{"10.0.0.1:80"}, Isolation: harness.IsolationCallerManaged},
-		Reasoner: harness.AgentSpec{ID: "reasoner", Runtime: reasonerRuntime},
-		Executors: []harness.AgentSpec{
-			{ID: "executor-1", Runtime: executorRuntime},
-			{ID: "executor-2", Runtime: executorRuntime},
-		},
+		Task:           harness.Task{ID: "task-1", Objective: "test the authorized target"},
+		Target:         harness.TargetSpec{ID: "target-1", Addresses: []string{"10.0.0.1:80"}, Isolation: harness.IsolationCallerManaged},
+		Reasoner:       harness.AgentSpec{ID: "reasoner", Runtime: reasonerRuntime},
+		Executor:       harness.AgentSpec{ID: "executor", Runtime: executorRuntime},
 		Policy:         policy,
 		ReasonStrategy: noIntentReasonStrategy{},
 		Verifier:       fakeVerifier{verdict: harness.Verdict{Success: false}},

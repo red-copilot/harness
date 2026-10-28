@@ -9,7 +9,6 @@ import (
 func testBoard(t *testing.T) *boardState {
 	t.Helper()
 	policy := DefaultRunPolicy()
-	policy.Exploration.MaxOpenIntents = 2
 	spec := RunSpec{
 		Task:   Task{ID: "task-1", Objective: "test"},
 		Target: TargetSpec{ID: "target-1", Isolation: IsolationCallerManaged},
@@ -21,66 +20,57 @@ func testBoard(t *testing.T) *boardState {
 
 func TestBoardStartsWithOriginAndGoal(t *testing.T) {
 	board := testBoard(t)
-	facts := board.snapshot().Facts
-	if len(facts) != 2 || facts[0].Kind != FactOrigin || facts[1].Kind != FactGoal {
-		t.Fatalf("initial facts = %+v", facts)
+	claims := board.snapshot().Claims
+	if len(claims) != 2 || claims[0].Kind != ClaimOrigin || claims[1].Kind != ClaimGoal {
+		t.Fatalf("initial claims = %+v", claims)
 	}
 }
 
-func TestBoardRejectsThirdOpenIntent(t *testing.T) {
+func TestBoardRejectsSecondOpenIntent(t *testing.T) {
 	board := testBoard(t)
-	for i := 1; i <= 2; i++ {
-		if _, err := board.createIntent(Intent{Kind: IntentExplore, FromFactIDs: []string{"origin"}, Description: "intent"}); err != nil {
-			t.Fatalf("intent %d rejected: %v", i, err)
-		}
+	if _, err := board.createIntent(Intent{Kind: IntentExplore, FromClaimIDs: []string{"origin"}, Description: "first"}); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := board.createIntent(Intent{Kind: IntentExplore, FromFactIDs: []string{"origin"}, Description: "third"}); err == nil {
-		t.Fatal("third open intent accepted")
+	if _, err := board.createIntent(Intent{Kind: IntentExplore, FromClaimIDs: []string{"origin"}, Description: "second"}); err == nil {
+		t.Fatal("second open intent accepted")
 	}
-	if got := board.openCount(); got != 2 {
-		t.Fatalf("open intents = %d, want 2", got)
+	if got := board.openCount(); got != 1 {
+		t.Fatalf("open intents = %d, want 1", got)
 	}
 }
 
-func TestBoardRejectsIntentClaimOnOccupiedSlot(t *testing.T) {
+func TestBoardRejectsInvalidClaimSlot(t *testing.T) {
 	board := testBoard(t)
-	first, err := board.createIntent(Intent{Kind: IntentExplore, FromFactIDs: []string{"origin"}, Description: "one"})
+	intent, err := board.createIntent(Intent{Kind: IntentExplore, FromClaimIDs: []string{"origin"}, Description: "one"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := board.createIntent(Intent{Kind: IntentExplore, FromFactIDs: []string{"origin"}, Description: "two"})
-	if err != nil {
+	if _, err := board.claimIntent(intent.ID, 2, "executor", time.Now().UTC()); err == nil {
+		t.Fatal("slot-2 claim accepted")
+	}
+	if _, err := board.claimIntent(intent.ID, 1, "executor", time.Now().UTC()); err != nil {
 		t.Fatal(err)
-	}
-	if _, err := board.claimIntent(first.ID, 1, "executor-1", time.Now().UTC()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := board.claimIntent(second.ID, 1, "executor-2", time.Now().UTC()); err == nil {
-		t.Fatal("second claim on slot-1 accepted")
-	}
-	if _, err := board.claimIntent(second.ID, 2, "executor-2", time.Now().UTC()); err != nil {
-		t.Fatalf("slot-2 claim rejected: %v", err)
 	}
 }
 
-func TestBoardConcludeBindsFactAndReleasesSlot(t *testing.T) {
+func TestBoardConcludeBindsClaimAndReleasesSlot(t *testing.T) {
 	board := testBoard(t)
-	fact, err := board.addFact(Fact{Kind: FactFinding, Description: "found", ObservationIDs: []string{"obs-1"}})
+	claim, err := board.addClaim(Claim{Kind: ClaimFinding, Description: "found", ObservationIDs: []string{"obs-1"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent, err := board.createIntent(Intent{Kind: IntentExplore, FromFactIDs: []string{"origin"}, Description: "one"})
+	intent, err := board.createIntent(Intent{Kind: IntentExplore, FromClaimIDs: []string{"origin"}, Description: "one"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := board.claimIntent(intent.ID, 1, "executor-1", time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	concluded, err := board.concludeIntent(intent.ID, fact.ID, time.Now().UTC())
+	concluded, err := board.concludeIntent(intent.ID, claim.ID, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if concluded.State != IntentConcluded || concluded.ResultFactID != fact.ID {
+	if concluded.State != IntentConcluded || concluded.ResultClaimID != claim.ID {
 		t.Fatalf("concluded intent = %+v", concluded)
 	}
 	if board.claimedCount() != 0 || board.openCount() != 0 {
@@ -90,7 +80,7 @@ func TestBoardConcludeBindsFactAndReleasesSlot(t *testing.T) {
 
 func TestBoardRetryReturnsIntentToOpen(t *testing.T) {
 	board := testBoard(t)
-	intent, err := board.createIntent(Intent{Kind: IntentExplore, FromFactIDs: []string{"origin"}, Description: "one"})
+	intent, err := board.createIntent(Intent{Kind: IntentExplore, FromClaimIDs: []string{"origin"}, Description: "one"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,18 +130,16 @@ func TestReasonAdmissionRejectsStaleVersion(t *testing.T) {
 	}
 }
 
-func TestReasonAdmissionNeverExceedsTwoClaimed(t *testing.T) {
+func TestReasonAdmissionRejectsWhenExecutorClaimed(t *testing.T) {
 	board := testBoard(t)
-	for _, slot := range []int{1, 2} {
-		intent, err := board.createIntent(Intent{Kind: IntentExplore, FromFactIDs: []string{"origin"}, Description: "work"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := board.claimIntent(intent.ID, slot, "executor", time.Now().UTC()); err != nil {
-			t.Fatal(err)
-		}
+	intent, err := board.createIntent(Intent{Kind: IntentExplore, FromClaimIDs: []string{"origin"}, Description: "work"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	report := ReasonReport{FrontierVersion: board.frontierVersion(), Intents: []IntentProposal{{From: []string{"origin"}, Description: "third"}}}
+	if _, err := board.claimIntent(intent.ID, 1, "executor", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	report := ReasonReport{FrontierVersion: board.frontierVersion(), Intents: []IntentProposal{{From: []string{"origin"}, Description: "next"}}}
 	if _, err := admitReasonIntents(board, report, []int{1}); err == nil {
 		t.Fatal("admission accepted work with no capacity")
 	}
@@ -159,17 +147,15 @@ func TestReasonAdmissionNeverExceedsTwoClaimed(t *testing.T) {
 
 func TestBoardRejectsFindingWithoutEvidence(t *testing.T) {
 	board := testBoard(t)
-	if _, err := board.addFact(Fact{Kind: FactFinding, Description: "unsupported"}); err == nil {
+	if _, err := board.addClaim(Claim{Kind: ClaimFinding, Description: "unsupported"}); err == nil {
 		t.Fatal("finding without evidence accepted")
 	}
 }
 
 func TestReasonAdmissionReturnsFrontierCapacityError(t *testing.T) {
 	board := testBoard(t)
-	for i := 0; i < 2; i++ {
-		if _, err := board.createIntent(Intent{Kind: IntentExplore, FromFactIDs: []string{"origin"}, Description: "work"}); err != nil {
-			t.Fatal(err)
-		}
+	if _, err := board.createIntent(Intent{Kind: IntentExplore, FromClaimIDs: []string{"origin"}, Description: "work"}); err != nil {
+		t.Fatal(err)
 	}
 	report := ReasonReport{FrontierVersion: board.frontierVersion(), Intents: []IntentProposal{{From: []string{"origin"}, Description: "third"}}}
 	if _, err := admitReasonIntents(board, report, []int{1}); !errors.Is(err, ErrFrontierCapacity) {
@@ -177,12 +163,12 @@ func TestReasonAdmissionReturnsFrontierCapacityError(t *testing.T) {
 	}
 }
 
-func TestBlackboardRunSpecRequiresTwoExecutors(t *testing.T) {
+func TestBlackboardRunSpecRequiresExecutorRuntime(t *testing.T) {
 	spec := RunSpec{
 		Task: Task{ID: "task", Objective: "test"}, Target: TargetSpec{ID: "target", Isolation: IsolationCallerManaged},
-		Executors: []AgentSpec{{ID: "one"}},
+		Executor: AgentSpec{ID: "executor"},
 	}
 	if err := validateBlackboardRunSpec(spec); err == nil {
-		t.Fatal("one executor accepted by blackboard engine")
+		t.Fatal("executor without runtime accepted by blackboard engine")
 	}
 }

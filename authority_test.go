@@ -99,7 +99,7 @@ func TestSessionCleanupFailureDowngradesSuccess(t *testing.T) {
 		return &fakeSession{events: make(chan harness.AgentEvent, 4), closeErr: closeErr}
 	}}
 	spec.Reasoner.Runtime = factory
-	spec.Executors[0].Runtime = factory
+	spec.Executor.Runtime = factory
 	result, err := newTestRunner(t, store).Run(context.Background(), spec)
 	if err == nil || !strings.Contains(err.Error(), "session close failed") {
 		t.Fatalf("err = %v, want session cleanup failure", err)

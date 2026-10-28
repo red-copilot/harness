@@ -1,73 +1,66 @@
 # Architecture
 
-Red Harness is a pure Go execution and trust boundary for one autonomous security Run against one logical Target. It is not a generic agent framework: one writable control path, explicit authority, bounded exploration and an append-only audit.
-
-Fact/Intent v2 is the current implementation on `main`. `0bbee5e` is retained only as historical evidence for the retired Frontier path; it is not a supported writable compatibility path.
+Red Harness v3 is a pure Go execution and trust boundary for one autonomous security Run against one logical Target. It is not a generic agent framework: one writable control path, explicit authority, bounded exploration and an append-only audit.
 
 ## Package Layers
 
-1. `core/` — pure domain contracts and mechanical validators. It imports only the standard library and contains Task/Target identity, Run lifecycle values, policy, Fact/Intent/Attempt/Observation/Artifact/Verdict and typed event contracts.
-2. `engine/` — application control kernel. It owns the Runner, Run handle, lifecycle state machine, Fact/Intent actor, two fixed Executor slots, budgets, cancellation, redaction boundary and authority arbitration. It imports `core` and standard library only.
-3. root `harness` — a thin façade over common `engine` and `core` entry points. It contains no state machine or I/O.
-4. adapters — `pi`, `sandbox/docker`, `tsec`, `verify`, `store/sqlite` implement engine ports and never import CLI, server or Web.
-5. surfaces — `server`, `internal/cli`, `webui` and `web` consume the same engine and canonical read projections.
+1. `core/` — pure domain contracts, validators, policy and typed events; standard library only.
+2. `engine/` — serialized Run lifecycle, one Reasoner, one Executor, Claim/Intent state machine, budgets and ports; imports only `core` and the standard library.
+3. root `harness` — a thin façade over common engine/core entry points.
+4. adapters — `pi`, `sandbox/docker`, `tsec`, `verify`, `store/sqlite` implement engine ports.
+5. surfaces — `server`, `internal/cli`, `webui` and `web` consume the canonical read projections.
 
 ## Run Lifecycle
 
 ```text
-phase:   queued → provisioning → running → finalizing → verifying → terminal
-outcome:                                                        succeeded | failed | cancelled | timed_out | stagnated | interrupted
+queued -> provisioning -> running -> finalizing -> verifying -> terminal
+outcome: succeeded | failed | cancelled | timed_out | stagnated | interrupted
 ```
 
-`RunPhase` and `RunOutcome` are canonical. Terminal state is claimed once and committed atomically with the Verdict and `run.finalized`. Startup recovery only marks unfinished Runs `interrupted` and appends the corresponding terminal event; side effects are never replayed.
+`RunPhase` and `RunOutcome` are canonical; legacy run status projections are removed. On startup, unfinished Runs are atomically marked interrupted and their side effects are not replayed.
 
-Budgets are grouped by `RunPolicy{Budget, Exploration, Context, Evidence}`. Zero values normalize once before Run creation; negative limits fail validation.
+## Serial Execution
 
-## Fact / Intent Actor
+Each Run has one serialized Reasoner and one Executor. At most one Attempt is active.
 
-- A Run starts with immutable `origin` and `goal` Facts.
-- Exactly two Executor sessions create two fixed slots. Each slot holds at most one active Attempt.
-- Bootstrap occupies slot-1 first. After Bootstrap settles, a serialized Reasoner fills free slots.
-- Reasoner reads a deterministic, bounded board snapshot carrying a board revision. It may create at most one Intent per free slot.
-- Stale revision, over-capacity or malformed Reasoner output is rejected and counted. After `max_reasoner_failures`, new exploration stops and authoritative finalization begins.
-- Accepted Intent creation and claim are committed in one board revision; no hidden pending queue exists.
-- Executor workers only return immutable results. The engine loop alone mutates board state.
-- Explore executes one Intent and returns one Finding or Negative Fact. Execute/Conclude are phases of the same Attempt.
-- Two slots refill independently; there is no round barrier.
+```text
+Bootstrap -> Reason -> Claim Intent -> Execute/Conclude -> Evidence
+          -> Claim/Attempt commit -> Verify -> Finalize
+```
 
-## Context Bounds
+Structured Agent output is read only from the bounded `/workspace/report.json` file after `agent_settled`. Assistant prose is audit-only. Execute and Conclude are phases of the same Attempt; `agent_end` is not completion.
 
-The Context Builder bounds Reasoner and Explore inputs by deterministic item and byte limits. Origin and Goal are retained first; recent Facts and Hints fill the remaining budget. Single Fact/Intent/Hint sizes are bounded before persistence. Truncation is audited with `context.truncated`.
+The Context Builder bounds Claim/Hint/Report inputs by deterministic item and byte limits. Stale board revisions and malformed reports fail closed.
 
-## Evidence and Facts
+## Claims and Evidence
 
-- Finding Fact requires at least one Observation from the current Attempt.
-- Observation requires at least one archived Artifact.
-- Observation target references are authorized against the effective `TargetBinding`.
-- Artifact bytes are content-addressed and written before metadata/evidence metadata commits. A failed commit may leave an unreferenced blob, but never a metadata reference to missing bytes.
-- Negative Fact records a ruled-out or no-progress conclusion and cannot establish success.
-- Fact IDs and Attempt IDs are generated by the engine; model-provided identities are not trusted.
+- `origin` and `goal` are immutable anchors.
+- A `Claim` is an admitted, provenance-linked declaration; it is not objective truth or success.
+- A Finding Claim requires an Observation from the current Attempt.
+- An Observation requires at least one Artifact.
+- Artifact bytes are redacted before hashing and stored in SQLite with Observation/Claim/Attempt records.
+- Negative Claims record ruled-out or no-progress directions and never establish success.
+- Model output cannot create IDs, anchors, Claims or Verdicts directly.
 
 ## Authority
 
-- `CompletionSource` terminal `Done` is authoritative; non-terminal progress is audit-only.
-- Without a backend terminal result, Verifier runs only after the board is quiescent.
-- Backend terminal completion wins over a concurrent Verifier result.
-- Agent text, tool exit code, Fact, Reason completion and goal candidate are never success.
-- Session or Target cleanup failure downgrades a successful candidate to failed.
-- Missing authority, malformed Verdict, cancellation, wall-time expiry, canonical write failure and unrecoverable control errors all terminate non-successfully.
+- Backend terminal completion is authoritative.
+- Without backend completion, the Verifier runs after the board is quiescent using a temporary read-only evidence bundle.
+- Backend completion wins over a concurrent Verifier result.
+- Claim, Reason completion, verification candidates, Agent text and tool exits never establish success.
+- Cleanup failure downgrades a successful candidate to failed.
 
 ## Persistence
 
-SQLite schema v6 is canonical. Each board transition uses `CanonicalWriter.Commit`, which atomically writes normalized records, append-only Intent/Attempt versions, a board revision and typed events. `Finalize` atomically writes the terminal Run record, Verdict and final event. Sweeps are persisted summaries that orchestrate ordinary Runs; they are not a second Run control writer.
+SQLite schema v7 is canonical and self-contained: artifact bytes, metadata, board projections and events live in one database. Every board transition commits with an expected revision and atomic events. Terminal Run, Verdict and `run.finalized` commit together.
 
-Events/logs have monotonic sequences for SSE replay. Readers ignore unsupported event types locally. All canonical writes pass through the Run-scoped redacting writer. Known secrets never enter SQLite, Artifact content, Result, Verdict, diagnostics or errors. Binary evidence containing a known secret is rejected.
-
-The production cutover uses `OpenFresh` after verifying a backup manifest with SHA-256 and row counts. Old Runs and Branch/Knowledge history remain in that verified backup; they are not copied into the writable v2 database. A rollback restores the backup and is the only supported downgrade.
+Events and logs are append-only. Canonical events carry a SHA-256 hash chain; `harness doctor` verifies it. Backups use one consistent SQLite snapshot with hash, row-count, artifact-byte and event-head checks.
 
 ## HTTP and Web
 
-HTTP is a trusted-operator surface and defaults to loopback. `GET /v1/runs/{id}/graph` is the canonical Fact/Intent projection; it includes Facts, Intents, Hints, Attempts, free slots, board revision and latest Reasoner activity. SSE replays canonical events from `seq`. The Web console renders Runs as a two-slot Fact/Intent graph. `/v1/tsec/sweeps` remains a batch orchestration surface over the same v2 Run engine.
+HTTP is a trusted-operator surface and defaults to loopback. OpenAPI 3.0.3 at `api/openapi.yaml` is the contract source for generated Go and TypeScript types.
+
+`GET /v1/runs/{id}/board` returns Claims, Intents, Hints, Attempts, Observations, Artifact metadata, one Executor lane, board revision and authority activity. SSE replays canonical events from `seq`; artifact bytes are available through the canonical download endpoint. The Web console renders a single-lane evidence chain.
 
 ## Isolation
 

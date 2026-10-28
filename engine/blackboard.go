@@ -3,6 +3,7 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -11,7 +12,7 @@ var ErrFrontierCapacity = errors.New("frontier capacity exceeded")
 
 type boardSnapshot struct {
 	Task            Task
-	Facts           []Fact
+	Claims          []Claim
 	Intents         []Intent
 	Hints           []Hint
 	Attempts        []IntentAttempt
@@ -21,13 +22,13 @@ type boardSnapshot struct {
 	FrontierVersion uint64
 }
 
-// boardState is the controller-owned, single-writer Fact/Intent blackboard.
+// boardState is the controller-owned, single-writer Claim/Intent blackboard.
 type boardState struct {
 	runID     string
 	task      Task
 	target    TargetBinding
 	policy    RunPolicy
-	facts     []Fact
+	claims    []Claim
 	intents   []Intent
 	hints     []Hint
 	attempts  []IntentAttempt
@@ -42,9 +43,9 @@ func newBoardState(runID string, spec RunSpec, target TargetBinding) *boardState
 	board.seq = 2
 	originID := "origin"
 	goalID := "goal"
-	board.facts = append(board.facts,
-		Fact{ID: originID, RunID: runID, TaskID: spec.Task.ID, Kind: FactOrigin, Description: spec.Task.Objective, CreatedAt: time.Now().UTC()},
-		Fact{ID: goalID, RunID: runID, TaskID: spec.Task.ID, Kind: FactGoal, Description: spec.Task.Objective, CreatedAt: time.Now().UTC()},
+	board.claims = append(board.claims,
+		Claim{ID: originID, RunID: runID, TaskID: spec.Task.ID, Kind: ClaimOrigin, Description: spec.Task.Objective, CreatedAt: time.Now().UTC()},
+		Claim{ID: goalID, RunID: runID, TaskID: spec.Task.ID, Kind: ClaimGoal, Description: spec.Task.Objective, CreatedAt: time.Now().UTC()},
 	)
 	board.version = 1
 	if target.Runtime != nil && target.Runtime.Hint != "" {
@@ -64,10 +65,7 @@ func (b *boardState) nextID(kind string) string {
 }
 
 func (b *boardState) maxOpen() int {
-	if b.policy.Exploration.MaxOpenIntents > 0 {
-		return b.policy.Exploration.MaxOpenIntents
-	}
-	return 2
+	return 1
 }
 
 func (b *boardState) maxTotal() int {
@@ -80,7 +78,7 @@ func (b *boardState) maxTotal() int {
 func (b *boardState) snapshot() boardSnapshot {
 	out := boardSnapshot{
 		Task:            b.task,
-		Facts:           cloneFacts(b.facts),
+		Claims:          cloneClaims(b.claims),
 		Intents:         cloneIntents(b.intents),
 		Hints:           append([]Hint(nil), b.hints...),
 		Attempts:        append([]IntentAttempt(nil), b.attempts...),
@@ -92,31 +90,55 @@ func (b *boardState) snapshot() boardSnapshot {
 	return out
 }
 
-func (b *boardState) addFact(fact Fact) (Fact, error) {
-	if fact.ID == "" {
-		fact.ID = b.nextID("fact")
+func (b *boardState) addHint(hint Hint, maxBytes int) (Hint, error) {
+	content := strings.TrimSpace(hint.Content)
+	if content == "" {
+		return Hint{}, errors.New("hint content is required")
 	}
-	if fact.RunID == "" {
-		fact.RunID = b.runID
+	if maxBytes > 0 && len(content) > maxBytes {
+		return Hint{}, fmt.Errorf("hint exceeds %d bytes", maxBytes)
 	}
-	if fact.TaskID == "" {
-		fact.TaskID = b.task.ID
+	if hint.ID == "" {
+		hint.ID = b.nextID("hint")
 	}
-	if fact.CreatedAt.IsZero() {
-		fact.CreatedAt = time.Now().UTC()
+	hint.RunID = b.runID
+	hint.Content = content
+	if hint.Creator == "" {
+		hint.Creator = "operator"
 	}
-	if err := ValidateFact(fact); err != nil {
-		return Fact{}, err
+	if hint.CreatedAt.IsZero() {
+		hint.CreatedAt = time.Now().UTC()
 	}
-	if limit := b.policy.Context.MaxFactBytes; limit > 0 && len(fact.Description) > limit {
-		return Fact{}, fmt.Errorf("fact description exceeds %d bytes", limit)
-	}
-	if fact.SourceIntentID != "" && b.findIntent(fact.SourceIntentID) == nil {
-		return Fact{}, fmt.Errorf("source intent %q does not exist", fact.SourceIntentID)
-	}
-	b.facts = append(b.facts, fact)
+	b.hints = append(b.hints, hint)
 	b.version++
-	return fact, nil
+	return hint, nil
+}
+
+func (b *boardState) addClaim(claim Claim) (Claim, error) {
+	if claim.ID == "" {
+		claim.ID = b.nextID("claim")
+	}
+	if claim.RunID == "" {
+		claim.RunID = b.runID
+	}
+	if claim.TaskID == "" {
+		claim.TaskID = b.task.ID
+	}
+	if claim.CreatedAt.IsZero() {
+		claim.CreatedAt = time.Now().UTC()
+	}
+	if err := ValidateClaim(claim); err != nil {
+		return Claim{}, err
+	}
+	if limit := b.policy.Context.MaxClaimBytes; limit > 0 && len(claim.Description) > limit {
+		return Claim{}, fmt.Errorf("claim description exceeds %d bytes", limit)
+	}
+	if claim.SourceIntentID != "" && b.findIntent(claim.SourceIntentID) == nil {
+		return Claim{}, fmt.Errorf("source intent %q does not exist", claim.SourceIntentID)
+	}
+	b.claims = append(b.claims, claim)
+	b.version++
+	return claim, nil
 }
 
 func (b *boardState) createIntent(intent Intent) (Intent, error) {
@@ -141,7 +163,7 @@ func (b *boardState) createIntent(intent Intent) (Intent, error) {
 	if len(b.intents) >= b.maxTotal() {
 		return Intent{}, fmt.Errorf("max total intents reached")
 	}
-	if err := b.validateIntentFacts(intent); err != nil {
+	if err := b.validateIntentClaims(intent); err != nil {
 		return Intent{}, err
 	}
 	if err := ValidateIntent(intent); err != nil {
@@ -155,14 +177,14 @@ func (b *boardState) createIntent(intent Intent) (Intent, error) {
 	return intent, nil
 }
 
-func (b *boardState) validateIntentFacts(intent Intent) error {
-	for _, factID := range intent.FromFactIDs {
-		fact := b.findFact(factID)
-		if fact == nil {
-			return fmt.Errorf("intent source fact %q does not exist", factID)
+func (b *boardState) validateIntentClaims(intent Intent) error {
+	for _, claimID := range intent.FromClaimIDs {
+		claim := b.findClaim(claimID)
+		if claim == nil {
+			return fmt.Errorf("intent source claim %q does not exist", claimID)
 		}
-		if fact.Kind == FactGoal {
-			return fmt.Errorf("goal fact cannot be an intent source")
+		if claim.Kind == ClaimGoal {
+			return fmt.Errorf("goal claim cannot be an intent source")
 		}
 	}
 	return nil
@@ -176,8 +198,8 @@ func (b *boardState) claimIntent(intentID string, slot int, executorID string, a
 	if err := ValidateIntentTransition(intent.State, IntentClaimed); err != nil {
 		return Intent{}, err
 	}
-	if slot != 1 && slot != 2 {
-		return Intent{}, fmt.Errorf("slot must be 1 or 2")
+	if slot != 1 {
+		return Intent{}, fmt.Errorf("slot must be 1")
 	}
 	if containsInt(b.freeSlots(), slot) == false {
 		return Intent{}, fmt.Errorf("slot %d is occupied", slot)
@@ -209,7 +231,7 @@ func (b *boardState) returnIntentToOpen(intentID string, at time.Time) (Intent, 
 	return *intent, nil
 }
 
-func (b *boardState) concludeIntent(intentID, factID string, at time.Time) (Intent, error) {
+func (b *boardState) concludeIntent(intentID, claimID string, at time.Time) (Intent, error) {
 	intent := b.findIntent(intentID)
 	if intent == nil {
 		return Intent{}, fmt.Errorf("intent %q not found", intentID)
@@ -217,12 +239,12 @@ func (b *boardState) concludeIntent(intentID, factID string, at time.Time) (Inte
 	if err := ValidateIntentTransition(intent.State, IntentConcluded); err != nil {
 		return Intent{}, err
 	}
-	fact := b.findFact(factID)
-	if fact == nil {
-		return Intent{}, fmt.Errorf("result fact %q does not exist", factID)
+	claim := b.findClaim(claimID)
+	if claim == nil {
+		return Intent{}, fmt.Errorf("result claim %q does not exist", claimID)
 	}
 	intent.State = IntentConcluded
-	intent.ResultFactID = factID
+	intent.ResultClaimID = claimID
 	intent.ConcludedAt = timePtr(at)
 	b.version++
 	return *intent, nil
@@ -272,11 +294,9 @@ func (b *boardState) freeSlots() []int {
 			occupied[intent.Slot] = true
 		}
 	}
-	out := make([]int, 0, 2)
-	for _, slot := range []int{1, 2} {
-		if !occupied[slot] {
-			out = append(out, slot)
-		}
+	out := make([]int, 0, 1)
+	if !occupied[1] {
+		out = append(out, 1)
 	}
 	return out
 }
@@ -290,10 +310,10 @@ func (b *boardState) findIntent(id string) *Intent {
 	return nil
 }
 
-func (b *boardState) findFact(id string) *Fact {
-	for i := range b.facts {
-		if b.facts[i].ID == id {
-			return &b.facts[i]
+func (b *boardState) findClaim(id string) *Claim {
+	for i := range b.claims {
+		if b.claims[i].ID == id {
+			return &b.claims[i]
 		}
 	}
 	return nil
@@ -333,15 +353,15 @@ func admitReasonIntents(board *boardState, report ReasonReport, freeSlots []int)
 	planned := make([]Intent, 0, len(report.Intents))
 	for i, proposal := range report.Intents {
 		intent := Intent{
-			ID:          board.nextID("intent"),
-			RunID:       board.runID,
-			Kind:        IntentExplore,
-			FromFactIDs: append([]string(nil), proposal.From...),
-			Description: proposal.Description,
-			State:       IntentOpen,
-			CreatedAt:   time.Now().UTC(),
+			ID:           board.nextID("intent"),
+			RunID:        board.runID,
+			Kind:         IntentExplore,
+			FromClaimIDs: append([]string(nil), proposal.From...),
+			Description:  proposal.Description,
+			State:        IntentOpen,
+			CreatedAt:    time.Now().UTC(),
 		}
-		if err := board.validateIntentFacts(intent); err != nil {
+		if err := board.validateIntentClaims(intent); err != nil {
 			return nil, err
 		}
 		if err := ValidateIntent(intent); err != nil {
@@ -380,8 +400,8 @@ func timePtr(value time.Time) *time.Time {
 	return &copy
 }
 
-func cloneFacts(values []Fact) []Fact {
-	out := make([]Fact, len(values))
+func cloneClaims(values []Claim) []Claim {
+	out := make([]Claim, len(values))
 	for i := range values {
 		out[i] = values[i]
 		out[i].ObservationIDs = append([]string(nil), values[i].ObservationIDs...)
@@ -394,7 +414,7 @@ func cloneIntents(values []Intent) []Intent {
 	out := make([]Intent, len(values))
 	for i := range values {
 		out[i] = values[i]
-		out[i].FromFactIDs = append([]string(nil), values[i].FromFactIDs...)
+		out[i].FromClaimIDs = append([]string(nil), values[i].FromClaimIDs...)
 		out[i].AttemptIDs = append([]string(nil), values[i].AttemptIDs...)
 		if values[i].ClaimedAt != nil {
 			at := *values[i].ClaimedAt

@@ -10,8 +10,8 @@ func TestBootstrapPromptStartsWithOriginGoalAndHints(t *testing.T) {
 	req := ExploreRequest{
 		Task:         board.task,
 		Target:       board.target,
-		Intent:       Intent{ID: "bootstrap", RunID: board.runID, Kind: IntentBootstrap, FromFactIDs: []string{"origin", "goal"}, Description: "solve directly"},
-		Facts:        board.snapshot().Facts,
+		Intent:       Intent{ID: "bootstrap", RunID: board.runID, Kind: IntentBootstrap, FromClaimIDs: []string{"origin", "goal"}, Description: "solve directly"},
+		Claims:       board.snapshot().Claims,
 		Hints:        []Hint{{ID: "hint-1", Content: "authorized hint"}},
 		WorkspaceDir: "/workspace",
 	}
@@ -29,8 +29,8 @@ func TestBootstrapPromptStartsWithOriginGoalAndHints(t *testing.T) {
 func TestBootstrapReportCannotCreateChildIntentsOrGoal(t *testing.T) {
 	req := ExploreRequest{Intent: Intent{ID: "bootstrap"}}
 	for _, body := range []string{
-		`{"intent_id":"bootstrap","phase":"concluded","fact":{"kind":"goal","description":"done"}}`,
-		`{"intent_id":"bootstrap","phase":"concluded","fact":{"kind":"finding","description":"done"}}`,
+		`{"intent_id":"bootstrap","phase":"concluded","claim":{"kind":"goal","description":"done"}}`,
+		`{"intent_id":"bootstrap","phase":"concluded","claim":{"kind":"finding","description":"done"}}`,
 	} {
 		if _, err := (defaultBootstrapStrategy{}).Parse(req, TurnResult{AssistantText: body}); err == nil {
 			t.Fatalf("invalid bootstrap report accepted: %s", body)

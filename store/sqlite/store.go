@@ -15,20 +15,19 @@ import (
 	"github.com/red-copilot/harness/engine"
 )
 
-const schemaVersion = 6
+const schemaVersion = 7
 
 type Store struct {
-	db           *sql.DB
-	artifactRoot string
+	db *sql.DB
 }
 
-// Open opens an empty or current v6 database. Legacy databases are rejected so
+// Open opens an empty or current v7 database. Legacy databases are rejected so
 // old Runs cannot be upgraded in place and mistaken for v2 history.
 func Open(path string) (*Store, error) {
 	return openPath(path, false)
 }
 
-// OpenFresh creates a new v2 database and refuses to overwrite any existing
+// OpenFresh creates a new v3 database and refuses to overwrite any existing
 // database or WAL/SHM sidecar. The caller must first create and verify a backup.
 func OpenFresh(path string) (*Store, error) {
 	return openPath(path, true)
@@ -61,7 +60,7 @@ func openPath(path string, fresh bool) (*Store, error) {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 	db.SetMaxOpenConns(1)
-	store := &Store{db: db, artifactRoot: filepath.Join(filepath.Dir(path), "artifacts", "sha256")}
+	store := &Store{db: db}
 	if err := store.configure(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -116,32 +115,33 @@ func schemaStatements() []string {
 		`CREATE TABLE IF NOT EXISTS schema_meta (version INTEGER NOT NULL)`,
 		`INSERT INTO schema_meta(version) SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM schema_meta)`,
 
-		`CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, phase TEXT NOT NULL DEFAULT '', outcome TEXT NOT NULL DEFAULT '', spec BLOB, result BLOB, error TEXT NOT NULL DEFAULT '', sweep_id TEXT NOT NULL DEFAULT '', metadata BLOB, created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT)`,
-		`CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, session_id TEXT NOT NULL DEFAULT '', source TEXT NOT NULL, type TEXT NOT NULL, time TEXT NOT NULL, data BLOB, raw BLOB, schema_version INTEGER NOT NULL DEFAULT 1)`,
+		`CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, phase TEXT NOT NULL DEFAULT '', outcome TEXT NOT NULL DEFAULT '', spec BLOB, result BLOB, error TEXT NOT NULL DEFAULT '', sweep_id TEXT NOT NULL DEFAULT '', metadata BLOB, created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT)`,
+		`CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, session_id TEXT NOT NULL DEFAULT '', source TEXT NOT NULL, type TEXT NOT NULL, time TEXT NOT NULL, data BLOB, raw BLOB, schema_version INTEGER NOT NULL DEFAULT 1, prev_hash TEXT NOT NULL DEFAULT '', hash TEXT NOT NULL DEFAULT '')`,
 		`CREATE INDEX IF NOT EXISTS events_run_seq ON events(run_id, seq)`,
 		`CREATE TRIGGER IF NOT EXISTS prevent_event_after_terminal BEFORE INSERT ON events WHEN EXISTS (SELECT 1 FROM runs WHERE id=NEW.run_id AND phase='terminal') BEGIN SELECT RAISE(ABORT, 'run is finalized'); END`,
+		`CREATE TRIGGER IF NOT EXISTS prevent_event_update BEFORE UPDATE ON events BEGIN SELECT RAISE(ABORT, 'events are append-only'); END`,
+		`CREATE TRIGGER IF NOT EXISTS prevent_event_delete BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT, 'events are append-only'); END`,
 		`CREATE TABLE IF NOT EXISTS logs (seq INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, session_id TEXT NOT NULL DEFAULT '', stream TEXT NOT NULL, time TEXT NOT NULL, text TEXT NOT NULL)`,
 		`CREATE INDEX IF NOT EXISTS logs_run_seq ON logs(run_id, seq)`,
+		`CREATE TRIGGER IF NOT EXISTS prevent_log_update BEFORE UPDATE ON logs BEGIN SELECT RAISE(ABORT, 'logs are append-only'); END`,
+		`CREATE TRIGGER IF NOT EXISTS prevent_log_delete BEFORE DELETE ON logs BEGIN SELECT RAISE(ABORT, 'logs are append-only'); END`,
 		`CREATE TABLE IF NOT EXISTS verdicts (run_id TEXT PRIMARY KEY, success INTEGER NOT NULL, score REAL NOT NULL DEFAULT 0, message TEXT NOT NULL DEFAULT '', evidence BLOB, created_at TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS sweeps (id TEXT PRIMARY KEY, status TEXT NOT NULL, spec BLOB, result BLOB, error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, finished_at TEXT)`,
-		`CREATE TABLE IF NOT EXISTS exploration_branches (id TEXT PRIMARY KEY, parent_id TEXT NOT NULL DEFAULT '', task_id TEXT NOT NULL, run_id TEXT NOT NULL DEFAULT '', depth INTEGER NOT NULL, topic TEXT NOT NULL, goal TEXT NOT NULL DEFAULT '', hypothesis TEXT NOT NULL DEFAULT '', success_condition TEXT NOT NULL DEFAULT '', failure_condition TEXT NOT NULL DEFAULT '', scope TEXT NOT NULL, budget BLOB, status TEXT NOT NULL, priority INTEGER NOT NULL DEFAULT 0, knowledge_refs BLOB, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, payload BLOB)`,
-		`CREATE TABLE IF NOT EXISTS exploration_attempts (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, branch_id TEXT NOT NULL, session_id TEXT NOT NULL, status TEXT NOT NULL, outcome TEXT NOT NULL, observation_ids BLOB, started_at TEXT NOT NULL, finished_at TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', payload BLOB)`,
-		`CREATE TABLE IF NOT EXISTS exploration_observations (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, branch_id TEXT NOT NULL, attempt_id TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL, summary TEXT NOT NULL, evidence BLOB, created_at TEXT NOT NULL, payload BLOB)`,
-		`CREATE TABLE IF NOT EXISTS exploration_observation_artifacts (run_id TEXT NOT NULL, observation_id TEXT NOT NULL, artifact_id TEXT NOT NULL, PRIMARY KEY(run_id, observation_id, artifact_id))`,
+		`CREATE TABLE IF NOT EXISTS artifact_blobs (sha256 TEXT PRIMARY KEY, size INTEGER NOT NULL, data BLOB NOT NULL)`,
+		`CREATE TRIGGER IF NOT EXISTS prevent_blob_update BEFORE UPDATE ON artifact_blobs BEGIN SELECT RAISE(ABORT, 'artifact blobs are immutable'); END`,
+		`CREATE TRIGGER IF NOT EXISTS prevent_blob_delete BEFORE DELETE ON artifact_blobs BEGIN SELECT RAISE(ABORT, 'artifact blobs are immutable'); END`,
 		`CREATE TABLE IF NOT EXISTS artifacts (run_id TEXT NOT NULL, id TEXT NOT NULL, attempt_id TEXT NOT NULL, session_id TEXT NOT NULL, name TEXT NOT NULL, media_type TEXT NOT NULL, size INTEGER NOT NULL, sha256 TEXT NOT NULL, redacted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, PRIMARY KEY(run_id, id, attempt_id, name))`,
-		`CREATE TABLE IF NOT EXISTS knowledge (run_id TEXT NOT NULL, id TEXT NOT NULL, task_id TEXT NOT NULL, version INTEGER NOT NULL, payload BLOB NOT NULL, PRIMARY KEY(run_id, id, version))`,
-		`CREATE TABLE IF NOT EXISTS knowledge_sources (run_id TEXT NOT NULL, knowledge_id TEXT NOT NULL, version INTEGER NOT NULL, source BLOB NOT NULL, PRIMARY KEY(run_id, knowledge_id, version, source))`,
-		`CREATE TABLE IF NOT EXISTS facts (run_id TEXT NOT NULL, id TEXT NOT NULL, task_id TEXT NOT NULL, kind TEXT NOT NULL, source_intent_id TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, payload BLOB NOT NULL, PRIMARY KEY(run_id, id))`,
-		`CREATE INDEX IF NOT EXISTS facts_run_created ON facts(run_id, created_at, id)`,
-		`CREATE TABLE IF NOT EXISTS intents (run_id TEXT NOT NULL, id TEXT NOT NULL, kind TEXT NOT NULL, state TEXT NOT NULL, slot INTEGER NOT NULL DEFAULT 0, executor_id TEXT NOT NULL DEFAULT '', result_fact_id TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, claimed_at TEXT, concluded_at TEXT, error TEXT NOT NULL DEFAULT '', payload BLOB NOT NULL, PRIMARY KEY(run_id, id))`,
+		`CREATE TABLE IF NOT EXISTS claims (run_id TEXT NOT NULL, id TEXT NOT NULL, task_id TEXT NOT NULL, kind TEXT NOT NULL, source_intent_id TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, payload BLOB NOT NULL, PRIMARY KEY(run_id, id))`,
+		`CREATE INDEX IF NOT EXISTS claims_run_created ON claims(run_id, created_at, id)`,
+		`CREATE TABLE IF NOT EXISTS intents (run_id TEXT NOT NULL, id TEXT NOT NULL, kind TEXT NOT NULL, state TEXT NOT NULL, slot INTEGER NOT NULL DEFAULT 0, executor_id TEXT NOT NULL DEFAULT '', result_claim_id TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, claimed_at TEXT, concluded_at TEXT, error TEXT NOT NULL DEFAULT '', payload BLOB NOT NULL, PRIMARY KEY(run_id, id))`,
 		`CREATE INDEX IF NOT EXISTS intents_run_created ON intents(run_id, created_at, id)`,
-		`CREATE TABLE IF NOT EXISTS intent_sources (run_id TEXT NOT NULL, intent_id TEXT NOT NULL, fact_id TEXT NOT NULL, ordinal INTEGER NOT NULL, PRIMARY KEY(run_id, intent_id, fact_id))`,
+		`CREATE TABLE IF NOT EXISTS intent_sources (run_id TEXT NOT NULL, intent_id TEXT NOT NULL, claim_id TEXT NOT NULL, ordinal INTEGER NOT NULL, PRIMARY KEY(run_id, intent_id, claim_id))`,
 		`CREATE TABLE IF NOT EXISTS hints (run_id TEXT NOT NULL, id TEXT NOT NULL, creator TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, payload BLOB NOT NULL, PRIMARY KEY(run_id, id))`,
 		`CREATE INDEX IF NOT EXISTS hints_run_created ON hints(run_id, created_at, id)`,
-		`CREATE TABLE IF NOT EXISTS exploration_attempts_v2 (run_id TEXT NOT NULL, id TEXT NOT NULL, intent_id TEXT NOT NULL, slot INTEGER NOT NULL, session_id TEXT NOT NULL, phase TEXT NOT NULL, conclusion TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL, finished_at TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', payload BLOB NOT NULL, PRIMARY KEY(run_id, id))`,
-		`CREATE INDEX IF NOT EXISTS attempts_v2_run_started ON exploration_attempts_v2(run_id, started_at, id)`,
-		`CREATE TABLE IF NOT EXISTS exploration_observations_v2 (run_id TEXT NOT NULL, id TEXT NOT NULL, intent_id TEXT NOT NULL, attempt_id TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL, summary TEXT NOT NULL, created_at TEXT NOT NULL, payload BLOB NOT NULL, PRIMARY KEY(run_id, id))`,
-		`CREATE TABLE IF NOT EXISTS exploration_observation_artifacts_v2 (run_id TEXT NOT NULL, observation_id TEXT NOT NULL, artifact_id TEXT NOT NULL, PRIMARY KEY(run_id, observation_id, artifact_id))`,
+		`CREATE TABLE IF NOT EXISTS attempts (run_id TEXT NOT NULL, id TEXT NOT NULL, intent_id TEXT NOT NULL, slot INTEGER NOT NULL, session_id TEXT NOT NULL, phase TEXT NOT NULL, conclusion TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL, finished_at TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', payload BLOB NOT NULL, PRIMARY KEY(run_id, id))`,
+		`CREATE INDEX IF NOT EXISTS attempts_run_started ON attempts(run_id, started_at, id)`,
+		`CREATE TABLE IF NOT EXISTS observations (run_id TEXT NOT NULL, id TEXT NOT NULL, intent_id TEXT NOT NULL, attempt_id TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL, summary TEXT NOT NULL, created_at TEXT NOT NULL, payload BLOB NOT NULL, PRIMARY KEY(run_id, id))`,
+		`CREATE TABLE IF NOT EXISTS observation_artifacts (run_id TEXT NOT NULL, observation_id TEXT NOT NULL, artifact_id TEXT NOT NULL, PRIMARY KEY(run_id, observation_id, artifact_id))`,
 		`CREATE TABLE IF NOT EXISTS intent_versions (run_id TEXT NOT NULL, intent_id TEXT NOT NULL, version INTEGER NOT NULL, payload BLOB NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(run_id, intent_id, version))`,
 		`CREATE TABLE IF NOT EXISTS attempt_versions (run_id TEXT NOT NULL, attempt_id TEXT NOT NULL, version INTEGER NOT NULL, payload BLOB NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(run_id, attempt_id, version))`,
 		`CREATE TABLE IF NOT EXISTS board_commits (run_id TEXT NOT NULL, revision INTEGER NOT NULL, payload BLOB NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(run_id, revision))`,
@@ -160,18 +160,15 @@ func (s *Store) ensureCurrentSchema() error {
 	}
 	var version int
 	if err := s.db.QueryRowContext(ctx, `SELECT version FROM schema_meta LIMIT 1`).Scan(&version); err != nil {
-		return fmt.Errorf("existing database is not a current v6 database; create a verified backup and use OpenFresh: %w", err)
+		return fmt.Errorf("existing database is not a current v7 database; create a verified backup and use OpenFresh: %w", err)
 	}
 	if version != schemaVersion {
 		return fmt.Errorf("database schema version %d cannot be upgraded in place; create a verified backup and use OpenFresh", version)
 	}
 	for _, table := range []string{
-		"schema_meta", "runs", "events", "logs", "verdicts", "sweeps",
-		"exploration_branches", "exploration_attempts", "exploration_observations",
-		"exploration_observation_artifacts", "artifacts", "knowledge", "knowledge_sources",
-		"facts", "intents", "intent_sources", "hints", "exploration_attempts_v2",
-		"exploration_observations_v2", "exploration_observation_artifacts_v2",
-		"intent_versions", "attempt_versions", "board_commits",
+		"schema_meta", "runs", "events", "logs", "verdicts", "sweeps", "artifact_blobs",
+		"artifacts", "claims", "intents", "intent_sources", "hints", "attempts",
+		"observations", "observation_artifacts", "intent_versions", "attempt_versions", "board_commits",
 	} {
 		var present int
 		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&present); err != nil {
@@ -185,11 +182,11 @@ func (s *Store) ensureCurrentSchema() error {
 }
 
 func (s *Store) CreateRun(ctx context.Context, record core.RunRecord) error {
-	phase, outcome, status, err := core.NormalizeRunState(record.Phase, record.Outcome, record.Status)
+	phase, outcome, _, err := core.NormalizeRunState(record.Phase, record.Outcome, "")
 	if err != nil {
 		return fmt.Errorf("create run state: %w", err)
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO runs(id,status,phase,outcome,spec,result,error,metadata,created_at,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, record.ID, status, phase, outcome, nullableJSON(record.Spec), nullableJSON(record.Result), record.Error, nullableJSON(record.Metadata), formatTime(record.CreatedAt), formatTimePtr(record.StartedAt), formatTimePtr(record.FinishedAt))
+	_, err = s.db.ExecContext(ctx, `INSERT INTO runs(id,phase,outcome,spec,result,error,metadata,created_at,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, record.ID, phase, outcome, nullableJSON(record.Spec), nullableJSON(record.Result), record.Error, nullableJSON(record.Metadata), formatTime(record.CreatedAt), formatTimePtr(record.StartedAt), formatTimePtr(record.FinishedAt))
 	if err != nil {
 		return fmt.Errorf("create run: %w", err)
 	}
@@ -197,11 +194,11 @@ func (s *Store) CreateRun(ctx context.Context, record core.RunRecord) error {
 }
 
 func (s *Store) UpdateRun(ctx context.Context, record core.RunRecord) error {
-	phase, outcome, status, stateErr := core.NormalizeRunState(record.Phase, record.Outcome, record.Status)
+	phase, outcome, _, stateErr := core.NormalizeRunState(record.Phase, record.Outcome, "")
 	if stateErr != nil {
 		return fmt.Errorf("update run state: %w", stateErr)
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE runs SET status=?, phase=?, outcome=?, spec=?, result=?, error=?, metadata=?, started_at=?, finished_at=? WHERE id=? AND phase != ?`, status, phase, outcome, nullableJSON(record.Spec), nullableJSON(record.Result), record.Error, nullableJSON(record.Metadata), formatTimePtr(record.StartedAt), formatTimePtr(record.FinishedAt), record.ID, core.RunPhaseTerminal)
+	result, err := s.db.ExecContext(ctx, `UPDATE runs SET phase=?, outcome=?, spec=?, result=?, error=?, metadata=?, started_at=?, finished_at=? WHERE id=? AND phase != ?`, phase, outcome, nullableJSON(record.Spec), nullableJSON(record.Result), record.Error, nullableJSON(record.Metadata), formatTimePtr(record.StartedAt), formatTimePtr(record.FinishedAt), record.ID, core.RunPhaseTerminal)
 	if err != nil {
 		return fmt.Errorf("update run: %w", err)
 	}
@@ -213,13 +210,13 @@ func (s *Store) UpdateRun(ctx context.Context, record core.RunRecord) error {
 }
 
 func (s *Store) GetRun(ctx context.Context, id string) (core.RunRecord, error) {
-	return scanRun(s.db.QueryRowContext(ctx, `SELECT id,status,phase,outcome,spec,result,error,metadata,created_at,started_at,finished_at FROM runs WHERE id=?`, id))
+	return scanRun(s.db.QueryRowContext(ctx, `SELECT id,phase,outcome,spec,result,error,metadata,created_at,started_at,finished_at FROM runs WHERE id=?`, id))
 }
 func (s *Store) ListRuns(ctx context.Context, limit int) ([]core.RunRecord, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,status,phase,outcome,spec,result,error,metadata,created_at,started_at,finished_at FROM runs ORDER BY created_at DESC LIMIT ?`, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,phase,outcome,spec,result,error,metadata,created_at,started_at,finished_at FROM runs ORDER BY created_at DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -237,14 +234,14 @@ func (s *Store) ListRuns(ctx context.Context, limit int) ([]core.RunRecord, erro
 
 func scanRun(scanner interface{ Scan(...any) error }) (core.RunRecord, error) {
 	var record core.RunRecord
-	var status, phase, outcome, created string
+	var phase, outcome, created string
 	var spec, result, metadata []byte
 	var started, finished sql.NullString
-	if err := scanner.Scan(&record.ID, &status, &phase, &outcome, &spec, &result, &record.Error, &metadata, &created, &started, &finished); err != nil {
+	if err := scanner.Scan(&record.ID, &phase, &outcome, &spec, &result, &record.Error, &metadata, &created, &started, &finished); err != nil {
 		return record, err
 	}
 	var stateErr error
-	record.Phase, record.Outcome, record.Status, stateErr = core.NormalizeRunState(core.RunPhase(phase), core.RunOutcome(outcome), core.Status(status))
+	record.Phase, record.Outcome, _, stateErr = core.NormalizeRunState(core.RunPhase(phase), core.RunOutcome(outcome), "")
 	if stateErr != nil {
 		return record, stateErr
 	}
@@ -261,12 +258,19 @@ func (s *Store) AppendEvent(ctx context.Context, event core.Event) (core.Event, 
 	if event.SchemaVersion == 0 {
 		event.SchemaVersion = 1
 	}
-	result, err := s.db.ExecContext(ctx, `INSERT INTO events(run_id,session_id,source,type,time,data,raw,schema_version) VALUES(?,?,?,?,?,?,?,?)`, event.RunID, event.SessionID, event.Source, event.Type, formatTime(event.Time), nullableJSON(event.Data), nullableJSON(event.Raw), event.SchemaVersion)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return core.Event{}, fmt.Errorf("append event: %w", err)
 	}
-	event.Seq, _ = result.LastInsertId()
-	return event, nil
+	defer tx.Rollback()
+	stored, err := appendHashedEventTx(ctx, tx, event)
+	if err != nil {
+		return core.Event{}, fmt.Errorf("append event: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return core.Event{}, fmt.Errorf("append event: %w", err)
+	}
+	return stored, nil
 }
 func (s *Store) ListEvents(ctx context.Context, runID string, after int64) ([]core.Event, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT seq,schema_version,run_id,session_id,source,type,time,data,raw FROM events WHERE run_id=? AND seq>? ORDER BY seq`, runID, after)
@@ -325,7 +329,7 @@ func (s *Store) Finalize(ctx context.Context, record engine.FinalizationRecord) 
 		return core.Event{}, fmt.Errorf("finalize run: %w", err)
 	}
 	defer tx.Rollback()
-	phase, outcome, status, stateErr := core.NormalizeRunState(record.Run.Phase, record.Run.Outcome, record.Run.Status)
+	phase, outcome, _, stateErr := core.NormalizeRunState(record.Run.Phase, record.Run.Outcome, "")
 	if stateErr != nil {
 		return core.Event{}, fmt.Errorf("finalize run state: %w", stateErr)
 	}
@@ -336,11 +340,7 @@ func (s *Store) Finalize(ctx context.Context, record engine.FinalizationRecord) 
 	if event.SchemaVersion == 0 {
 		event.SchemaVersion = 1
 	}
-	inserted, err := tx.ExecContext(ctx, `INSERT INTO events(run_id,session_id,source,type,time,data,raw,schema_version) VALUES(?,?,?,?,?,?,?,?)`, event.RunID, event.SessionID, event.Source, event.Type, formatTime(event.Time), nullableJSON(event.Data), nullableJSON(event.Raw), event.SchemaVersion)
-	if err != nil {
-		return core.Event{}, fmt.Errorf("finalize event: %w", err)
-	}
-	event.Seq, err = inserted.LastInsertId()
+	event, err = appendHashedEventTx(ctx, tx, event)
 	if err != nil {
 		return core.Event{}, fmt.Errorf("finalize event: %w", err)
 	}
@@ -349,7 +349,7 @@ func (s *Store) Finalize(ctx context.Context, record engine.FinalizationRecord) 
 			return core.Event{}, fmt.Errorf("finalize verdict: %w", err)
 		}
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE runs SET status=?, phase=?, outcome=?, spec=?, result=?, error=?, metadata=?, started_at=?, finished_at=? WHERE id=?`, status, phase, outcome, nullableJSON(record.Run.Spec), nullableJSON(record.Run.Result), record.Run.Error, nullableJSON(record.Run.Metadata), formatTimePtr(record.Run.StartedAt), formatTimePtr(record.Run.FinishedAt), record.Run.ID)
+	result, err := tx.ExecContext(ctx, `UPDATE runs SET phase=?, outcome=?, spec=?, result=?, error=?, metadata=?, started_at=?, finished_at=? WHERE id=?`, phase, outcome, nullableJSON(record.Run.Spec), nullableJSON(record.Run.Result), record.Run.Error, nullableJSON(record.Run.Metadata), formatTimePtr(record.Run.StartedAt), formatTimePtr(record.Run.FinishedAt), record.Run.ID)
 	if err != nil {
 		return core.Event{}, fmt.Errorf("finalize run: %w", err)
 	}
@@ -425,7 +425,7 @@ func (s *Store) MarkInterrupted(ctx context.Context) error {
 	_ = rows.Close()
 	now := time.Now().UTC()
 	for _, id := range ids {
-		event, err := core.NewEvent(id, core.EventRunFinalized, core.RunFinalizedPayload{Outcome: core.RunOutcomeInterrupted, Status: core.StatusInterrupted})
+		event, err := core.NewEvent(id, core.EventRunFinalized, core.RunFinalizedPayload{Outcome: core.RunOutcomeInterrupted})
 		if err != nil {
 			return err
 		}
@@ -433,7 +433,7 @@ func (s *Store) MarkInterrupted(ctx context.Context) error {
 		if _, err := appendEventTx(ctx, tx, event); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE runs SET status=?, phase=?, outcome=?, finished_at=? WHERE id=?`, core.StatusInterrupted, core.RunPhaseTerminal, core.RunOutcomeInterrupted, formatTime(now), id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE runs SET phase=?, outcome=?, finished_at=? WHERE id=?`, core.RunPhaseTerminal, core.RunOutcomeInterrupted, formatTime(now), id); err != nil {
 			return err
 		}
 	}

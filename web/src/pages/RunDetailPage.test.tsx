@@ -21,18 +21,18 @@ vi.mock('@/hooks/useRunEvents', () => ({
         run_id: 'run_1',
         session_id: '',
         source: 'harness',
-        type: 'exploration.branch.created',
+        type: 'claim.created',
         time: '2026-10-20T12:00:02Z',
-        data: { branch: { id: 'root', depth: 0, topic: 'root', phase: 'open', outcome: 'pending', scope: 'target' } },
+        data: { claim: { id: 'claim-root', kind: 'origin', description: 'Authorized root' } },
       },
       {
         seq: 3,
         run_id: 'run_1',
         session_id: '',
         source: 'harness',
-        type: 'exploration.branch.created',
+        type: 'claim.created',
         time: '2026-10-20T12:00:03Z',
-        data: { branch: { id: 'branch-1', parent_id: 'root', depth: 1, topic: 'web.verify', hypothesis: 'Verify the port observation', phase: 'closed', outcome: 'supported', scope: 'target' } },
+        data: { claim: { id: 'claim-1', kind: 'finding', description: 'Verify the port observation' } },
       },
       {
         seq: 4,
@@ -61,7 +61,6 @@ describe('RunDetailPage', () => {
           id: 'run_1',
           phase: 'terminal',
           outcome: 'succeeded',
-          status: 'succeeded',
           created_at: '2026-10-20T11:59:00Z',
           started_at: '2026-10-20T12:00:00Z',
           finished_at: '2026-10-20T12:01:00Z',
@@ -74,15 +73,14 @@ describe('RunDetailPage', () => {
             run_id: 'run_1',
             phase: 'terminal',
             outcome: 'succeeded',
-            status: 'succeeded',
             usage: { total_tokens: 10, cost_usd: 0.1 },
             sessions: [{ id: 'pi', status: 'succeeded', exit_code: 0 }],
             verdict: { success: true, score: 3, message: 'flag accepted' },
           },
         }),
       ),
-      http.get('*/v1/runs/run_1/graph', () =>
-        HttpResponse.json({ facts: [], intents: [], hints: [], attempts: [], slots: [1, 2] }),
+      http.get('*/v1/runs/run_1/board', () =>
+        HttpResponse.json({ claims: [{ id: 'claim-1', run_id: 'run_1', task_id: 'demo', kind: 'finding', description: 'Verify the port observation' }], intents: [], hints: [], attempts: [], slots: [1], board_revision: 1, reason: { active: false, frontier_version: 1 } }),
       ),
       http.get('*/v1/runs/run_1/verdict', () =>
         HttpResponse.json({
@@ -104,7 +102,6 @@ describe('RunDetailPage', () => {
     expect(await screen.findByText('Find and prove the flag')).toBeInTheDocument()
     expect(await screen.findByText('权威判定：成功')).toBeInTheDocument()
     fireEvent.click(screen.getByText('探索'))
-    expect((await screen.findAllByText('web.verify')).length).toBeGreaterThan(0)
     expect((await screen.findAllByText('Verify the port observation')).length).toBeGreaterThan(0)
     fireEvent.click(screen.getByText('事件 (4)'))
     expect(await screen.findByText('run.finalized')).toBeInTheDocument()

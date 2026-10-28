@@ -13,7 +13,6 @@ type AgentRuntimeFactory interface {
 // AgentSession is one untrusted runtime process.
 type AgentSession interface {
 	Prompt(context.Context, string) error
-	Steer(context.Context, string) error
 	Reset(context.Context) error
 	Events() <-chan AgentEvent
 	Logs() <-chan LogEvent
@@ -60,7 +59,7 @@ type ArtifactStore interface {
 type Commit struct {
 	RunID        string
 	Revision     uint64
-	Facts        []Fact
+	Claims       []Claim
 	Intents      []Intent
 	Hints        []Hint
 	Attempts     []IntentAttempt
@@ -86,9 +85,9 @@ type CanonicalWriter interface {
 	Finalize(context.Context, FinalizationRecord) (Event, error)
 }
 
-// BoardReader queries the append-only Fact/Intent board.
+// BoardReader queries the append-only Claim/Intent board.
 type BoardReader interface {
-	ListFacts(context.Context, string) ([]Fact, error)
+	ListClaims(context.Context, string) ([]Claim, error)
 	ListIntents(context.Context, string) ([]Intent, error)
 	ListHints(context.Context, string) ([]Hint, error)
 	ListIntentAttempts(context.Context, string) ([]IntentAttempt, error)
@@ -104,6 +103,7 @@ type ReadStore interface {
 	ListLogs(context.Context, string, int64) ([]LogRecord, error)
 	GetVerdict(context.Context, string) (VerdictRecord, error)
 	ListArtifacts(context.Context, string) ([]Artifact, error)
+	OpenArtifact(context.Context, string) (io.ReadCloser, error)
 	GetBoardRevision(context.Context, string) (uint64, error)
 }
 

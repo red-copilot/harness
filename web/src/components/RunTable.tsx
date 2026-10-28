@@ -2,6 +2,7 @@ import { Button, Table, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useNavigate } from 'react-router-dom'
 import type { RunRecord } from '@/api/types'
+import { runStatus } from '@/utils/status'
 import { useI18n } from '@/i18n/I18nContext'
 import { agentIds, formatCost, formatRunDuration, formatTokens } from '@/utils/format'
 import { StatusTag } from './StatusTag'
@@ -25,7 +26,7 @@ export function RunTable({
       title: t('common.status'),
       dataIndex: 'status',
       width: 130,
-      render: (_, run) => <StatusTag status={run.status} />,
+      render: (_, run) => <StatusTag status={runStatus(run)} />,
     },
     {
       title: t('common.task'),

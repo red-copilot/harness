@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"sort"
@@ -167,7 +168,8 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	response.Runs.Total = len(records)
 	var durations []float64
 	for _, record := range records {
-		switch record.Status {
+		status := harness.StatusForRunState(record.Phase, record.Outcome)
+		switch status {
 		case harness.StatusQueued:
 			response.Runs.Queued++
 		case harness.StatusProvisioning:
@@ -315,9 +317,13 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 	case "verdict":
 		s.verdict(w, r, runID)
 	case "artifacts":
+		if len(parts) >= 3 && parts[2] != "" {
+			s.downloadArtifact(w, r, runID, parts[2])
+			return
+		}
 		listRunItems(w, r, runID, s.store.ListArtifacts)
-	case "graph":
-		s.graph(w, r, runID)
+	case "board":
+		s.board(w, r, runID)
 	case "cancel":
 		if r.Method != http.MethodPost {
 			methodNotAllowed(w, http.MethodPost)
@@ -333,19 +339,19 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusAccepted, map[string]string{"status": "cancelled"})
-	case "steer":
+	case "hints":
 		if r.Method != http.MethodPost {
 			methodNotAllowed(w, http.MethodPost)
 			return
 		}
 		var body struct {
-			SessionID string `json:"session_id"`
-			Message   string `json:"message"`
+			Content string `json:"content"`
+			Creator string `json:"creator"`
 		}
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&body); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid steer request")
+			writeError(w, http.StatusBadRequest, "invalid hint request")
 			return
 		}
 		live := s.lookupLive(runID)
@@ -353,8 +359,8 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "run is not live")
 			return
 		}
-		if err := live.Steer(r.Context(), body.SessionID, body.Message); err != nil {
-			writeError(w, http.StatusNotFound, err.Error())
+		if err := live.SubmitHint(r.Context(), body.Content, body.Creator); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusAccepted, map[string]string{"status": "queued"})
@@ -363,23 +369,25 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-type graphReason struct {
+type boardReason struct {
 	Active          bool   `json:"active"`
 	FrontierVersion uint64 `json:"frontier_version"`
 	FreeSlots       []int  `json:"free_slots,omitempty"`
 }
 
-type graphResponse struct {
-	Facts         []harness.Fact          `json:"facts"`
+type boardResponse struct {
+	Claims        []harness.Claim         `json:"claims"`
 	Intents       []harness.Intent        `json:"intents"`
 	Hints         []harness.Hint          `json:"hints"`
 	Attempts      []harness.IntentAttempt `json:"attempts"`
+	Observations  []harness.Observation   `json:"observations"`
+	Artifacts     []harness.Artifact      `json:"artifacts"`
 	Slots         []int                   `json:"slots"`
 	BoardRevision uint64                  `json:"board_revision"`
-	Reason        graphReason             `json:"reason"`
+	Reason        boardReason             `json:"reason"`
 }
 
-func (s *Server) graph(w http.ResponseWriter, r *http.Request, runID string) {
+func (s *Server) board(w http.ResponseWriter, r *http.Request, runID string) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w, http.MethodGet)
 		return
@@ -388,7 +396,7 @@ func (s *Server) graph(w http.ResponseWriter, r *http.Request, runID string) {
 		writeError(w, http.StatusNotFound, "run not found")
 		return
 	}
-	facts, err := s.store.ListFacts(r.Context(), runID)
+	claims, err := s.store.ListClaims(r.Context(), runID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -408,20 +416,28 @@ func (s *Server) graph(w http.ResponseWriter, r *http.Request, runID string) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	observations, err := s.store.ListBlackboardObservations(r.Context(), runID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	artifacts, err := s.store.ListArtifacts(r.Context(), runID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	occupied := map[int]bool{}
 	for _, intent := range intents {
 		if intent.State == harness.IntentClaimed {
 			occupied[intent.Slot] = true
 		}
 	}
-	slots := make([]int, 0, 2)
-	for _, slot := range []int{1, 2} {
-		if !occupied[slot] {
-			slots = append(slots, slot)
-		}
+	slots := make([]int, 0, 1)
+	if !occupied[1] {
+		slots = append(slots, 1)
 	}
 	revision, _ := s.store.GetBoardRevision(r.Context(), runID)
-	reason := graphReason{FreeSlots: slots, FrontierVersion: revision}
+	reason := boardReason{FreeSlots: slots, FrontierVersion: revision}
 	events, _ := s.store.ListEvents(r.Context(), runID, 0)
 	for _, event := range events {
 		switch event.Type {
@@ -435,7 +451,43 @@ func (s *Server) graph(w http.ResponseWriter, r *http.Request, runID string) {
 			reason.Active = false
 		}
 	}
-	writeJSON(w, http.StatusOK, graphResponse{Facts: facts, Intents: intents, Hints: hints, Attempts: attempts, Slots: slots, BoardRevision: revision, Reason: reason})
+	writeJSON(w, http.StatusOK, boardResponse{Claims: claims, Intents: intents, Hints: hints, Attempts: attempts, Observations: observations, Artifacts: artifacts, Slots: slots, BoardRevision: revision, Reason: reason})
+}
+
+func (s *Server) downloadArtifact(w http.ResponseWriter, r *http.Request, runID, artifactID string) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	artifacts, err := s.store.ListArtifacts(r.Context(), runID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "artifact not found")
+		return
+	}
+	var name, mediaType string
+	for _, artifact := range artifacts {
+		if artifact.ID == artifactID {
+			name, mediaType = artifact.Name, artifact.MediaType
+			break
+		}
+	}
+	if name == "" {
+		writeError(w, http.StatusNotFound, "artifact not found")
+		return
+	}
+	reader, err := s.store.OpenArtifact(r.Context(), artifactID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "artifact not found")
+		return
+	}
+	defer reader.Close()
+	if mediaType == "" {
+		mediaType = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", mediaType)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+strings.ReplaceAll(name, `"`, ``)+`"`)
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = io.Copy(w, reader)
 }
 
 func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, runID string) {

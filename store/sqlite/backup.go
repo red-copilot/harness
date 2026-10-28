@@ -24,6 +24,8 @@ type BackupManifest struct {
 	SizeBytes     int64            `json:"size_bytes"`
 	SchemaVersion *int             `json:"schema_version,omitempty"`
 	RowCounts     map[string]int64 `json:"row_counts"`
+	EventHead     string           `json:"event_head,omitempty"`
+	ArtifactBytes int64            `json:"artifact_bytes"`
 }
 
 // VerifyBackupManifest verifies that the manifest points to a regular backup
@@ -84,6 +86,22 @@ func VerifyBackupManifest(path string) (BackupManifest, error) {
 	if manifest.SchemaVersion != nil && actualVersion != nil && *manifest.SchemaVersion != *actualVersion {
 		return manifest, fmt.Errorf("backup schema version mismatch: manifest=%d actual=%d", *manifest.SchemaVersion, *actualVersion)
 	}
+	var eventHead string
+	_ = backupDB.QueryRow(`SELECT COALESCE((SELECT hash FROM events ORDER BY seq DESC LIMIT 1), '')`).Scan(&eventHead)
+	if manifest.EventHead != "" && manifest.EventHead != eventHead {
+		return manifest, fmt.Errorf("backup event head mismatch")
+	}
+	var artifactBytes int64
+	var artifactTable int
+	_ = backupDB.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='artifact_blobs'`).Scan(&artifactTable)
+	if artifactTable > 0 {
+		if err := backupDB.QueryRow(`SELECT COALESCE(SUM(size),0) FROM artifact_blobs`).Scan(&artifactBytes); err != nil {
+			return manifest, fmt.Errorf("backup artifact bytes: %w", err)
+		}
+	}
+	if artifactBytes != manifest.ArtifactBytes {
+		return manifest, fmt.Errorf("backup artifact byte mismatch: manifest=%d actual=%d", manifest.ArtifactBytes, artifactBytes)
+	}
 	return manifest, nil
 }
 
@@ -138,6 +156,18 @@ func CreateBackup(sourcePath, backupPath, manifestPath string) (BackupManifest, 
 		return manifest, fmt.Errorf("open backup for manifest: %w", err)
 	}
 	counts, version, inspectErr := inspectDatabase(backupDB)
+	var eventHead string
+	if inspectErr == nil {
+		inspectErr = backupDB.QueryRow(`SELECT COALESCE((SELECT hash FROM events ORDER BY seq DESC LIMIT 1), '')`).Scan(&eventHead)
+	}
+	var artifactBytes int64
+	if inspectErr == nil {
+		var artifactTable int
+		inspectErr = backupDB.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='artifact_blobs'`).Scan(&artifactTable)
+		if inspectErr == nil && artifactTable > 0 {
+			inspectErr = backupDB.QueryRow(`SELECT COALESCE(SUM(size),0) FROM artifact_blobs`).Scan(&artifactBytes)
+		}
+	}
 	closeErr := backupDB.Close()
 	if inspectErr != nil {
 		return manifest, inspectErr
@@ -148,7 +178,7 @@ func CreateBackup(sourcePath, backupPath, manifestPath string) (BackupManifest, 
 	manifest = BackupManifest{
 		Source: filepath.Clean(sourcePath), Backup: filepath.Clean(backupPath),
 		CreatedAt: time.Now().UTC().Format(time.RFC3339), SHA256: hash, SizeBytes: size,
-		SchemaVersion: version, RowCounts: counts,
+		SchemaVersion: version, RowCounts: counts, EventHead: eventHead, ArtifactBytes: artifactBytes,
 	}
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {

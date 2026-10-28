@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -86,13 +87,15 @@ type runController struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	events chan core.Event
+	hints  chan core.Hint
 	done   chan struct{}
 
-	root      string
-	taskDir   string
-	skillsDir string
-	redaction *core.Redactor
-	budget    core.Budget
+	root              string
+	taskDir           string
+	skillsDir         string
+	redaction         *core.Redactor
+	budget            core.Budget
+	materializeSkills func(string) error
 
 	watchCancel context.CancelFunc
 	watchDone   chan struct{}
@@ -105,7 +108,7 @@ type runController struct {
 	transitionSeq uint64
 }
 
-func newRunController(runner *Runner, id string, ctx context.Context, cancel context.CancelFunc, root string, budget core.Budget, redaction *core.Redactor) *runController {
+func newRunController(runner *Runner, id string, ctx context.Context, cancel context.CancelFunc, root string, budget core.Budget, redaction *core.Redactor, materializeSkills func(string) error) *runController {
 	if redaction == nil {
 		redaction = core.NewRedactor()
 	}
@@ -113,7 +116,7 @@ func newRunController(runner *Runner, id string, ctx context.Context, cancel con
 		runner: runner, id: id, ctx: ctx, cancel: cancel,
 		events: make(chan core.Event, 256), done: make(chan struct{}),
 		root: root, taskDir: filepath.Join(root, "task"), skillsDir: filepath.Join(root, "skills"),
-		redaction: redaction, budget: budget,
+		redaction: redaction, budget: budget, materializeSkills: materializeSkills,
 		state: runControlState{phase: core.RunPhaseQueued, sessions: map[string]AgentSession{}, sessionHistory: map[string]core.SessionResult{}},
 	}
 }
@@ -305,16 +308,6 @@ func (c *runController) removeSession(id string, status core.Status) {
 	_ = c.apply(runTransition{kind: runTransitionRemoveSession, sessionID: id, sessionStatus: status})
 }
 
-func (c *runController) steer(ctx context.Context, sessionID, message string) error {
-	c.mu.RLock()
-	session := c.state.sessions[sessionID]
-	c.mu.RUnlock()
-	if session == nil {
-		return ErrRunNotFound
-	}
-	return session.Steer(ctx, message)
-}
-
 func (c *runController) sessionResults() []core.SessionResult {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -405,7 +398,7 @@ func (c *runController) appendLog(record core.LogRecord) error {
 }
 
 func (c *runController) updatePhase(phase core.RunPhase) error {
-	phase, _, status, err := core.NormalizeRunState(phase, "", "")
+	phase, _, _, err := core.NormalizeRunState(phase, "", "")
 	if err != nil {
 		return err
 	}
@@ -421,7 +414,7 @@ func (c *runController) updatePhase(phase core.RunPhase) error {
 		return err
 	}
 	now := time.Now().UTC()
-	record.Phase, record.Outcome, record.Status = phase, "", status
+	record.Phase, record.Outcome = phase, ""
 	if phase == core.RunPhaseProvisioning {
 		record.StartedAt = &now
 	}
@@ -429,7 +422,7 @@ func (c *runController) updatePhase(phase core.RunPhase) error {
 		c.setControlError(err)
 		return err
 	}
-	event, err := c.canonicalEvent("harness", core.EventRunPhase, core.RunPhasePayload{Phase: phase, Status: status})
+	event, err := c.canonicalEvent("harness", core.EventRunPhase, core.RunPhasePayload{Phase: phase})
 	if err != nil {
 		return err
 	}
@@ -458,9 +451,9 @@ func (c *runController) finishExecution(outcome core.RunOutcome, finalErr error,
 	frozen := claim.frozen
 	redactor := c.redactor()
 	errorText := redactError(redactor, finalErr)
-	result := core.Result{RunID: c.id, Phase: core.RunPhaseTerminal, Outcome: outcome, Status: core.StatusForRunState(core.RunPhaseTerminal, outcome), Verdict: verdict}
+	result := core.Result{RunID: c.id, Phase: core.RunPhaseTerminal, Outcome: outcome, Verdict: verdict}
 	if frozen.board != nil {
-		result.Facts = append([]core.Fact(nil), frozen.board.Facts...)
+		result.Claims = append([]core.Claim(nil), frozen.board.Claims...)
 		result.Intents = append([]core.Intent(nil), frozen.board.Intents...)
 		result.Hints = append([]core.Hint(nil), frozen.board.Hints...)
 		result.IntentAttempts = append([]core.IntentAttempt(nil), frozen.board.Attempts...)
@@ -480,7 +473,6 @@ func (c *runController) finishExecution(outcome core.RunOutcome, finalErr error,
 		finalErr = frozen.controlErr
 		outcome = core.RunOutcomeFailed
 		result.Outcome = outcome
-		result.Status = core.StatusForRunState(core.RunPhaseTerminal, outcome)
 		result.Error = redactError(redactor, frozen.controlErr)
 	}
 	result = core.RedactResult(redactor, result)
@@ -489,12 +481,10 @@ func (c *runController) finishExecution(outcome core.RunOutcome, finalErr error,
 		outcome = core.RunOutcomeFailed
 		finalErr = getErr
 		result.Outcome = outcome
-		result.Status = core.StatusForRunState(core.RunPhaseTerminal, outcome)
 		result.Error = redactError(redactor, getErr)
 		record = core.RunRecord{ID: c.id}
 	}
 	record.Phase, record.Outcome = core.RunPhaseTerminal, outcome
-	record.Status = core.StatusForRunState(core.RunPhaseTerminal, outcome)
 	record.Result = mustJSON(result)
 	record.Error = result.Error
 	record.FinishedAt = &now
@@ -503,7 +493,7 @@ func (c *runController) finishExecution(outcome core.RunOutcome, finalErr error,
 		verdictRecord = &core.VerdictRecord{RunID: c.id, Success: verdict.Success, Score: verdict.Score, Message: redactor.Redact(verdict.Message), Evidence: redactor.RedactJSON(verdict.Evidence), CreatedAt: now}
 	}
 	c.eventMu.Lock()
-	finalEvent, eventErr := c.canonicalEvent("harness", core.EventRunFinalized, core.RunFinalizedPayload{Outcome: outcome, Status: record.Status, Error: result.Error})
+	finalEvent, eventErr := c.canonicalEvent("harness", core.EventRunFinalized, core.RunFinalizedPayload{Outcome: outcome, Error: result.Error})
 	finalEvent.Time = now
 	var stored core.Event
 	finalizeErr := eventErr
@@ -514,7 +504,6 @@ func (c *runController) finishExecution(outcome core.RunOutcome, finalErr error,
 		outcome = core.RunOutcomeFailed
 		finalErr = finalizeErr
 		result.Outcome = outcome
-		result.Status = core.StatusForRunState(core.RunPhaseTerminal, outcome)
 		result.Error = redactError(redactor, finalizeErr)
 	}
 	if !c.eventsClosed {
@@ -547,9 +536,11 @@ func (c *runController) run(spec RunSpec) {
 		c.finishExecution(core.RunOutcomeFailed, err, nil)
 		return
 	}
-	if err := prepareEmbeddedSkills(c.skillsDir); err != nil {
-		c.finishExecution(core.RunOutcomeFailed, err, nil)
-		return
+	if c.materializeSkills != nil {
+		if err := c.materializeSkills(c.skillsDir); err != nil {
+			c.finishExecution(core.RunOutcomeFailed, err, nil)
+			return
+		}
 	}
 	if err := c.updatePhase(core.RunPhaseProvisioning); err != nil {
 		c.finishExecution(core.RunOutcomeFailed, err, nil)
@@ -631,7 +622,15 @@ func (c *runController) run(spec RunSpec) {
 		} else if err := c.updatePhase(core.RunPhaseVerifying); err != nil {
 			finalErr = err
 		} else {
-			verifyVerdict, verifyErr := spec.Verifier.Verify(c.ctx, core.VerifyRequest{RunID: c.id, Task: spec.Task, Target: target, Sessions: c.sessionResults(), WorkspaceRoot: c.root})
+			evidenceDir, bundleErr := buildEvidenceBundle(c.ctx, c.runner.store, c.id, c.root)
+			verifyVerdict, verifyErr := core.Verdict{}, bundleErr
+			if bundleErr == nil {
+				verifyVerdict, verifyErr = spec.Verifier.Verify(c.ctx, core.VerifyRequest{RunID: c.id, Task: spec.Task, Target: target, EvidenceDir: evidenceDir})
+				_ = os.RemoveAll(evidenceDir)
+			}
+			if verifyErr == nil {
+				verifyVerdict.Authority = core.VerdictAuthorityVerifier
+			}
 			if spec.Backend != nil && c.ctx.Err() == nil {
 				if authorityErr := c.observeAuthorityOnce(spec.Backend, target); authorityErr != nil {
 					verifyErr = errors.Join(verifyErr, authorityErr)
@@ -675,7 +674,7 @@ func (c *runController) run(spec RunSpec) {
 }
 
 func completionVerdict(completion core.Completion) *core.Verdict {
-	return &core.Verdict{Success: completion.Success, Score: completion.Score, Message: completion.Message, Evidence: mustJSON(completion.Metadata)}
+	return &core.Verdict{Authority: core.VerdictAuthorityBackend, Success: completion.Success, Score: completion.Score, Message: completion.Message, Evidence: mustJSON(completion.Metadata)}
 }
 
 func (c *runController) startBackendWatcher(backend CompletionSource, target core.TargetBinding) {

@@ -1,9 +1,9 @@
 import type { RunDescriptor, RunRecord, RunStatus, Usage } from '@/api/types'
 
-/** agentIds flattens a run descriptor's reasoner and executors into ids. */
+/** agentIds flattens a run descriptor's reasoner and executor into ids. */
 export function agentIds(spec?: RunDescriptor | null): string[] {
   if (!spec) return []
-  return [spec.reasoner?.id, ...(spec.executors?.map((agent) => agent.id) ?? [])].filter(
+  return [spec.reasoner?.id, spec.executor?.id].filter(
     (id): id is string => Boolean(id),
   )
 }

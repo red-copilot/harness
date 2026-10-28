@@ -1,3 +1,4 @@
+import type { RunRecord } from '@/api/types'
 import type { RunStatus } from '@/api/types'
 
 const ACTIVE_STATUSES = new Set<RunStatus>(['queued', 'provisioning', 'running', 'finalizing', 'verifying'])
@@ -29,4 +30,9 @@ export function statusColor(status: RunStatus): string {
 
 export function isTerminalStatus(status: RunStatus): boolean {
   return !ACTIVE_STATUSES.has(status)
+}
+
+export function runStatus(record: Pick<RunRecord, 'phase' | 'outcome'>): RunStatus {
+  if (record.phase === 'terminal') return record.outcome ?? 'failed'
+  return (record.phase ?? 'queued') as RunStatus
 }

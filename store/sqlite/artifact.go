@@ -1,13 +1,12 @@
 package sqlite
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -39,66 +38,27 @@ func (s *Store) Put(ctx context.Context, input core.ArtifactInput) (core.Artifac
 	if !safeArtifactID(id) {
 		return core.Artifact{}, errors.New("unsafe artifact id")
 	}
-	path := s.artifactPath(id)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return core.Artifact{}, err
-	}
-	if info, err := os.Lstat(path); err == nil {
-		if !info.Mode().IsRegular() {
-			return core.Artifact{}, errors.New("artifact target is not a regular file")
-		}
-	} else if !os.IsNotExist(err) {
-		return core.Artifact{}, err
-	} else {
-		tmp, err := os.CreateTemp(filepath.Dir(path), ".artifact-*")
-		if err != nil {
-			return core.Artifact{}, err
-		}
-		tmpName := tmp.Name()
-		defer os.Remove(tmpName)
-		if err := tmp.Chmod(0o600); err != nil {
-			_ = tmp.Close()
-			return core.Artifact{}, err
-		}
-		if _, err := tmp.Write(data); err != nil {
-			_ = tmp.Close()
-			return core.Artifact{}, err
-		}
-		if err := tmp.Sync(); err != nil {
-			_ = tmp.Close()
-			return core.Artifact{}, err
-		}
-		if err := tmp.Close(); err != nil {
-			return core.Artifact{}, err
-		}
-		if err := os.Rename(tmpName, path); err != nil {
-			return core.Artifact{}, err
-		}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO artifact_blobs(sha256,size,data) VALUES(?,?,?) ON CONFLICT(sha256) DO NOTHING`, id, len(data), data); err != nil {
+		return core.Artifact{}, fmt.Errorf("store artifact blob: %w", err)
 	}
 	return core.Artifact{ID: id, RunID: input.RunID, AttemptID: input.AttemptID, SessionID: input.SessionID, Name: input.Name, MediaType: input.MediaType, Size: int64(len(data)), SHA256: id, CreatedAt: time.Now().UTC()}, nil
+}
+
+func (s *Store) OpenArtifact(ctx context.Context, artifactID string) (io.ReadCloser, error) {
+	return s.Open(ctx, artifactID)
 }
 
 func (s *Store) Open(ctx context.Context, artifactID string) (io.ReadCloser, error) {
 	if !safeArtifactID(artifactID) {
 		return nil, errors.New("unsafe artifact id")
 	}
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-	path := s.artifactPath(artifactID)
-	info, err := os.Lstat(path)
-	if err != nil {
+	var data []byte
+	if err := s.db.QueryRowContext(ctx, `SELECT data FROM artifact_blobs WHERE sha256=?`, artifactID).Scan(&data); err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() {
-		return nil, errors.New("artifact is not a regular file")
-	}
-	return os.Open(path)
+	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
-func (s *Store) artifactPath(id string) string { return filepath.Join(s.artifactRoot, id[:2], id) }
 func safeArtifactID(id string) bool {
 	if len(id) != 64 || strings.ContainsAny(id, `/\\..`) {
 		return false

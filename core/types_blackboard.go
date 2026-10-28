@@ -6,22 +6,22 @@ import (
 	"time"
 )
 
-// FactKind describes why a Fact exists. Facts are immutable board records.
-type FactKind string
+// ClaimKind describes why a Claim exists. Claims are immutable board records.
+type ClaimKind string
 
 const (
-	FactOrigin   FactKind = "origin"
-	FactGoal     FactKind = "goal"
-	FactFinding  FactKind = "finding"
-	FactNegative FactKind = "negative"
+	ClaimOrigin   ClaimKind = "origin"
+	ClaimGoal     ClaimKind = "goal"
+	ClaimFinding  ClaimKind = "finding"
+	ClaimNegative ClaimKind = "negative"
 )
 
-// Fact is a confirmed state-space fact. Finding facts require evidence.
-type Fact struct {
+// Claim is a confirmed state-space claim. Finding claims require evidence.
+type Claim struct {
 	ID             string    `json:"id"`
 	RunID          string    `json:"run_id"`
 	TaskID         string    `json:"task_id"`
-	Kind           FactKind  `json:"kind"`
+	Kind           ClaimKind `json:"kind"`
 	Description    string    `json:"description"`
 	SourceIntentID string    `json:"source_intent_id,omitempty"`
 	ObservationIDs []string  `json:"observation_ids,omitempty"`
@@ -47,23 +47,23 @@ const (
 	IntentAbandoned IntentState = "abandoned"
 )
 
-// Intent is a declared direction backed by one or more existing Facts. It is
+// Intent is a declared direction backed by one or more existing Claims. It is
 // not a tree node and does not produce child Intents directly.
 type Intent struct {
-	ID           string      `json:"id"`
-	RunID        string      `json:"run_id"`
-	Kind         IntentKind  `json:"kind"`
-	FromFactIDs  []string    `json:"from_fact_ids"`
-	Description  string      `json:"description"`
-	State        IntentState `json:"state"`
-	Slot         int         `json:"slot,omitempty"`
-	ExecutorID   string      `json:"executor_id,omitempty"`
-	AttemptIDs   []string    `json:"attempt_ids,omitempty"`
-	ResultFactID string      `json:"result_fact_id,omitempty"`
-	CreatedAt    time.Time   `json:"created_at"`
-	ClaimedAt    *time.Time  `json:"claimed_at,omitempty"`
-	ConcludedAt  *time.Time  `json:"concluded_at,omitempty"`
-	Error        string      `json:"error,omitempty"`
+	ID            string      `json:"id"`
+	RunID         string      `json:"run_id"`
+	Kind          IntentKind  `json:"kind"`
+	FromClaimIDs  []string    `json:"from_claim_ids"`
+	Description   string      `json:"description"`
+	State         IntentState `json:"state"`
+	Slot          int         `json:"slot,omitempty"`
+	ExecutorID    string      `json:"executor_id,omitempty"`
+	AttemptIDs    []string    `json:"attempt_ids,omitempty"`
+	ResultClaimID string      `json:"result_claim_id,omitempty"`
+	CreatedAt     time.Time   `json:"created_at"`
+	ClaimedAt     *time.Time  `json:"claimed_at,omitempty"`
+	ConcludedAt   *time.Time  `json:"concluded_at,omitempty"`
+	Error         string      `json:"error,omitempty"`
 }
 
 // Hint is read-only human or platform guidance.
@@ -101,19 +101,19 @@ type IntentAttempt struct {
 	Error      string             `json:"error,omitempty"`
 }
 
-// FactProposal is model-proposed semantic content. The controller validates it
-// and generates the real Fact identity.
-type FactProposal struct {
-	Kind            FactKind `json:"kind"`
-	Description     string   `json:"description"`
-	ObservationRefs []string `json:"observation_refs,omitempty"`
+// ClaimProposal is model-proposed semantic content. The controller validates it
+// and generates the real Claim identity.
+type ClaimProposal struct {
+	Kind            ClaimKind `json:"kind"`
+	Description     string    `json:"description"`
+	ObservationRefs []string  `json:"observation_refs,omitempty"`
 }
 
-// ExploreReport is the only structured output of an Explore attempt.
-type ExploreReport struct {
+// AttemptReport is the only structured output of an Explore attempt.
+type AttemptReport struct {
 	IntentID     string                `json:"intent_id"`
 	Phase        IntentAttemptPhase    `json:"phase"`
-	Fact         *FactProposal         `json:"fact,omitempty"`
+	Claim        *ClaimProposal        `json:"claim,omitempty"`
 	Observations []ObservationProposal `json:"observations,omitempty"`
 	Error        string                `json:"error,omitempty"`
 }
@@ -141,12 +141,12 @@ type ReasonReport struct {
 type ReasonRequest struct {
 	Task            Task          `json:"task"`
 	Target          TargetBinding `json:"target"`
-	Facts           []Fact        `json:"facts"`
+	Claims          []Claim       `json:"claims"`
 	Intents         []Intent      `json:"intents"`
 	Hints           []Hint        `json:"hints"`
 	FreeSlots       []int         `json:"free_slots"`
 	FrontierVersion uint64        `json:"frontier_version"`
-	RecentFacts     []Fact        `json:"recent_facts,omitempty"`
+	RecentClaims    []Claim       `json:"recent_claims,omitempty"`
 	Progress        Completion    `json:"progress"`
 	Policy          RunPolicy     `json:"-"`
 }
@@ -156,7 +156,7 @@ type ExploreRequest struct {
 	Task            Task          `json:"task"`
 	Target          TargetBinding `json:"target"`
 	Intent          Intent        `json:"intent"`
-	Facts           []Fact        `json:"facts"`
+	Claims          []Claim       `json:"claims"`
 	Hints           []Hint        `json:"hints"`
 	Budget          AttemptBudget `json:"budget"`
 	WorkspaceDir    string        `json:"workspace_dir"`
@@ -174,34 +174,34 @@ type ReasonStrategy interface {
 type ExploreStrategy interface {
 	ExecutePrompt(ExploreRequest) (string, error)
 	ConcludePrompt(ExploreRequest) (string, error)
-	Parse(ExploreRequest, TurnResult) (ExploreReport, error)
+	Parse(ExploreRequest, TurnResult) (AttemptReport, error)
 }
 
-// ValidateFact enforces immutable Fact shape and evidence requirements.
-func ValidateFact(fact Fact) error {
-	if strings.TrimSpace(fact.ID) == "" {
-		return fmt.Errorf("fact id is required")
+// ValidateClaim enforces immutable Claim shape and evidence requirements.
+func ValidateClaim(claim Claim) error {
+	if strings.TrimSpace(claim.ID) == "" {
+		return fmt.Errorf("claim id is required")
 	}
-	if strings.TrimSpace(fact.RunID) == "" {
-		return fmt.Errorf("fact run_id is required")
+	if strings.TrimSpace(claim.RunID) == "" {
+		return fmt.Errorf("claim run_id is required")
 	}
-	if strings.TrimSpace(fact.TaskID) == "" {
-		return fmt.Errorf("fact task_id is required")
+	if strings.TrimSpace(claim.TaskID) == "" {
+		return fmt.Errorf("claim task_id is required")
 	}
-	if strings.TrimSpace(fact.Description) == "" {
-		return fmt.Errorf("fact description is required")
+	if strings.TrimSpace(claim.Description) == "" {
+		return fmt.Errorf("claim description is required")
 	}
-	switch fact.Kind {
-	case FactOrigin, FactGoal:
+	switch claim.Kind {
+	case ClaimOrigin, ClaimGoal:
 		return nil
-	case FactFinding:
-		if len(fact.ObservationIDs) == 0 {
-			return fmt.Errorf("finding fact requires observations")
+	case ClaimFinding:
+		if len(claim.ObservationIDs) == 0 {
+			return fmt.Errorf("finding claim requires observations")
 		}
-	case FactNegative:
+	case ClaimNegative:
 		return nil
 	default:
-		return fmt.Errorf("unknown fact kind %q", fact.Kind)
+		return fmt.Errorf("unknown claim kind %q", claim.Kind)
 	}
 	return nil
 }
@@ -237,17 +237,17 @@ func ValidateIntent(intent Intent) error {
 	if intent.Kind != IntentBootstrap && intent.Kind != IntentExplore {
 		return fmt.Errorf("unknown intent kind %q", intent.Kind)
 	}
-	if len(intent.FromFactIDs) == 0 || strings.TrimSpace(intent.Description) == "" {
-		return fmt.Errorf("intent requires source facts and description")
+	if len(intent.FromClaimIDs) == 0 || strings.TrimSpace(intent.Description) == "" {
+		return fmt.Errorf("intent requires source claims and description")
 	}
 	if intent.State != IntentOpen && intent.State != IntentClaimed && intent.State != IntentConcluded && intent.State != IntentAbandoned {
 		return fmt.Errorf("unknown intent state %q", intent.State)
 	}
 	if intent.State == IntentClaimed && (intent.Slot != 1 && intent.Slot != 2) {
-		return fmt.Errorf("claimed intent requires slot 1 or 2")
+		return fmt.Errorf("claimed intent requires slot 1")
 	}
-	if intent.State == IntentConcluded && strings.TrimSpace(intent.ResultFactID) == "" {
-		return fmt.Errorf("concluded intent requires result fact")
+	if intent.State == IntentConcluded && strings.TrimSpace(intent.ResultClaimID) == "" {
+		return fmt.Errorf("concluded intent requires result claim")
 	}
 	return nil
 }
@@ -266,41 +266,41 @@ func ValidateReasonReport(report ReasonReport, freeSlots int) error {
 	}
 	for i, intent := range report.Intents {
 		if len(intent.From) == 0 || strings.TrimSpace(intent.Description) == "" {
-			return fmt.Errorf("intent %d requires from facts and description", i)
+			return fmt.Errorf("intent %d requires from claims and description", i)
 		}
 	}
 	if report.GoalCandidate != nil && (len(report.GoalCandidate.From) == 0 || strings.TrimSpace(report.GoalCandidate.Description) == "") {
-		return fmt.Errorf("goal candidate requires from facts and description")
+		return fmt.Errorf("goal candidate requires from claims and description")
 	}
 	return nil
 }
 
-// ValidateExploreReport rejects model-created origins/goals and unevidenced
+// ValidateAttemptReport rejects model-created origins/goals and unevidenced
 // positive findings.
-func ValidateExploreReport(report ExploreReport) error {
+func ValidateAttemptReport(report AttemptReport) error {
 	if strings.TrimSpace(report.IntentID) == "" {
 		return fmt.Errorf("explore report intent_id is required")
 	}
 	if report.Phase != IntentAttemptConcluded && report.Phase != IntentAttemptFailed {
 		return fmt.Errorf("explore report phase %q is invalid", report.Phase)
 	}
-	if report.Fact == nil {
+	if report.Claim == nil {
 		if report.Phase == IntentAttemptFailed || strings.TrimSpace(report.Error) != "" {
 			return nil
 		}
-		return fmt.Errorf("concluded explore report requires a fact")
+		return fmt.Errorf("concluded explore report requires a claim")
 	}
-	switch report.Fact.Kind {
-	case FactFinding:
-		if len(report.Fact.ObservationRefs) == 0 {
-			return fmt.Errorf("finding fact requires observation refs")
+	switch report.Claim.Kind {
+	case ClaimFinding:
+		if len(report.Claim.ObservationRefs) == 0 {
+			return fmt.Errorf("finding claim requires observation refs")
 		}
-	case FactNegative:
+	case ClaimNegative:
 	default:
-		return fmt.Errorf("explore fact kind %q is not allowed", report.Fact.Kind)
+		return fmt.Errorf("explore claim kind %q is not allowed", report.Claim.Kind)
 	}
-	if strings.TrimSpace(report.Fact.Description) == "" {
-		return fmt.Errorf("explore fact description is required")
+	if strings.TrimSpace(report.Claim.Description) == "" {
+		return fmt.Errorf("explore claim description is required")
 	}
 	return nil
 }

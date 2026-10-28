@@ -8,9 +8,9 @@ import (
 
 func redactorForSpec(spec RunSpec) *core.Redactor {
 	values := append([]string(nil), spec.KnownSecrets...)
-	agents := make([]AgentSpec, 0, 1+len(spec.Executors))
+	agents := make([]AgentSpec, 0, 2)
 	agents = append(agents, spec.Reasoner)
-	agents = append(agents, spec.Executors...)
+	agents = append(agents, spec.Executor)
 	for _, key := range spec.SecretEnv {
 		if value, ok := os.LookupEnv(key); ok {
 			values = append(values, value)

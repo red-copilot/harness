@@ -5,14 +5,14 @@
 This is a standalone Go SDK for the Red Harness execution and trust boundary.
 It does not depend on Python or the legacy `red-copilot` runtime.
 
-Fact/Intent v2 is the current implementation on `main`. The released
+Claim/Intent v3 is the current implementation on `main`. The released
 `main@0bbee5e` single-session exploration path is historical context only and
 must not be reintroduced or extended.
 
 ## Current Project Structure
 
 - `core/`: pure domain contracts, policy, validators and typed events.
-- `engine/`: single-writer Run lifecycle, Fact/Intent board, two Executor slots,
+- `engine/`: single-writer Run lifecycle, Claim/Intent board, one Executor slot,
   budgets, authority arbitration and persistence ports.
 - Root `harness`: thin façade over common `core`/`engine` entry points.
 - `pi/`: Pi RPC session implementation and hardened command construction.
@@ -32,21 +32,20 @@ must not be reintroduced or extended.
 
 ## Current Architecture
 
-The Fact/Intent v2 architecture is documented in
+The Claim/Intent v3 architecture is documented in
 `docs/first-principles-architecture.md` and `docs/architecture.md`.
 
 - `core/`: pure domain contracts, policy, validators and typed events; standard
   library only.
-- `engine/`: single-writer Run lifecycle, Fact/Intent board, two Executor
-  slots, budgets, authority arbitration and persistence ports; imports only
+- `engine/`: single-writer Run lifecycle, Claim/Intent board, one Executor
+  slot, budgets, authority arbitration and persistence ports; imports only
   `core` and the standard library.
 - Root `harness`: thin façade over common `core`/`engine` entry points.
 - Adapters: `pi`, `sandbox/docker`, `tsec`, `verify`, `store/sqlite`.
 - Surfaces: `server`, `internal/cli`, `webui` and `web`.
 
 The current implementation has one writable exploration path. Every Run uses a
-serialized Reasoner and exactly two Executors. Branch/Knowledge are legacy
-schema only and must never regain a writable control path.
+serialized Reasoner and exactly one Executor. Branch/Knowledge are removed and must not regain a writable control path.
 
 ## Build and Test
 
@@ -85,26 +84,25 @@ was run.
 - Keep the public library usable without the CLI or HTTP server.
 - Never let agent messages, tool exits or benchmark prose establish success.
   Only a `Verifier` or backend terminal completion may produce a successful
-  verdict. Facts, Reason completion, goal candidates and `agent_settled` are
+  verdict. Claims, Reason completion, goal candidates and `agent_settled` are
   observations, not success.
-- Preserve the v2 trust invariants:
-  model output is a proposal; `Artifact -> Observation -> Fact` provenance is
+- Preserve the v3 trust invariants:
+  model output is a proposal; `Artifact -> Observation -> Claim` provenance is
   mandatory for findings; the engine loop is the only board writer; canonical
   commits are atomic; stale board revisions and malformed reports fail closed.
 - Do not introduce a second writable exploration path. Do not reintroduce
-  Branch/Knowledge writes. They are legacy schema compatibility only; new
-  records must use Fact/Intent.
+  Branch/Knowledge writes. They are removed; all new records use Claim/Intent.
 - Pi RPC uses strict LF JSONL framing and `agent_settled` for completion.
   `agent_end` is not completion.
 - SQLite is the canonical audit store. Keep events/logs append-only. Board
   records, Intent/Attempt history and their events commit atomically; terminal
   Run, Verdict and `run.finalized` finalize atomically.
 - The approved cutover is backup-then-rebuild: verify a SHA-256/row-count backup
-  manifest before creating a fresh v2 database. Never upgrade the production
-  database in place as if old Runs were v2 history. Rollback restores the
+  manifest before creating a fresh v3 database. Never upgrade the production
+  database in place as if old Runs were v3 history. Rollback restores the
   verified backup; the new schema is a one-way boundary.
 - Redact known secret values before persisting events, logs, Specs, Results,
-  Verdicts and diagnostics. In v2, text evidence is redacted before hashing and
+  Verdicts and diagnostics. In v3, text evidence is redacted before hashing and
   binary evidence containing a known secret is rejected.
 - Containers must not receive the Docker socket. Keep read-only root filesystem,
   `no-new-privileges`, capability dropping and resource limits.

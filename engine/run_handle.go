@@ -2,10 +2,12 @@ package engine
 
 import (
 	"context"
+
+	"github.com/red-copilot/harness/core"
 )
 
 // Run is a stable handle for one controller-owned Run. It exposes only
-// cancellation, steering and read-only projections; it owns no control state.
+// cancellation, bounded hints and read-only projections; it owns no control state.
 type Run struct {
 	ID         string
 	controller *runController
@@ -23,7 +25,7 @@ func (r *Run) Wait(ctx context.Context) (Result, error) {
 	case <-r.controller.done:
 		return r.controller.waitResult()
 	case <-ctx.Done():
-		return Result{RunID: r.ID, Phase: RunPhaseRunning, Status: StatusRunning}, ctx.Err()
+		return Result{RunID: r.ID, Phase: RunPhaseRunning}, ctx.Err()
 	}
 }
 
@@ -34,6 +36,17 @@ func (r *Run) Cancel(context.Context) error {
 	return nil
 }
 
-func (r *Run) Steer(ctx context.Context, sessionID, message string) error {
-	return r.controller.steer(ctx, sessionID, message)
+func (r *Run) SubmitHint(ctx context.Context, content, creator string) error {
+	if r.controller.hints == nil {
+		return ErrRunClosed
+	}
+	hint := core.Hint{Content: content, Creator: creator}
+	select {
+	case r.controller.hints <- hint:
+		return nil
+	case <-r.controller.ctx.Done():
+		return r.controller.ctx.Err()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

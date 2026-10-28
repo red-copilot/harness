@@ -6,12 +6,9 @@ func TestRedactorForSpecIncludesInlineEnvAndKnownSecrets(t *testing.T) {
 	const envSecret = "env-secret-value"
 	t.Setenv("HARNESS_TEST_SECRET", envSecret)
 	spec := RunSpec{
-		SecretEnv: []string{"HARNESS_TEST_SECRET", "PLANNER_SECRET", "EXECUTOR_SECRET"},
-		Reasoner:  AgentSpec{Env: map[string]string{"PLANNER_SECRET": "planner-inline-secret", "MODE": "1"}},
-		Executors: []AgentSpec{
-			{Env: map[string]string{"EXECUTOR_SECRET": "executor-inline-secret"}},
-			{},
-		},
+		SecretEnv:    []string{"HARNESS_TEST_SECRET", "PLANNER_SECRET", "EXECUTOR_SECRET"},
+		Reasoner:     AgentSpec{Env: map[string]string{"PLANNER_SECRET": "planner-inline-secret", "MODE": "1"}},
+		Executor:     AgentSpec{Env: map[string]string{"EXECUTOR_SECRET": "executor-inline-secret"}},
 		KnownSecrets: []string{"adapter-secret-value"},
 	}
 

@@ -27,13 +27,13 @@ type (
 	EvidencePolicy             = core.EvidencePolicy
 	ExitStatus                 = core.ExitStatus
 	ExplorationPolicy          = core.ExplorationPolicy
-	ExploreReport              = core.ExploreReport
+	AttemptReport              = core.AttemptReport
 	ExploreRequest             = core.ExploreRequest
 	ExploreStrategy            = core.ExploreStrategy
-	Fact                       = core.Fact
-	FactCreatedPayload         = core.FactCreatedPayload
-	FactKind                   = core.FactKind
-	FactProposal               = core.FactProposal
+	Claim                      = core.Claim
+	ClaimCreatedPayload        = core.ClaimCreatedPayload
+	ClaimKind                  = core.ClaimKind
+	ClaimProposal              = core.ClaimProposal
 	GoalCandidate              = core.GoalCandidate
 	Hint                       = core.Hint
 	HintCreatedPayload         = core.HintCreatedPayload
@@ -127,10 +127,10 @@ const (
 	AgentEventEnd       = core.AgentEventEnd
 	AgentEventError     = core.AgentEventError
 
-	FactOrigin   = core.FactOrigin
-	FactGoal     = core.FactGoal
-	FactFinding  = core.FactFinding
-	FactNegative = core.FactNegative
+	ClaimOrigin   = core.ClaimOrigin
+	ClaimGoal     = core.ClaimGoal
+	ClaimFinding  = core.ClaimFinding
+	ClaimNegative = core.ClaimNegative
 
 	IntentBootstrap = core.IntentBootstrap
 	IntentExplore   = core.IntentExplore
@@ -157,7 +157,7 @@ const (
 	EventAuthorityProgress     = core.EventAuthorityProgress
 	EventAuthorityCompleted    = core.EventAuthorityCompleted
 	EventAuthorityObserveError = core.EventAuthorityObserveError
-	EventFactCreated           = core.EventFactCreated
+	EventClaimCreated          = core.EventClaimCreated
 	EventHintCreated           = core.EventHintCreated
 	EventReasonStarted         = core.EventReasonStarted
 	EventReasonCompleted       = core.EventReasonCompleted
@@ -185,8 +185,8 @@ var (
 	StatusForRunState        = core.StatusForRunState
 	TargetFingerprint        = core.TargetFingerprint
 	ValidateDescriptor       = core.ValidateDescriptor
-	ValidateExploreReport    = core.ValidateExploreReport
-	ValidateFact             = core.ValidateFact
+	ValidateAttemptReport    = core.ValidateAttemptReport
+	ValidateClaim            = core.ValidateClaim
 	ValidateIntent           = core.ValidateIntent
 	ValidateIntentTransition = core.ValidateIntentTransition
 	ValidateReasonReport     = core.ValidateReasonReport

@@ -36,7 +36,7 @@ func TestRedactingStoreCoversBoardCommitAndFinalization(t *testing.T) {
 	now := time.Now().UTC()
 	_, err := store.Commit(context.Background(), Commit{
 		RunID: "run-1", Revision: 1,
-		Facts:        []Fact{{ID: "f", RunID: "run-1", TaskID: "task", Kind: FactNegative, Description: secret, CreatedAt: now}},
+		Claims:       []Claim{{ID: "f", RunID: "run-1", TaskID: "task", Kind: ClaimNegative, Description: secret, CreatedAt: now}},
 		Intents:      []Intent{{ID: "i", RunID: "run-1", Description: secret, CreatedAt: now}},
 		Hints:        []Hint{{ID: "h", RunID: "run-1", Content: secret, CreatedAt: now}},
 		Attempts:     []IntentAttempt{{ID: "a", RunID: "run-1", Conclusion: secret, StartedAt: now}},

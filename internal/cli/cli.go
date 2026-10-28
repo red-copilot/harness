@@ -148,7 +148,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if *asJSON {
 		_ = printJSON(stdout, result)
 	} else {
-		fmt.Fprintf(stdout, "%s %s score=%.0f\n", result.RunID, result.Status, scoreOf(result))
+		fmt.Fprintf(stdout, "%s %s/%s score=%.0f\n", result.RunID, result.Phase, result.Outcome, scoreOf(result))
 	}
 	return runErr
 }
@@ -309,10 +309,7 @@ func composeSweepPlan(base *FileConfig, request server.SweepRequest, store harne
 				cfg.Target.Isolation = string(harness.IsolationCallerManaged)
 			}
 			cfg.Reasoner = agentFromHarness(descriptor.Reasoner)
-			cfg.Executors = make([]AgentFileSpec, 0, len(descriptor.Executors))
-			for _, executor := range descriptor.Executors {
-				cfg.Executors = append(cfg.Executors, agentFromHarness(executor))
-			}
+			cfg.Executor = agentFromHarness(descriptor.Executor)
 			cfg.Policy = policyFileFromRunPolicy(descriptor.Policy)
 			if cfg.TSec == nil {
 				cfg.TSec = &TSecFileConfig{}
@@ -366,10 +363,7 @@ func composeDescriptor(base *FileConfig, descriptor harness.RunDescriptor, store
 		cfg.Target.Isolation = string(harness.IsolationCallerManaged)
 	}
 	cfg.Reasoner = agentFromHarness(descriptor.Reasoner)
-	cfg.Executors = make([]AgentFileSpec, 0, len(descriptor.Executors))
-	for _, executor := range descriptor.Executors {
-		cfg.Executors = append(cfg.Executors, agentFromHarness(executor))
-	}
+	cfg.Executor = agentFromHarness(descriptor.Executor)
 	spec, err := cfg.ToRunSpec(store)
 	if err != nil {
 		return harness.RunSpec{}, err
@@ -459,7 +453,10 @@ func doctor(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	defer store.Close()
-	return printJSON(stdout, map[string]string{"status": "ok", "database": *dbPath, "isolation": string(harness.IsolationCallerManaged)})
+	if err := store.VerifyEventChain(context.Background()); err != nil {
+		return fmt.Errorf("verify audit chain: %w", err)
+	}
+	return printJSON(stdout, map[string]string{"status": "ok", "database": *dbPath, "schema": "v7", "isolation": string(harness.IsolationCallerManaged)})
 }
 
 func backup(args []string, stdout, stderr io.Writer) error {

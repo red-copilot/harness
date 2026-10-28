@@ -101,10 +101,10 @@ func TestCommitRoundTripsAndAppendsIntentVersions(t *testing.T) {
 	defer store.Close()
 	ctx := context.Background()
 	now := time.Now().UTC()
-	if err := store.CreateRun(ctx, harness.RunRecord{ID: "run-1", Phase: harness.RunPhaseRunning, Status: harness.StatusRunning, CreatedAt: now}); err != nil {
+	if err := store.CreateRun(ctx, harness.RunRecord{ID: "run-1", Phase: harness.RunPhaseRunning, CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	intent := harness.Intent{ID: "intent-1", RunID: "run-1", Kind: harness.IntentExplore, FromFactIDs: []string{"origin"}, Description: "probe", State: harness.IntentOpen, CreatedAt: now}
+	intent := harness.Intent{ID: "intent-1", RunID: "run-1", Kind: harness.IntentExplore, FromClaimIDs: []string{"origin"}, Description: "probe", State: harness.IntentOpen, CreatedAt: now}
 	event, err := harness.NewEvent("run-1", harness.EventIntentCreated, harness.IntentPayload{Intent: intent})
 	if err != nil {
 		t.Fatal(err)
@@ -187,15 +187,15 @@ func TestFinalizeIsAtomicAndTerminalWritesAreRejected(t *testing.T) {
 	defer store.Close()
 	ctx := context.Background()
 	now := time.Now().UTC()
-	if err := store.CreateRun(ctx, harness.RunRecord{ID: "run-1", Phase: harness.RunPhaseRunning, Status: harness.StatusRunning, CreatedAt: now}); err != nil {
+	if err := store.CreateRun(ctx, harness.RunRecord{ID: "run-1", Phase: harness.RunPhaseRunning, CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	event, err := harness.NewEvent("run-1", harness.EventRunFinalized, harness.RunFinalizedPayload{Outcome: harness.RunOutcomeSucceeded, Status: harness.StatusSucceeded})
+	event, err := harness.NewEvent("run-1", harness.EventRunFinalized, harness.RunFinalizedPayload{Outcome: harness.RunOutcomeSucceeded})
 	if err != nil {
 		t.Fatal(err)
 	}
 	verdict := &harness.VerdictRecord{RunID: "run-1", Success: true, Message: "ok", CreatedAt: now}
-	record := harness.RunRecord{ID: "run-1", Phase: harness.RunPhaseTerminal, Outcome: harness.RunOutcomeSucceeded, Status: harness.StatusSucceeded, Result: json.RawMessage(`{"status":"succeeded"}`), CreatedAt: now, FinishedAt: &now}
+	record := harness.RunRecord{ID: "run-1", Phase: harness.RunPhaseTerminal, Outcome: harness.RunOutcomeSucceeded, Result: json.RawMessage(`{"status":"succeeded"}`), CreatedAt: now, FinishedAt: &now}
 	if _, err := store.Finalize(ctx, harness.FinalizationRecord{Run: record, Verdict: verdict, Event: event}); err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestFinalizeIsAtomicAndTerminalWritesAreRejected(t *testing.T) {
 	if _, err := store.AppendEvent(ctx, late); err == nil {
 		t.Fatal("event accepted after finalization")
 	}
-	if _, err := store.Commit(ctx, harness.Commit{RunID: "run-1", Revision: 2, Facts: []harness.Fact{{ID: "late", RunID: "run-1", TaskID: "task", Kind: harness.FactNegative, Description: "late"}}}); err == nil {
+	if _, err := store.Commit(ctx, harness.Commit{RunID: "run-1", Revision: 2, Claims: []harness.Claim{{ID: "late", RunID: "run-1", TaskID: "task", Kind: harness.ClaimNegative, Description: "late"}}}); err == nil {
 		t.Fatal("commit accepted after finalization")
 	}
 }
@@ -219,7 +219,7 @@ func TestMarkInterruptedFinalizesAtomically(t *testing.T) {
 	}
 	defer store.Close()
 	ctx := context.Background()
-	if err := store.CreateRun(ctx, harness.RunRecord{ID: "run-1", Phase: harness.RunPhaseRunning, Status: harness.StatusRunning, CreatedAt: time.Now().UTC()}); err != nil {
+	if err := store.CreateRun(ctx, harness.RunRecord{ID: "run-1", Phase: harness.RunPhaseRunning, CreatedAt: time.Now().UTC()}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.MarkInterrupted(ctx); err != nil {

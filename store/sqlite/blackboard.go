@@ -8,20 +8,20 @@ import (
 	"github.com/red-copilot/harness/core"
 )
 
-func (s *Store) SaveFact(ctx context.Context, fact core.Fact) error {
+func (s *Store) SaveClaim(ctx context.Context, claim core.Claim) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if err := saveFactTx(ctx, tx, fact); err != nil {
+	if err := saveClaimTx(ctx, tx, claim); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func (s *Store) ListFacts(ctx context.Context, runID string) ([]core.Fact, error) {
-	return queryPayload[core.Fact](ctx, s.db, `SELECT payload FROM facts WHERE run_id=? ORDER BY created_at,id`, runID)
+func (s *Store) ListClaims(ctx context.Context, runID string) ([]core.Claim, error) {
+	return queryPayload[core.Claim](ctx, s.db, `SELECT payload FROM claims WHERE run_id=? ORDER BY created_at,id`, runID)
 }
 
 func (s *Store) SaveIntent(ctx context.Context, intent core.Intent) error {
@@ -62,18 +62,18 @@ func (s *Store) ListIntents(ctx context.Context, runID string) ([]core.Intent, e
 		if err := json.Unmarshal(payload, &intent); err != nil {
 			return nil, err
 		}
-		sourceRows, err := s.db.QueryContext(ctx, `SELECT fact_id FROM intent_sources WHERE run_id=? AND intent_id=? ORDER BY ordinal`, runID, intent.ID)
+		sourceRows, err := s.db.QueryContext(ctx, `SELECT claim_id FROM intent_sources WHERE run_id=? AND intent_id=? ORDER BY ordinal`, runID, intent.ID)
 		if err != nil {
 			return nil, err
 		}
 		var sources []string
 		for sourceRows.Next() {
-			var factID string
-			if err := sourceRows.Scan(&factID); err != nil {
+			var claimID string
+			if err := sourceRows.Scan(&claimID); err != nil {
 				sourceRows.Close()
 				return nil, err
 			}
-			sources = append(sources, factID)
+			sources = append(sources, claimID)
 		}
 		if err := sourceRows.Err(); err != nil {
 			sourceRows.Close()
@@ -83,7 +83,7 @@ func (s *Store) ListIntents(ctx context.Context, runID string) ([]core.Intent, e
 			return nil, err
 		}
 		if len(sources) > 0 {
-			intent.FromFactIDs = sources
+			intent.FromClaimIDs = sources
 		}
 		out = append(out, intent)
 	}
@@ -119,7 +119,7 @@ func (s *Store) SaveIntentAttempt(ctx context.Context, attempt core.IntentAttemp
 }
 
 func (s *Store) ListIntentAttempts(ctx context.Context, runID string) ([]core.IntentAttempt, error) {
-	return queryPayload[core.IntentAttempt](ctx, s.db, `SELECT payload FROM exploration_attempts_v2 WHERE run_id=? ORDER BY started_at,id`, runID)
+	return queryPayload[core.IntentAttempt](ctx, s.db, `SELECT payload FROM attempts WHERE run_id=? ORDER BY started_at,id`, runID)
 }
 
 func (s *Store) SaveBlackboardObservation(ctx context.Context, observation core.Observation) error {
@@ -135,12 +135,12 @@ func (s *Store) SaveBlackboardObservation(ctx context.Context, observation core.
 }
 
 func (s *Store) ListBlackboardObservations(ctx context.Context, runID string) ([]core.Observation, error) {
-	return queryPayload[core.Observation](ctx, s.db, `SELECT payload FROM exploration_observations_v2 WHERE run_id=? ORDER BY created_at,id`, runID)
+	return queryPayload[core.Observation](ctx, s.db, `SELECT payload FROM observations WHERE run_id=? ORDER BY created_at,id`, runID)
 }
 
 var _ interface {
-	SaveFact(context.Context, core.Fact) error
-	ListFacts(context.Context, string) ([]core.Fact, error)
+	SaveClaim(context.Context, core.Claim) error
+	ListClaims(context.Context, string) ([]core.Claim, error)
 	SaveIntent(context.Context, core.Intent) error
 	ListIntents(context.Context, string) ([]core.Intent, error)
 	SaveHint(context.Context, core.Hint) error

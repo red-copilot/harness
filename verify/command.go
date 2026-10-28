@@ -35,14 +35,12 @@ func (c Command) Verify(ctx context.Context, req harness.VerifyRequest) (harness
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	payload, err := json.Marshal(struct {
-		RunID         string                  `json:"run_id"`
-		Task          harness.Task            `json:"task"`
-		Target        harness.TargetBinding   `json:"target"`
-		Sessions      []harness.SessionResult `json:"sessions"`
-		WorkspaceRoot string                  `json:"workspace_root"`
+		RunID       string                `json:"run_id"`
+		Task        harness.Task          `json:"task"`
+		Target      harness.TargetBinding `json:"target"`
+		EvidenceDir string                `json:"evidence_dir"`
 	}{
-		RunID: req.RunID, Task: req.Task, Target: req.Target,
-		Sessions: req.Sessions, WorkspaceRoot: req.WorkspaceRoot,
+		RunID: req.RunID, Task: req.Task, Target: req.Target, EvidenceDir: req.EvidenceDir,
 	})
 	if err != nil {
 		return harness.Verdict{}, err

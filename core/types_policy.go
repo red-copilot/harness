@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// ExplorationPolicy contains all mechanically enforced Fact/Intent limits.
+// ExplorationPolicy contains all mechanically enforced Claim/Intent limits.
 type ExplorationPolicy struct {
 	MaxOpenIntents         int           `json:"max_open_intents" yaml:"max_open_intents"`
 	MaxTotalIntents        int           `json:"max_total_intents" yaml:"max_total_intents"`
@@ -24,7 +24,7 @@ type ExplorationPolicy struct {
 type ContextPolicy struct {
 	MaxBoardItems     int   `json:"max_board_items" yaml:"max_board_items"`
 	MaxBoardBytes     int64 `json:"max_board_bytes" yaml:"max_board_bytes"`
-	MaxFactBytes      int   `json:"max_fact_bytes" yaml:"max_fact_bytes"`
+	MaxClaimBytes     int   `json:"max_claim_bytes" yaml:"max_claim_bytes"`
 	MaxIntentBytes    int   `json:"max_intent_bytes" yaml:"max_intent_bytes"`
 	MaxHintBytes      int   `json:"max_hint_bytes" yaml:"max_hint_bytes"`
 	MaxAssistantBytes int   `json:"max_assistant_bytes" yaml:"max_assistant_bytes"`
@@ -65,7 +65,7 @@ func DefaultRunPolicy() RunPolicy {
 			MaxReasonerFailures: 3, BootstrapEnabled: &bootstrap,
 		},
 		Context: ContextPolicy{
-			MaxBoardItems: 64, MaxBoardBytes: 64 << 10, MaxFactBytes: 2 << 10,
+			MaxBoardItems: 64, MaxBoardBytes: 64 << 10, MaxClaimBytes: 2 << 10,
 			MaxIntentBytes: 2 << 10, MaxHintBytes: 8 << 10,
 			MaxAssistantBytes: 1 << 20, MaxReportBytes: 1 << 20,
 		},
@@ -121,8 +121,8 @@ func NormalizeRunPolicy(policy RunPolicy) RunPolicy {
 	if c.MaxBoardBytes == 0 {
 		c.MaxBoardBytes = dc.MaxBoardBytes
 	}
-	if c.MaxFactBytes == 0 {
-		c.MaxFactBytes = dc.MaxFactBytes
+	if c.MaxClaimBytes == 0 {
+		c.MaxClaimBytes = dc.MaxClaimBytes
 	}
 	if c.MaxIntentBytes == 0 {
 		c.MaxIntentBytes = dc.MaxIntentBytes
@@ -167,7 +167,7 @@ func ValidateRunPolicy(policy RunPolicy) error {
 		{"max_reasoner_failures", int64(policy.Exploration.MaxReasonerFailures)},
 		{"max_board_items", int64(policy.Context.MaxBoardItems)},
 		{"max_board_bytes", policy.Context.MaxBoardBytes},
-		{"max_fact_bytes", int64(policy.Context.MaxFactBytes)},
+		{"max_claim_bytes", int64(policy.Context.MaxClaimBytes)},
 		{"max_intent_bytes", int64(policy.Context.MaxIntentBytes)},
 		{"max_hint_bytes", int64(policy.Context.MaxHintBytes)},
 		{"max_assistant_bytes", int64(policy.Context.MaxAssistantBytes)},

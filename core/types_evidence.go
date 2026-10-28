@@ -53,11 +53,19 @@ type ArtifactInput struct {
 }
 
 // Verdict is the only successful run authority.
+type VerdictAuthority string
+
+const (
+	VerdictAuthorityVerifier VerdictAuthority = "verifier"
+	VerdictAuthorityBackend  VerdictAuthority = "backend"
+)
+
 type Verdict struct {
-	Success  bool            `json:"success"`
-	Score    float64         `json:"score,omitempty"`
-	Message  string          `json:"message,omitempty"`
-	Evidence json.RawMessage `json:"evidence,omitempty"`
+	Authority VerdictAuthority `json:"authority,omitempty"`
+	Success   bool             `json:"success"`
+	Score     float64          `json:"score,omitempty"`
+	Message   string           `json:"message,omitempty"`
+	Evidence  json.RawMessage  `json:"evidence,omitempty"`
 }
 
 type EvidenceArchiveRequest struct {

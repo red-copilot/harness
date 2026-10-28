@@ -32,6 +32,7 @@ type AgentDescriptor struct {
 // TurnResult is the bounded result of one runtime turn.
 type TurnResult struct {
 	AssistantText string `json:"assistant_text,omitempty"`
+	Report        []byte `json:"-"`
 	Usage         Usage  `json:"usage,omitempty"`
 }
 

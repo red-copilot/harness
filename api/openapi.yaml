@@ -1,0 +1,239 @@
+openapi: 3.0.3
+info:
+  title: Red Harness v3 Operator API
+  version: 0.3.0
+  description: Read and control surface for trusted local operators. The HTTP server is not an authentication boundary.
+servers:
+  - url: http://127.0.0.1:8080
+paths:
+  /healthz:
+    get:
+      operationId: health
+      responses:
+        '200': { description: healthy }
+  /v1/overview:
+    get:
+      operationId: overview
+      responses:
+        '200':
+          description: overview
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Overview' }
+  /v1/runs:
+    get:
+      operationId: listRuns
+      responses:
+        '200':
+          description: runs
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/RunRecord' }
+    post:
+      operationId: createRun
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '202': { description: accepted }
+  /v1/runs/{runId}:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    get:
+      operationId: getRun
+      responses:
+        '200':
+          description: run
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RunRecord' }
+  /v1/runs/{runId}/board:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    get:
+      operationId: getRunBoard
+      responses:
+        '200':
+          description: canonical Claim/Intent board projection
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BoardResponse' }
+  /v1/runs/{runId}/events:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    get:
+      operationId: streamRunEvents
+      parameters:
+        - name: after_seq
+          in: query
+          schema: { type: integer, format: int64, default: 0 }
+      responses:
+        '200':
+          description: server-sent canonical events
+          content:
+            text/event-stream:
+              schema: { type: string }
+  /v1/runs/{runId}/logs:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    get:
+      operationId: getRunLogs
+      responses:
+        '200': { description: logs }
+  /v1/runs/{runId}/verdict:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    get:
+      operationId: getRunVerdict
+      responses:
+        '200': { description: verdict }
+  /v1/runs/{runId}/artifacts:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    get:
+      operationId: listRunArtifacts
+      responses:
+        '200':
+          description: artifact metadata
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Artifact' }
+  /v1/runs/{runId}/artifacts/{artifactId}:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+      - name: artifactId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: downloadRunArtifact
+      responses:
+        '200':
+          description: canonical artifact bytes
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+  /v1/runs/{runId}/hints:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    post:
+      operationId: submitRunHint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: { type: string }
+                creator: { type: string }
+      responses:
+        '202': { description: hint queued at the next safe boundary }
+components:
+  parameters:
+    RunId:
+      name: runId
+      in: path
+      required: true
+      schema: { type: string }
+  schemas:
+    Overview:
+      type: object
+      additionalProperties: true
+    RunRecord:
+      type: object
+      required: [id, phase, created_at]
+      properties:
+        id: { type: string }
+        phase: { type: string }
+        outcome: { type: string }
+        spec: { nullable: true }
+        result: { nullable: true }
+        error: { type: string }
+        metadata: { nullable: true }
+        created_at: { type: string, format: date-time }
+        started_at: { type: string, format: date-time, nullable: true }
+        finished_at: { type: string, format: date-time, nullable: true }
+    Claim:
+      type: object
+      additionalProperties: true
+      required: [id, run_id, task_id, kind, description]
+      properties:
+        id: { type: string }
+        run_id: { type: string }
+        task_id: { type: string }
+        kind: { type: string, enum: [origin, goal, finding, negative] }
+        description: { type: string }
+        source_intent_id: { type: string }
+        observation_ids: { type: array, items: { type: string } }
+        artifact_ids: { type: array, items: { type: string } }
+        created_at: { type: string, format: date-time }
+    Intent:
+      type: object
+      additionalProperties: true
+      required: [id, run_id, from_claim_ids, description, state]
+      properties:
+        id: { type: string }
+        run_id: { type: string }
+        kind: { type: string }
+        from_claim_ids: { type: array, items: { type: string } }
+        description: { type: string }
+        state: { type: string }
+        slot: { type: integer }
+        executor_id: { type: string }
+        result_claim_id: { type: string }
+    Attempt:
+      type: object
+      additionalProperties: true
+    Observation:
+      type: object
+      additionalProperties: true
+    Artifact:
+      type: object
+      additionalProperties: true
+      required: [id, run_id, attempt_id, name, media_type, size, sha256]
+      properties:
+        id: { type: string }
+        run_id: { type: string }
+        attempt_id: { type: string }
+        session_id: { type: string }
+        name: { type: string }
+        media_type: { type: string }
+        size: { type: integer, format: int64 }
+        sha256: { type: string }
+        redacted: { type: boolean }
+        created_at: { type: string, format: date-time }
+    Hint:
+      type: object
+      additionalProperties: true
+    Verdict:
+      type: object
+      required: [success, authority]
+      properties:
+        authority: { type: string, enum: [verifier, backend] }
+        success: { type: boolean }
+        score: { type: number }
+        message: { type: string }
+        evidence: {}
+    BoardResponse:
+      type: object
+      required: [claims, intents, hints, attempts, slots, board_revision, reason]
+      properties:
+        claims: { type: array, items: { $ref: '#/components/schemas/Claim' } }
+        intents: { type: array, items: { $ref: '#/components/schemas/Intent' } }
+        hints: { type: array, items: { $ref: '#/components/schemas/Hint' } }
+        attempts: { type: array, items: { $ref: '#/components/schemas/Attempt' } }
+        observations: { type: array, items: { $ref: '#/components/schemas/Observation' } }
+        artifacts: { type: array, items: { $ref: '#/components/schemas/Artifact' } }
+        slots: { type: array, items: { type: integer } }
+        board_revision: { type: integer, format: int64 }
+        reason:
+          type: object
+          additionalProperties: true
