@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/red-copilot/harness/internal/naming"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,35 +22,59 @@ import (
 // DefaultImage is the pinned image the SDK ships for Pi in Kali.
 const DefaultImage = "ghcr.io/red-copilot/harness-pi-kali:0.1.0"
 
-// Factory creates Pi RPC sessions from harness.SessionRequest values.
-type Factory struct{}
+// Config is immutable Pi adapter configuration. RuntimeConfig on an AgentSpec
+// may override these fields with the same JSON shape.
+type Config struct {
+	Provider     string   `json:"provider,omitempty" yaml:"provider,omitempty"`
+	Model        string   `json:"model,omitempty" yaml:"model,omitempty"`
+	Thinking     string   `json:"thinking,omitempty" yaml:"thinking,omitempty"`
+	SystemPrompt string   `json:"system_prompt,omitempty" yaml:"system_prompt,omitempty"`
+	ModelsJSON   string   `json:"models_json,omitempty" yaml:"models_json,omitempty"`
+	Tools        []string `json:"tools,omitempty" yaml:"tools,omitempty"`
+	ExtraArgs    []string `json:"extra_args,omitempty" yaml:"extra_args,omitempty"`
+	Skills       []string `json:"skills,omitempty" yaml:"skills,omitempty"`
+	Image        string   `json:"image,omitempty" yaml:"image,omitempty"`
+}
 
-func NewFactory() *Factory { return &Factory{} }
+// Factory creates Pi RPC sessions from runtime-neutral requests.
+type Factory struct{ config Config }
 
-func (f *Factory) NewSession(ctx context.Context, req harness.SessionRequest) (harness.AgentSession, error) {
+func NewFactory(config ...Config) *Factory {
+	factory := &Factory{}
+	if len(config) > 0 {
+		factory.config = config[0]
+	}
+	return factory
+}
+
+func (f *Factory) NewSession(ctx context.Context, req harness.RuntimeRequest) (harness.AgentSession, error) {
 	if req.Starter == nil {
 		return nil, errors.New("pi session requires a ProcessStarter")
 	}
-	piSpec := harness.PiSpec{}
-	if req.Agent.Pi != nil {
-		piSpec = *req.Agent.Pi
+	config := f.config
+	if len(req.Agent.RuntimeConfig) > 0 {
+		var override Config
+		if err := json.Unmarshal(req.Agent.RuntimeConfig, &override); err != nil {
+			return nil, fmt.Errorf("invalid pi runtime config: %w", err)
+		}
+		config = mergeConfig(config, override)
 	}
-	image := req.Agent.Image
-	if image == "" {
-		image = piSpec.Image
-	}
-	if image == "" {
-		image = DefaultImage
-	}
-	if piSpec.ModelsJSON != "" {
-		if !json.Valid([]byte(piSpec.ModelsJSON)) {
+	if config.ModelsJSON != "" {
+		if !json.Valid([]byte(config.ModelsJSON)) {
 			return nil, errors.New("pi models_json is not valid JSON")
 		}
 		piDir := filepath.Join(req.WorkspaceDir, ".pi")
 		if err := os.MkdirAll(piDir, 0o700); err != nil {
 			return nil, fmt.Errorf("create pi config directory: %w", err)
 		}
-		if err := os.WriteFile(filepath.Join(piDir, "models.json"), []byte(piSpec.ModelsJSON), 0o600); err != nil {
+		// models.json frequently carries provider keys. It lands in a path the
+		// agent can read, so the Run's known secrets are removed before the file
+		// is written. Credentials belong in the agent environment, not here.
+		modelsJSON := config.ModelsJSON
+		if req.Redactor != nil {
+			modelsJSON = req.Redactor.Redact(modelsJSON)
+		}
+		if err := os.WriteFile(filepath.Join(piDir, "models.json"), []byte(modelsJSON), 0o600); err != nil {
 			return nil, fmt.Errorf("write pi models.json: %w", err)
 		}
 	}
@@ -58,16 +82,25 @@ func (f *Factory) NewSession(ctx context.Context, req harness.SessionRequest) (h
 	if err != nil {
 		return nil, fmt.Errorf("discover skills: %w", err)
 	}
-	command := BuildCommand(req.Agent, skills...)
+	command := BuildCommand(req.Agent, req.Role, config, skills...)
+	image := req.Agent.Image
+	if image == "" {
+		image = config.Image
+	}
+	if image == "" {
+		image = DefaultImage
+	}
 	network := req.Agent.Network
 	if network == "" {
 		network = "bridge"
 	}
-	if value := req.Target.Metadata["network"]; value != "" {
-		network = value
+	if req.Target.Runtime != nil {
+		if value := req.Target.Runtime.Network; value != "" {
+			network = value
+		}
 	}
-	caps := req.Agent.CapAdd
-	if caps == nil {
+	caps := append([]string(nil), req.Agent.CapAdd...)
+	if len(caps) == 0 && req.Role == harness.AgentRoleExecutor {
 		caps = []string{"NET_RAW"}
 	}
 	env := make(map[string]string, len(req.Env)+4)
@@ -76,19 +109,19 @@ func (f *Factory) NewSession(ctx context.Context, req harness.SessionRequest) (h
 	}
 	env["PI_CODING_AGENT_DIR"] = "/workspace/.pi"
 	env["HOME"] = "/workspace"
-	spec := harness.ProcessSpec{
-		Image: image, Command: command, Env: env,
-		Mounts: []harness.Mount{
-			{Source: req.TaskDir, Destination: "/task", ReadOnly: true},
-			{Source: req.SkillsDir, Destination: "/skills", ReadOnly: true},
-			{Source: req.WorkspaceDir, Destination: "/workspace", ReadOnly: false},
-		},
-		Network: network, CapAdd: caps,
-		Name:       "harness_pi_" + safeName(req.RunID+"_"+req.SessionID),
-		Labels:     map[string]string{"harness.run_id": req.RunID, "harness.session_id": req.SessionID},
-		WorkingDir: "/workspace", User: fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), ReadOnlyRoot: true,
-		PidsLimit: 256, Memory: "2g", CPUs: "2",
+	mounts := []harness.Mount{{Source: req.TaskDir, Destination: "/task", ReadOnly: true}, {Source: req.SkillsDir, Destination: "/skills", ReadOnly: true}, {Source: req.WorkspaceDir, Destination: "/workspace", ReadOnly: false}}
+	mounts = append(mounts, req.Agent.Mounts...)
+	resources := req.Agent.Resources
+	if resources.PidsLimit == 0 {
+		resources.PidsLimit = 256
 	}
+	if resources.Memory == "" {
+		resources.Memory = "2g"
+	}
+	if resources.CPUs == "" {
+		resources.CPUs = "2"
+	}
+	spec := harness.ProcessSpec{Image: image, Command: command, Env: env, Mounts: mounts, Network: network, CapAdd: caps, Name: "harness_pi_" + naming.Identifier(req.RunID+"_"+req.SessionID, "session"), Labels: map[string]string{"harness.run_id": req.RunID, "harness.session_id": req.SessionID}, WorkingDir: "/workspace", User: fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), ReadOnlyRoot: true, PidsLimit: resources.PidsLimit, Memory: resources.Memory, CPUs: resources.CPUs}
 	proc, err := req.Starter.Start(ctx, spec)
 	if err != nil {
 		return nil, fmt.Errorf("start pi process: %w", err)
@@ -96,41 +129,68 @@ func (f *Factory) NewSession(ctx context.Context, req harness.SessionRequest) (h
 	return newSession(proc), nil
 }
 
+func mergeConfig(base, override Config) Config {
+	if override.Provider != "" {
+		base.Provider = override.Provider
+	}
+	if override.Model != "" {
+		base.Model = override.Model
+	}
+	if override.Thinking != "" {
+		base.Thinking = override.Thinking
+	}
+	if override.SystemPrompt != "" {
+		base.SystemPrompt = override.SystemPrompt
+	}
+	if override.ModelsJSON != "" {
+		base.ModelsJSON = override.ModelsJSON
+	}
+	if len(override.Tools) > 0 {
+		base.Tools = append([]string(nil), override.Tools...)
+	}
+	if len(override.ExtraArgs) > 0 {
+		base.ExtraArgs = append([]string(nil), override.ExtraArgs...)
+	}
+	if len(override.Skills) > 0 {
+		base.Skills = append([]string(nil), override.Skills...)
+	}
+	if override.Image != "" {
+		base.Image = override.Image
+	}
+	return base
+}
+
 // BuildCommand returns the fixed, hardened Pi RPC command line.
-func BuildCommand(agent harness.AgentSpec, skills ...string) []string {
-	piSpec := harness.PiSpec{}
-	if agent.Pi != nil {
-		piSpec = *agent.Pi
-	}
-	args := []string{
-		"pi", "--mode", "rpc", "--no-session", "--no-approve",
-		"--no-context-files", "--no-extensions", "--no-mcp",
-		"--no-prompt-templates", "--no-themes", "--no-skills",
-	}
+func BuildCommand(agent harness.AgentSpec, role harness.AgentRole, config Config, skills ...string) []string {
+	args := []string{"pi", "--mode", "rpc", "--no-session", "--no-approve", "--no-context-files", "--no-extensions", "--no-mcp", "--no-prompt-templates", "--no-themes", "--no-skills"}
 	for _, skill := range skills {
 		args = append(args, "--skill", skill)
 	}
-	for _, skill := range piSpec.Skills {
+	for _, skill := range config.Skills {
 		args = append(args, "--skill", skill)
 	}
-	tools := piSpec.Tools
+	tools := append([]string(nil), config.Tools...)
 	if len(tools) == 0 {
-		tools = []string{"read", "bash", "edit", "write"}
+		if role == harness.AgentRoleReasoner {
+			tools = []string{"read"}
+		} else {
+			tools = []string{"read", "bash", "edit", "write"}
+		}
 	}
 	args = append(args, "--tools", strings.Join(tools, ","), "--offline")
-	if piSpec.Provider != "" {
-		args = append(args, "--provider", piSpec.Provider)
+	if config.Provider != "" {
+		args = append(args, "--provider", config.Provider)
 	}
-	if piSpec.Model != "" {
-		args = append(args, "--model", piSpec.Model)
+	if config.Model != "" {
+		args = append(args, "--model", config.Model)
 	}
-	if piSpec.Thinking != "" {
-		args = append(args, "--thinking", piSpec.Thinking)
+	if config.Thinking != "" {
+		args = append(args, "--thinking", config.Thinking)
 	}
-	if piSpec.SystemPrompt != "" {
-		args = append(args, "--append-system-prompt", piSpec.SystemPrompt)
+	if config.SystemPrompt != "" {
+		args = append(args, "--append-system-prompt", config.SystemPrompt)
 	}
-	return append(args, piSpec.ExtraArgs...)
+	return append(args, config.ExtraArgs...)
 }
 
 func discoverSkills(root string) ([]string, error) {
@@ -179,10 +239,6 @@ type session struct {
 	events chan harness.AgentEvent
 	logs   chan harness.LogEvent
 
-	settledMu   sync.Mutex
-	settled     chan struct{}
-	settledOnce sync.Once
-
 	pendingMu sync.Mutex
 	pending   map[string]chan responseRecord
 	nextID    atomic.Uint64
@@ -196,9 +252,6 @@ type session struct {
 	usageMu sync.Mutex
 	usage   harness.Usage
 
-	resultMu sync.Mutex
-	result   harness.AgentResult
-
 	exited   chan struct{}
 	exitOnce sync.Once
 
@@ -207,6 +260,7 @@ type session struct {
 	readWG    sync.WaitGroup
 	closeOnce sync.Once
 	closed    chan struct{}
+	closing   atomic.Bool
 }
 
 func newSession(proc harness.Process) *session {
@@ -214,7 +268,7 @@ func newSession(proc harness.Process) *session {
 	s := &session{
 		proc: proc, stdin: proc.Stdin(), stdout: bufio.NewReader(proc.Stdout()),
 		stderr: bufio.NewReader(proc.Stderr()), events: make(chan harness.AgentEvent, 256),
-		logs: make(chan harness.LogEvent, 256), settled: make(chan struct{}),
+		logs:    make(chan harness.LogEvent, 256),
 		pending: map[string]chan responseRecord{}, exited: make(chan struct{}),
 		ctx: ctx, cancel: cancel, closed: make(chan struct{}),
 	}
@@ -234,9 +288,7 @@ func (s *session) Prompt(ctx context.Context, message string) error {
 		Disposition string `json:"disposition"`
 	}
 	_ = json.Unmarshal(record.Data, &data)
-	if data.Disposition == "handled" {
-		s.markSettled(harness.StatusSucceeded, "")
-	}
+	_ = data
 	return nil
 }
 
@@ -245,22 +297,16 @@ func (s *session) Steer(ctx context.Context, message string) error {
 	return err
 }
 
+// Reset discards Pi's conversation history while keeping the process and
+// transport available for the next frontier.
+func (s *session) Reset(ctx context.Context) error {
+	_, err := s.sendAndWait(ctx, map[string]any{"type": "new_session"})
+	return err
+}
+
 func (s *session) Events() <-chan harness.AgentEvent { return s.events }
 func (s *session) Logs() <-chan harness.LogEvent     { return s.logs }
 func (s *session) Usage() harness.Usage              { return s.snapshotUsage() }
-
-func (s *session) Wait(ctx context.Context) (harness.AgentResult, error) {
-	select {
-	case <-s.settled:
-		return s.snapshotResult(), nil
-	case <-s.exited:
-		return s.snapshotResult(), nil
-	case <-ctx.Done():
-		return harness.AgentResult{
-			Status: harness.StatusCancelled, Error: ctx.Err().Error(), Usage: s.snapshotUsage(),
-		}, ctx.Err()
-	}
-}
 
 func (s *session) Abort(ctx context.Context) error {
 	_, err := s.sendAndWait(ctx, map[string]any{"type": "abort"})
@@ -270,6 +316,7 @@ func (s *session) Abort(ctx context.Context) error {
 func (s *session) Close(ctx context.Context) error {
 	var err error
 	s.closeOnce.Do(func() {
+		s.closing.Store(true)
 		s.closeStdin()
 		select {
 		case <-s.exited:
@@ -373,6 +420,10 @@ func (s *session) readStdout() {
 	for {
 		line, err := s.stdout.ReadBytes('\n')
 		if len(line) > 0 {
+			if line[len(line)-1] != '\n' {
+				s.emitEvent(harness.AgentEvent{Type: "rpc.malformed", Data: mustRaw(map[string]string{"error": "strict LF framing required", "line": string(line)})})
+				return
+			}
 			s.handleStdoutLine(line)
 		}
 		if err != nil {
@@ -407,18 +458,7 @@ func (s *session) handleStdoutLine(line []byte) {
 		}
 	}
 	s.account(recordType, record)
-	if recordType == "agent_settled" {
-		var payload struct {
-			Aborted bool `json:"aborted"`
-		}
-		_ = json.Unmarshal(line, &payload)
-		status := harness.StatusSucceeded
-		if payload.Aborted {
-			status = harness.StatusCancelled
-		}
-		s.markSettled(status, "")
-	}
-	s.emitEvent(harness.AgentEvent{Type: recordType, Data: append([]byte(nil), line...)})
+	s.emitEvent(normalizeEvent(recordType, line))
 }
 
 func (s *session) readStderr() {
@@ -444,20 +484,26 @@ func (s *session) readStderr() {
 
 func (s *session) waitProcess() {
 	status, err := s.proc.Wait(s.ctx)
-	s.resultMu.Lock()
-	if s.result.Status == "" {
-		s.result.Status = harness.StatusFailed
+	if !s.closing.Load() {
+		message := "pi process exited before settlement"
 		if err != nil {
-			s.result.Error = err.Error()
+			message += ": " + err.Error()
 		} else if status.Code != 0 {
-			s.result.Error = "pi exited with code " + strconv.Itoa(status.Code)
-		} else {
-			s.result.Error = "pi exited before agent_settled"
+			message += fmt.Sprintf(" with exit code %d", status.Code)
 		}
+		s.emitEvent(harness.AgentEvent{
+			Type: "rpc.exit", Kind: harness.AgentEventError, Text: message,
+			Data: mustRaw(map[string]any{"exit_code": status.Code, "error": errorString(err)}),
+		})
 	}
-	s.result.ExitCode = status.Code
-	s.resultMu.Unlock()
 	s.exitOnce.Do(func() { close(s.exited) })
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func (s *session) account(recordType string, record map[string]json.RawMessage) {
@@ -489,29 +535,10 @@ func (s *session) account(recordType string, record map[string]json.RawMessage) 
 	}
 }
 
-func (s *session) markSettled(status harness.Status, message string) {
-	s.settledOnce.Do(func() {
-		s.resultMu.Lock()
-		s.result.Status = status
-		s.result.Error = message
-		s.result.Usage = s.snapshotUsage()
-		s.resultMu.Unlock()
-		close(s.settled)
-	})
-}
-
 func (s *session) snapshotUsage() harness.Usage {
 	s.usageMu.Lock()
 	defer s.usageMu.Unlock()
 	return s.usage
-}
-
-func (s *session) snapshotResult() harness.AgentResult {
-	s.resultMu.Lock()
-	defer s.resultMu.Unlock()
-	result := s.result
-	result.Usage = s.snapshotUsage()
-	return result
 }
 
 func (s *session) emitEvent(event harness.AgentEvent) {
@@ -590,19 +617,77 @@ func rawString(raw json.RawMessage) string {
 	return value
 }
 
-func safeName(value string) string {
-	var b strings.Builder
-	for _, r := range value {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-			b.WriteRune(r)
-		} else {
-			b.WriteByte('_')
+// normalizeEvent translates one Pi RPC record into the runtime-neutral signal
+// the control plane consumes. The native type and payload are kept verbatim
+// for the audit trail; everything the core acts on is resolved here.
+func normalizeEvent(recordType string, line []byte) harness.AgentEvent {
+	event := harness.AgentEvent{Type: recordType, Data: append([]byte(nil), line...)}
+	switch recordType {
+	case "turn_end", "message_end":
+		event.Kind = harness.AgentEventMessage
+		event.Text, event.Tools = parseTurnMessage(line)
+	case "tool_execution_start":
+		event.Kind = harness.AgentEventToolStart
+		event.Tool, event.ToolPath, event.WritesFile = parseToolStart(line)
+	case "tool_execution_end":
+		event.Kind = harness.AgentEventToolEnd
+	case "agent_settled":
+		event.Kind = harness.AgentEventSettled
+	case "agent_end":
+		event.Kind = harness.AgentEventEnd
+	}
+	return event
+}
+
+func parseTurnMessage(line []byte) (string, []string) {
+	var payload struct {
+		Message struct {
+			Content []struct{ Type, Text, Name string } `json:"content"`
+		} `json:"message"`
+		ToolResults []struct {
+			ToolName string `json:"toolName"`
+		} `json:"toolResults"`
+	}
+	if json.Unmarshal(line, &payload) != nil {
+		return "", nil
+	}
+	var text []string
+	var tools []string
+	for _, part := range payload.Message.Content {
+		switch part.Type {
+		case "text":
+			if strings.TrimSpace(part.Text) != "" {
+				text = append(text, part.Text)
+			}
+		case "toolCall":
+			if part.Name != "" {
+				tools = append(tools, part.Name)
+			}
 		}
 	}
-	if b.Len() == 0 {
-		return "session"
+	if len(tools) == 0 {
+		for _, tool := range payload.ToolResults {
+			if tool.ToolName != "" {
+				tools = append(tools, tool.ToolName)
+			}
+		}
 	}
-	return b.String()
+	return strings.Join(text, "\n"), tools
+}
+
+// parseToolStart extracts the tool name and, for Pi's write tool, the target
+// path. WritesFile marks the protocol-mandated report write for the core.
+func parseToolStart(line []byte) (tool, path string, writesFile bool) {
+	var payload struct {
+		ToolName string `json:"toolName"`
+		Args     struct {
+			Path string `json:"path"`
+		} `json:"args"`
+	}
+	if json.Unmarshal(line, &payload) != nil {
+		return "", "", false
+	}
+	return payload.ToolName, payload.Args.Path, payload.ToolName == "write"
 }
 
 func mustRaw(v any) json.RawMessage {
@@ -611,5 +696,3 @@ func mustRaw(v any) json.RawMessage {
 }
 
 var _ harness.AgentSession = (*session)(nil)
-var _ harness.LogSource = (*session)(nil)
-var _ harness.UsageSource = (*session)(nil)

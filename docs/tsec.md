@@ -1,6 +1,24 @@
-# TSec Benchmark
+# TSec Backend Adapter
 
-TSec uses the documented `/openapi/v1/challenges/*` API:
+TSec is a `Backend`, not a core concept. The SDK owns challenge start, close and completion polling. Flag submission remains an Executor skill.
+
+## Lifecycle
+
+- `Provision` performs optional VPN preflight, starts the challenge and maps addresses plus bounded metadata into `Target`.
+- `Observe` maps partial flag progress to a non-authoritative Observation and completed challenge state to an authoritative `Completion`.
+- `Close` releases the challenge instance.
+
+Only a completed TSec challenge can establish backend success. Agent claims and submitted flags are not sufficient.
+
+## Credentials
+
+`BENCHMARK_TOKEN` is an explicit product exception: it may be passed into the agent container for the embedded submission skill. It must never reach SQLite plaintext, Artifact bytes, logs, errors, Result or Verdict. The Runner redacts known secret values on every persistence path.
+
+The container itself is part of the credential trust boundary. Callers must not expose it beyond the authorized challenge environment.
+
+## API
+
+The client uses:
 
 - `GET /openapi/v1/challenges`
 - `POST /openapi/v1/challenges/start`
@@ -8,20 +26,25 @@ TSec uses the documented `/openapi/v1/challenges/*` API:
 - `POST /openapi/v1/challenges/submit`
 - `POST /openapi/v1/challenges/close`
 
-The Go client sends `BENCHMARK_TOKEN`, enforces the platform limit of three
-active instances and a three-request-per-second budget, and maps platform error
-codes into typed errors.
+Rate limits, duplicate instances and capacity errors fail closed. Live TSec/VPN tests are environment-dependent and are not part of the default unit suite.
 
-The SDK owns `start`, `close` and completion polling. The embedded
-`skills/tsec-submit/SKILL.md` tells Pi how to submit a found flag directly. Pi
-does not parse or extract flags from agent messages, and the harness does not
-trust Pi's claim that a submission succeeded: completion is confirmed by the
-platform challenge state.
+## Fact / Intent benchmark configuration
 
-`BENCHMARK_TOKEN` is intentionally available inside the agent container for the
-skill's `curl` call. The SDK redacts known secret values before writing events,
-logs or results to SQLite. The token is never included in the SQLite run spec.
+Use two Executor entries and the Fact/Intent policy:
 
-VPN preflight probes the default healthcheck before challenge lifecycle calls.
-The CLI exposes `BENCHMARK_BASE_URL` and `BENCHMARK_TOKEN` environment variables
-and supports `--base-url`, `--token`, and environment-name overrides.
+```yaml
+policy:
+  max_open_intents: 2
+  max_total_intents: 20
+  max_attempts_per_intent: 3
+  max_tool_calls_per_attempt: 30
+  max_wall_time_per_attempt: 5m
+  conclude_timeout: 90s
+  stagnation_rounds: 2
+  max_reasoner_tool_calls: 8
+  max_reasoner_wall_time: 2m
+  bootstrap_enabled: true
+```
+
+`BENCHMARK_TOKEN` stays in the agent environment for the submission skill but
+is redacted from Fact, Intent, attempt, event, log and result persistence.

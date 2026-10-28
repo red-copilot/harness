@@ -1,39 +1,32 @@
 import type { RunStatus } from '@/api/types'
 
-const ACTIVE_STATUSES = new Set<RunStatus>(['queued', 'starting', 'running', 'verifying'])
-const TERMINAL_STATUSES = new Set<RunStatus>([
-  'succeeded',
-  'failed',
-  'cancelled',
-  'timed_out',
-  'interrupted',
-])
+const ACTIVE_STATUSES = new Set<RunStatus>(['queued', 'provisioning', 'running', 'finalizing', 'verifying'])
 
 export function isActiveStatus(status: RunStatus): boolean {
   return ACTIVE_STATUSES.has(status)
 }
 
-export function isTerminalStatus(status: RunStatus): boolean {
-  return TERMINAL_STATUSES.has(status)
-}
-
 export function statusColor(status: RunStatus): string {
   switch (status) {
     case 'queued':
+    case 'provisioning':
       return 'default'
-    case 'starting':
     case 'running':
+    case 'finalizing':
       return 'processing'
     case 'verifying':
-      return 'purple'
+      return 'warning'
     case 'succeeded':
       return 'success'
     case 'failed':
     case 'timed_out':
+    case 'stagnated':
       return 'error'
-    case 'cancelled':
-      return 'warning'
-    case 'interrupted':
+    default:
       return 'default'
   }
+}
+
+export function isTerminalStatus(status: RunStatus): boolean {
+  return !ACTIVE_STATUSES.has(status)
 }

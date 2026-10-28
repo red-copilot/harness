@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { fetchRunEventsPage } from '@/api/client'
 import { parseSseStream } from '@/api/sse'
 import type { EventRecord } from '@/api/types'
+import { supportsEventSchema } from '@/api/types'
 import { mergeBySeq } from '@/utils/merge'
 
 export type EventStreamState = 'connecting' | 'live' | 'reconnecting' | 'closed' | 'paused'
@@ -64,12 +65,12 @@ export function useRunEvents(
           for await (const frame of parseSseStream(response.body)) {
             if (cancelled || finishedRef.current) return
             const event = decodeEvent(frame.data, frame.event)
-            if (!event) continue
+            if (!event || !supportsEventSchema(event.type, event.schema_version)) continue
             if (event.seq > lastSeqRef.current) lastSeqRef.current = event.seq
             const merged = mergeBySeq(eventsRef.current, [event], MAX_EVENTS)
             eventsRef.current = merged
             setEvents(merged)
-            if (event.type === 'run.finished') {
+            if (event.type === 'run.finalized') {
               finishedRef.current = true
               setStreamState('closed')
               callbackRef.current?.()
@@ -109,6 +110,7 @@ function decodeEvent(data: string, fallbackType?: string): EventRecord | null {
     if (!type) return null
     return {
       seq: parsed.seq,
+      schema_version: typeof parsed.schema_version === 'number' ? parsed.schema_version : 1,
       run_id: parsed.run_id,
       session_id: parsed.session_id,
       source: typeof parsed.source === 'string' ? parsed.source : 'unknown',

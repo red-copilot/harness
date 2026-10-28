@@ -7,22 +7,21 @@ import ThunderboltOutlined from '@ant-design/icons/ThunderboltOutlined'
 import { useQuery } from '@tanstack/react-query'
 import { Button, Card, Col, Progress, Row, Space, Tag, Typography } from 'antd'
 import { useNavigate } from 'react-router-dom'
-import { getOverview, getRuns, getSweeps } from '@/api/client'
+import { getOverview, getRuns } from '@/api/client'
 import type { RunStatus } from '@/api/types'
 import { EmptyState } from '@/components/EmptyState'
 import { MetricCard } from '@/components/MetricCard'
 import { PageError } from '@/components/PageError'
 import { PageHeader } from '@/components/PageHeader'
 import { RunTable } from '@/components/RunTable'
-import { SweepTable } from '@/components/SweepTable'
 import { useI18n } from '@/i18n/I18nContext'
 import type { MessageKey } from '@/i18n/messages'
 import { formatCost, formatDuration, formatPercent, formatTokens } from '@/utils/format'
-import { isActiveStatus } from '@/utils/status'
 
 const STATUS_ORDER: RunStatus[] = [
   'running',
-  'starting',
+  'provisioning',
+  'finalizing',
   'verifying',
   'queued',
   'succeeded',
@@ -30,18 +29,21 @@ const STATUS_ORDER: RunStatus[] = [
   'timed_out',
   'cancelled',
   'interrupted',
+  'stagnated',
 ]
 
 const STATUS_CLASS: Record<RunStatus, string> = {
   queued: 'bar-queued',
-  starting: 'bar-starting',
+  provisioning: 'bar-provisioning',
   running: 'bar-running',
+  finalizing: 'bar-finalizing',
   verifying: 'bar-verifying',
   succeeded: 'bar-succeeded',
   failed: 'bar-failed',
   cancelled: 'bar-cancelled',
   timed_out: 'bar-timed-out',
   interrupted: 'bar-interrupted',
+  stagnated: 'bar-stagnated',
 }
 
 export default function OverviewPage() {
@@ -49,7 +51,6 @@ export default function OverviewPage() {
   const navigate = useNavigate()
   const overview = useQuery({ queryKey: ['overview'], queryFn: ({ signal }) => getOverview(signal), refetchInterval: 5000 })
   const runs = useQuery({ queryKey: ['runs'], queryFn: ({ signal }) => getRuns(signal), refetchInterval: 5000 })
-  const sweeps = useQuery({ queryKey: ['sweeps'], queryFn: ({ signal }) => getSweeps(signal), refetchInterval: 5000 })
 
   if (overview.isError) {
     return <PageError error={overview.error} onRetry={() => void overview.refetch()} />
@@ -60,8 +61,6 @@ export default function OverviewPage() {
 
   const data = overview.data
   const statusCounts = statusCountsFromOverview(data.runs)
-  const activeSweeps = (sweeps.data ?? []).filter((sweep) => isActiveStatus(sweep.status)).slice(0, 5)
-  const recentSweeps = activeSweeps.length > 0 ? activeSweeps : (sweeps.data ?? []).slice(0, 5)
 
   return (
     <div className="page-stack">
@@ -139,21 +138,6 @@ export default function OverviewPage() {
           <EmptyState description={t('overview.noRuns')} />
         )}
       </Card>
-
-      <Card
-        title={t('overview.activeSweeps')}
-        extra={<Button type="link" onClick={() => navigate('/sweeps')}>{t('common.view')}</Button>}
-      >
-        {sweeps.isError ? (
-          <PageError error={sweeps.error} onRetry={() => void sweeps.refetch()} />
-        ) : sweeps.isLoading ? (
-          <SweepTable sweeps={[]} loading compact />
-        ) : recentSweeps.length ? (
-          <SweepTable sweeps={recentSweeps} loading={sweeps.isLoading} compact />
-        ) : (
-          <EmptyState description={t('overview.noSweeps')} />
-        )}
-      </Card>
     </div>
   )
 }
@@ -161,25 +145,29 @@ export default function OverviewPage() {
 function statusCountsFromOverview(runs: OverviewCounts): Record<RunStatus, number> {
   return {
     queued: runs.queued,
-    starting: runs.starting,
+    provisioning: runs.provisioning,
     running: runs.running,
+    finalizing: runs.finalizing,
     verifying: runs.verifying,
     succeeded: runs.succeeded,
     failed: runs.failed,
     cancelled: runs.cancelled,
     timed_out: runs.timed_out,
     interrupted: runs.interrupted,
+    stagnated: runs.stagnated,
   }
 }
 
 interface OverviewCounts {
   queued: number
-  starting: number
+  provisioning: number
   running: number
+  finalizing: number
   verifying: number
   succeeded: number
   failed: number
   cancelled: number
   timed_out: number
   interrupted: number
+  stagnated: number
 }

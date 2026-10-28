@@ -154,8 +154,8 @@ func TestBackendProvisionsAndObservesCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
-	if target.Metadata["network"] != "host" || target.Metadata["challenge_code"] != "web_1" {
-		t.Fatalf("target metadata = %#v", target.Metadata)
+	if target.Runtime == nil || target.Runtime.Network != "host" || target.Runtime.ChallengeCode != "web_1" {
+		t.Fatalf("target runtime = %#v", target.Runtime)
 	}
 	completion, err := backend.Observe(context.Background(), target)
 	if err != nil {
@@ -163,6 +163,35 @@ func TestBackendProvisionsAndObservesCompletion(t *testing.T) {
 	}
 	if !completion.Done || !completion.Success || completion.Score != 100 {
 		t.Fatalf("completion = %#v", completion)
+	}
+}
+
+func TestBackendReportsPartialFlagProgress(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/openapi/v1/challenges":
+			writeJSON(w, []map[string]any{{
+				"unique_code": "b-02", "description": "multi flag", "flag_count": 6,
+				"correct_flag_count": 2, "is_completed": false, "total_score": 0,
+				"container_status": "available", "container_addr": []string{"10.0.0.1:80"},
+			}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client, err := tsec.New(tsec.Config{BaseURL: server.URL, Token: "secret-token", CheckVPN: false})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	backend := tsec.NewBackend(client, "b-02")
+	backend.CheckVPN = false
+	completion, err := backend.Observe(context.Background(), harness.TargetBinding{TargetID: "b-02", Isolation: harness.IsolationCallerManaged})
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if completion.Done || completion.Progress != 2 || completion.Total != 6 {
+		t.Fatalf("completion = %#v, want partial 2/6", completion)
 	}
 }
 

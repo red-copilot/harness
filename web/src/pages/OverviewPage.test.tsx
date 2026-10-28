@@ -11,19 +11,20 @@ const overview = {
     active: 2,
     terminal: 2,
     queued: 0,
-    starting: 0,
+    provisioning: 0,
     running: 2,
+    finalizing: 0,
     verifying: 0,
     succeeded: 1,
     failed: 1,
     cancelled: 0,
     timed_out: 0,
     interrupted: 0,
+    stagnated: 0,
     success_rate: 0.5,
   },
   usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15, cost_usd: 0.1 },
   duration: { samples: 2, average_ms: 1500, p50_ms: 1000, p95_ms: 2000 },
-  sweeps: { total: 1, active: 1, succeeded: 0, failed: 0 },
 }
 
 describe('OverviewPage', () => {
@@ -40,7 +41,6 @@ describe('OverviewPage', () => {
           },
         ]),
       ),
-      http.get('*/v1/tsec/sweeps', () => HttpResponse.json([])),
     )
     renderWithProviders(<OverviewPage />)
     expect(await screen.findByText('运行总览')).toBeInTheDocument()

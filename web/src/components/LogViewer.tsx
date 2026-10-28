@@ -1,6 +1,7 @@
 /* eslint-disable react-hooks/incompatible-library -- TanStack Virtual is not memo-safe by design */
 import { useEffect, useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
+import { Grid } from 'antd'
 import type { LogRecord } from '@/api/types'
 import { useI18n } from '@/i18n/I18nContext'
 import { formatDateTime } from '@/utils/format'
@@ -16,10 +17,12 @@ export function LogViewer({
 }) {
   const { locale } = useI18n()
   const parentRef = useRef<HTMLDivElement>(null)
+  const screens = Grid.useBreakpoint()
+  const compact = !screens.md
   const virtualizer = useVirtualizer({
     count: logs.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 24,
+    estimateSize: () => (compact ? 72 : 24),
     overscan: 24,
   })
 
@@ -44,6 +47,8 @@ export function LogViewer({
           return (
             <div
               key={log.seq}
+              data-index={item.index}
+              ref={virtualizer.measureElement}
               className={`log-line ${log.stream === 'stderr' ? 'log-line-error' : ''}`}
               style={{
                 position: 'absolute',

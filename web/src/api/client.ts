@@ -2,6 +2,7 @@ import type {
   EventRecord,
   HealthResponse,
   LogQuery,
+  GraphResponse,
   LogRecord,
   Overview,
   RunRecord,
@@ -53,6 +54,18 @@ export function getRun(runId: string, signal?: AbortSignal): Promise<RunRecord> 
   return request<RunRecord>(`/v1/runs/${encodeURIComponent(runId)}`, { signal, cache: 'no-store' })
 }
 
+export function getSweeps(signal?: AbortSignal): Promise<SweepState[]> {
+  return request<SweepState[]>('/v1/tsec/sweeps', { signal, cache: 'no-store' })
+}
+
+export function getSweep(sweepId: string, signal?: AbortSignal): Promise<SweepState> {
+  return request<SweepState>(`/v1/tsec/sweeps/${encodeURIComponent(sweepId)}`, { signal, cache: 'no-store' })
+}
+
+export function getRunGraph(runId: string, signal?: AbortSignal): Promise<GraphResponse> {
+  return request<GraphResponse>(`/v1/runs/${encodeURIComponent(runId)}/graph`, { signal, cache: 'no-store' })
+}
+
 export async function getVerdict(
   runId: string,
   signal?: AbortSignal,
@@ -79,17 +92,6 @@ export function getLogs(
   if (query.tail) params.set('tail', 'true')
   const suffix = params.size > 0 ? `?${params.toString()}` : ''
   return request<LogRecord[]>(`/v1/runs/${encodeURIComponent(runId)}/logs${suffix}`, {
-    signal,
-    cache: 'no-store',
-  })
-}
-
-export function getSweeps(signal?: AbortSignal): Promise<SweepState[]> {
-  return request<SweepState[]>('/v1/tsec/sweeps', { signal, cache: 'no-store' })
-}
-
-export function getSweep(sweepId: string, signal?: AbortSignal): Promise<SweepState> {
-  return request<SweepState>(`/v1/tsec/sweeps/${encodeURIComponent(sweepId)}`, {
     signal,
     cache: 'no-store',
   })

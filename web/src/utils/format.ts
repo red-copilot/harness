@@ -1,4 +1,12 @@
-import type { RunRecord, RunStatus, Usage } from '@/api/types'
+import type { RunDescriptor, RunRecord, RunStatus, Usage } from '@/api/types'
+
+/** agentIds flattens a run descriptor's reasoner and executors into ids. */
+export function agentIds(spec?: RunDescriptor | null): string[] {
+  if (!spec) return []
+  return [spec.reasoner?.id, ...(spec.executors?.map((agent) => agent.id) ?? [])].filter(
+    (id): id is string => Boolean(id),
+  )
+}
 import { isActiveStatus } from './status'
 
 export type UiLocale = 'zh' | 'en'

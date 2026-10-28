@@ -37,7 +37,7 @@ func (c Command) Verify(ctx context.Context, req harness.VerifyRequest) (harness
 	payload, err := json.Marshal(struct {
 		RunID         string                  `json:"run_id"`
 		Task          harness.Task            `json:"task"`
-		Target        harness.Target          `json:"target"`
+		Target        harness.TargetBinding   `json:"target"`
 		Sessions      []harness.SessionResult `json:"sessions"`
 		WorkspaceRoot string                  `json:"workspace_root"`
 	}{

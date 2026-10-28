@@ -1,12 +1,12 @@
 import ApiOutlined from '@ant-design/icons/ApiOutlined'
 import BarChartOutlined from '@ant-design/icons/BarChartOutlined'
 import BugOutlined from '@ant-design/icons/BugOutlined'
-import ExperimentOutlined from '@ant-design/icons/ExperimentOutlined'
+import MenuOutlined from '@ant-design/icons/MenuOutlined'
 import MoonOutlined from '@ant-design/icons/MoonOutlined'
 import ReloadOutlined from '@ant-design/icons/ReloadOutlined'
 import SunOutlined from '@ant-design/icons/SunOutlined'
 import { useIsFetching, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Badge, Button, Grid, Layout, Menu, Segmented, Space, Tooltip, Typography } from 'antd'
+import { Badge, Button, Drawer, Grid, Layout, Menu, Segmented, Space, Tooltip, Typography } from 'antd'
 import type { MenuProps } from 'antd'
 import { useMemo, useState } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
@@ -25,6 +25,8 @@ export function AppShell() {
   const queryClient = useQueryClient()
   const isFetching = useIsFetching()
   const [collapsed, setCollapsed] = useState(false)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const compactNavigation = !screens.lg
   const health = useQuery({
     queryKey: ['health'],
     queryFn: ({ signal }) => getHealth(signal),
@@ -32,17 +34,13 @@ export function AppShell() {
     retry: false,
   })
 
-  const selectedKey = location.pathname.startsWith('/runs')
-    ? '/runs'
-    : location.pathname.startsWith('/sweeps')
-      ? '/sweeps'
-      : '/'
+  const selectedKey = location.pathname.startsWith('/runs') ? '/runs' : location.pathname.startsWith('/sweeps') ? '/sweeps' : '/'
 
   const items = useMemo<MenuProps['items']>(
     () => [
       { key: '/', icon: <BarChartOutlined />, label: t('nav.overview') },
       { key: '/runs', icon: <BugOutlined />, label: t('nav.runs') },
-      { key: '/sweeps', icon: <ExperimentOutlined />, label: t('nav.sweeps') },
+      { key: '/sweeps', icon: <ApiOutlined />, label: t('nav.sweeps') },
     ],
     [t],
   )
@@ -54,54 +52,82 @@ export function AppShell() {
       ? t('common.connected')
       : t('common.offline')
 
+  const navigateTo = (key: string) => {
+    setMobileNavOpen(false)
+    navigate(key)
+  }
+
   return (
     <Layout className="app-layout">
-      <Sider
-        className="app-sider"
-        width={224}
-        collapsedWidth={64}
-        collapsible
-        breakpoint="lg"
-        collapsed={collapsed || !screens.lg}
-        onCollapse={setCollapsed}
-      >
-        <div className="brand">
-          <div className="brand-mark">RH</div>
-          {!collapsed && screens.lg ? (
-            <div className="brand-copy">
-              <Typography.Text strong>{t('app.title')}</Typography.Text>
-              <span>{t('app.subtitle')}</span>
-            </div>
-          ) : null}
-        </div>
-        <Menu
-          mode="inline"
-          theme={mode}
-          selectedKeys={[selectedKey]}
-          items={items}
-          onClick={({ key }) => navigate(key)}
-        />
-      </Sider>
+      <a className="skip-link" href="#main-content">
+        {t('nav.skip')}
+      </a>
+      {!compactNavigation ? (
+        <Sider
+          className="app-sider"
+          width={224}
+          collapsedWidth={64}
+          collapsible
+          collapsed={collapsed}
+          onCollapse={setCollapsed}
+        >
+          <Brand collapsed={collapsed} title={t('app.title')} subtitle={t('app.subtitle')} />
+          <Menu
+            mode="inline"
+            theme={mode}
+            selectedKeys={[selectedKey]}
+            items={items}
+            onClick={({ key }) => navigateTo(key)}
+          />
+        </Sider>
+      ) : null}
       <Layout>
         <Header className="app-header">
-          <Space size="middle" wrap>
-            <Tooltip title={healthLabel}>
-              <Badge
-                status={healthy ? 'success' : health.isLoading ? 'processing' : 'error'}
-                text={<span className="health-label">{healthLabel}</span>}
-              />
-            </Tooltip>
-            <Button
-              icon={<ApiOutlined />}
-              href="/healthz"
-              target="_blank"
-              size="small"
-              className="header-secondary"
-            >
-              healthz
-            </Button>
-          </Space>
-          <Space size="small" wrap>
+          <div className="header-leading">
+            {compactNavigation ? (
+              <>
+                <Button
+                  type="text"
+                  className="mobile-nav-trigger"
+                  icon={<MenuOutlined />}
+                  aria-label={t('nav.open')}
+                  aria-expanded={mobileNavOpen}
+                  onClick={() => setMobileNavOpen(true)}
+                />
+                <div className="mobile-brand">
+                  <span className="brand-mark">RH</span>
+                  <Typography.Text strong>{t('app.title')}</Typography.Text>
+                </div>
+              </>
+            ) : (
+              <Space size="middle" wrap>
+                <Tooltip title={healthLabel}>
+                  <Badge
+                    status={healthy ? 'success' : health.isLoading ? 'processing' : 'error'}
+                    text={<span className="health-label">{healthLabel}</span>}
+                  />
+                </Tooltip>
+                <Button
+                  icon={<ApiOutlined />}
+                  href="/healthz"
+                  target="_blank"
+                  size="small"
+                  className="header-secondary"
+                >
+                  healthz
+                </Button>
+              </Space>
+            )}
+          </div>
+          <Space size="small" wrap className="header-actions">
+            {compactNavigation ? (
+              <Tooltip title={healthLabel}>
+                <Badge
+                  className="mobile-health"
+                  status={healthy ? 'success' : health.isLoading ? 'processing' : 'error'}
+                />
+              </Tooltip>
+            ) : null}
             <Segmented
               size="small"
               value={locale}
@@ -131,10 +157,72 @@ export function AppShell() {
             </Tooltip>
           </Space>
         </Header>
-        <Content className="app-content">
+        <Content id="main-content" className="app-content" tabIndex={-1}>
           <Outlet />
         </Content>
       </Layout>
+      <Drawer
+        className="mobile-nav-drawer"
+        placement="left"
+        width={288}
+        open={compactNavigation && mobileNavOpen}
+        onClose={() => setMobileNavOpen(false)}
+        closable={false}
+        aria-label={t('nav.open')}
+      >
+        <div className="mobile-nav-panel">
+          <Brand
+            collapsed={false}
+            title={t('app.title')}
+            subtitle={t('app.subtitle')}
+            closeLabel={t('nav.close')}
+            onClose={() => setMobileNavOpen(false)}
+          />
+          <Menu
+            mode="inline"
+            theme={mode}
+            selectedKeys={[selectedKey]}
+            items={items}
+            onClick={({ key }) => navigateTo(key)}
+          />
+        </div>
+      </Drawer>
     </Layout>
+  )
+}
+
+function Brand({
+  collapsed,
+  title,
+  subtitle,
+  closeLabel,
+  onClose,
+}: {
+  collapsed: boolean
+  title: string
+  subtitle: string
+  closeLabel?: string
+  onClose?: () => void
+}) {
+  return (
+    <div className="brand">
+      <div className="brand-mark">RH</div>
+      {!collapsed ? (
+        <div className="brand-copy">
+          <Typography.Text strong>{title}</Typography.Text>
+          <span>{subtitle}</span>
+        </div>
+      ) : null}
+      {onClose ? (
+        <Button
+          type="text"
+          className="mobile-nav-close"
+          aria-label={closeLabel}
+          onClick={onClose}
+        >
+          ×
+        </Button>
+      ) : null}
+    </div>
   )
 }

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,47 +14,45 @@ import (
 	"time"
 
 	"github.com/red-copilot/harness"
-	"github.com/red-copilot/harness/verify"
 )
 
-type TargetRequest struct {
-	Kind        string   `json:"kind,omitempty"`
-	ID          string   `json:"id,omitempty"`
-	Addresses   []string `json:"addresses,omitempty"`
-	Image       string   `json:"image,omitempty"`
-	Command     []string `json:"command,omitempty"`
-	Ports       []string `json:"ports,omitempty"`
-	Network     string   `json:"network,omitempty"`
-	ComposeFile string   `json:"compose_file,omitempty"`
-	ProjectName string   `json:"project_name,omitempty"`
-	Service     string   `json:"service,omitempty"`
-	Port        string   `json:"port,omitempty"`
+type RunRequest struct {
+	Descriptor harness.RunDescriptor `json:"descriptor"`
 }
 
-type RunRequest struct {
-	Run             harness.RunSpec `json:"run"`
-	VerifierCommand *verify.Command `json:"verifier_command,omitempty"`
-	TSec            *TSecRequest    `json:"tsec,omitempty"`
-	Target          *TargetRequest  `json:"target,omitempty"`
+func (r *RunRequest) UnmarshalJSON(data []byte) error {
+	var envelope struct {
+		Descriptor json.RawMessage `json:"descriptor"`
+	}
+	if err := json.Unmarshal(data, &envelope); err == nil && len(envelope.Descriptor) > 0 {
+		decoder := json.NewDecoder(bytes.NewReader(envelope.Descriptor))
+		decoder.DisallowUnknownFields()
+		return decoder.Decode(&r.Descriptor)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(&r.Descriptor)
 }
+
+type Builder func(harness.RunDescriptor) (harness.RunSpec, error)
 
 type TSecRequest struct {
-	BaseURL   string `json:"base_url"`
+	BaseURL   string `json:"base_url,omitempty"`
 	Token     string `json:"token,omitempty"`
-	Challenge string `json:"challenge"`
+	Challenge string `json:"challenge,omitempty"`
 	UseHint   bool   `json:"use_hint,omitempty"`
 }
 
-type Builder func(RunRequest) (harness.RunSpec, error)
-
 type SweepRequest struct {
-	Run        harness.RunSpec `json:"run"`
-	TSec       *TSecRequest    `json:"tsec,omitempty"`
-	Challenges []string        `json:"challenges,omitempty"`
-	Parallel   int             `json:"parallel,omitempty"`
-	UseHint    bool            `json:"use_hint,omitempty"`
+	Descriptor harness.RunDescriptor `json:"descriptor"`
+	TSec       *TSecRequest          `json:"tsec,omitempty"`
+	Challenges []string              `json:"challenges,omitempty"`
+	Parallel   int                   `json:"parallel,omitempty"`
+	UseHint    bool                  `json:"use_hint,omitempty"`
 }
 
+// SweepPlan is batch composition only. Each Build call must return a normal
+// v2 RunSpec, so every sweep Run still uses the single canonical engine.
 type SweepPlan struct {
 	ChallengeCodes []string
 	Parallel       int
@@ -61,6 +60,14 @@ type SweepPlan struct {
 }
 
 type SweepBuilder func(SweepRequest) (SweepPlan, error)
+
+// SweepStore is a read-only history boundary for completed or in-flight batch
+// summaries. The server never uses it as a second Run control writer.
+type SweepStore interface {
+	SaveSweep(context.Context, harness.SweepRecord) error
+	GetSweep(context.Context, string) (harness.SweepRecord, error)
+	ListSweeps(context.Context, int) ([]harness.SweepRecord, error)
+}
 
 type SweepState struct {
 	ID         string           `json:"id"`
@@ -72,77 +79,33 @@ type SweepState struct {
 	FinishedAt *time.Time       `json:"finished_at,omitempty"`
 }
 
-// Overview is the bounded observability summary returned to the UI.
-type Overview struct {
-	GeneratedAt time.Time        `json:"generated_at"`
-	Window      int              `json:"window"`
-	Runs        RunOverview      `json:"runs"`
-	Usage       harness.Usage    `json:"usage"`
-	Duration    DurationOverview `json:"duration"`
-	Sweeps      SweepOverview    `json:"sweeps"`
-}
-
-type RunOverview struct {
-	Total       int     `json:"total"`
-	Active      int     `json:"active"`
-	Terminal    int     `json:"terminal"`
-	Queued      int     `json:"queued"`
-	Starting    int     `json:"starting"`
-	Running     int     `json:"running"`
-	Verifying   int     `json:"verifying"`
-	Succeeded   int     `json:"succeeded"`
-	Failed      int     `json:"failed"`
-	Cancelled   int     `json:"cancelled"`
-	TimedOut    int     `json:"timed_out"`
-	Interrupted int     `json:"interrupted"`
-	SuccessRate float64 `json:"success_rate"`
-}
-
-type DurationOverview struct {
-	Samples   int     `json:"samples"`
-	AverageMS float64 `json:"average_ms"`
-	P50MS     float64 `json:"p50_ms"`
-	P95MS     float64 `json:"p95_ms"`
-}
-
-type SweepOverview struct {
-	Total     int `json:"total"`
-	Active    int `json:"active"`
-	Succeeded int `json:"succeeded"`
-	Failed    int `json:"failed"`
-}
-
 type Server struct {
 	runner       *harness.Runner
-	store        harness.Store
+	store        harness.ReadStore
 	builder      Builder
 	sweepBuilder SweepBuilder
-
-	mu     sync.Mutex
-	live   map[string]*harness.Run
-	sweeps map[string]*SweepState
+	mu           sync.Mutex
+	live         map[string]*harness.Run
+	sweeps       map[string]*SweepState
 }
 
-func New(runner *harness.Runner, store harness.Store, builder Builder, sweepBuilder ...SweepBuilder) *Server {
-	s := &Server{runner: runner, store: store, builder: builder,
-		live: map[string]*harness.Run{}, sweeps: map[string]*SweepState{}}
+func New(runner *harness.Runner, store harness.ReadStore, builder Builder, sweepBuilder ...SweepBuilder) *Server {
+	s := &Server{runner: runner, store: store, builder: builder, live: map[string]*harness.Run{}, sweeps: map[string]*SweepState{}}
 	if len(sweepBuilder) > 0 {
 		s.sweepBuilder = sweepBuilder[0]
 	}
 	return s
 }
-
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.health)
+	mux.HandleFunc("/v1/overview", s.overview)
 	mux.HandleFunc("/v1/runs", s.runs)
 	mux.HandleFunc("/v1/runs/", s.run)
-	mux.HandleFunc("/v1/overview", s.overview)
 	mux.HandleFunc("/v1/tsec/sweeps", s.sweepListCreate)
 	mux.HandleFunc("/v1/tsec/sweeps/", s.sweepGet)
 	return mux
 }
-
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w, http.MethodGet)
@@ -151,51 +114,178 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// overviewWindow is how many recent Runs the overview aggregates.
+const overviewWindow = 100
+
+type overviewRuns struct {
+	Total        int     `json:"total"`
+	Active       int     `json:"active"`
+	Terminal     int     `json:"terminal"`
+	Queued       int     `json:"queued"`
+	Provisioning int     `json:"provisioning"`
+	Running      int     `json:"running"`
+	Finalizing   int     `json:"finalizing"`
+	Verifying    int     `json:"verifying"`
+	Succeeded    int     `json:"succeeded"`
+	Failed       int     `json:"failed"`
+	Cancelled    int     `json:"cancelled"`
+	TimedOut     int     `json:"timed_out"`
+	Interrupted  int     `json:"interrupted"`
+	Stagnated    int     `json:"stagnated"`
+	SuccessRate  float64 `json:"success_rate"`
+}
+
+type overviewDuration struct {
+	Samples   int     `json:"samples"`
+	AverageMS float64 `json:"average_ms"`
+	P50MS     float64 `json:"p50_ms"`
+	P95MS     float64 `json:"p95_ms"`
+}
+
+type overviewResponse struct {
+	GeneratedAt time.Time        `json:"generated_at"`
+	Window      int              `json:"window"`
+	Runs        overviewRuns     `json:"runs"`
+	Usage       harness.Usage    `json:"usage"`
+	Duration    overviewDuration `json:"duration"`
+}
+
+// overview aggregates the same canonical Run records the UI lists. It is a
+// read-only projection; it never derives success from anything but the stored
+// terminal status.
+func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	records, err := s.store.ListRuns(r.Context(), overviewWindow)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	response := overviewResponse{GeneratedAt: time.Now().UTC(), Window: overviewWindow}
+	response.Runs.Total = len(records)
+	var durations []float64
+	for _, record := range records {
+		switch record.Status {
+		case harness.StatusQueued:
+			response.Runs.Queued++
+		case harness.StatusProvisioning:
+			response.Runs.Provisioning++
+		case harness.StatusRunning:
+			response.Runs.Running++
+		case harness.StatusFinalizing:
+			response.Runs.Finalizing++
+		case harness.StatusVerifying:
+			response.Runs.Verifying++
+		case harness.StatusSucceeded:
+			response.Runs.Succeeded++
+		case harness.StatusFailed:
+			response.Runs.Failed++
+		case harness.StatusCancelled:
+			response.Runs.Cancelled++
+		case harness.StatusTimedOut:
+			response.Runs.TimedOut++
+		case harness.StatusInterrupted:
+			response.Runs.Interrupted++
+		case harness.StatusStagnated:
+			response.Runs.Stagnated++
+		}
+		if len(record.Result) == 0 {
+			continue
+		}
+		var result harness.Result
+		if err := json.Unmarshal(record.Result, &result); err != nil {
+			continue
+		}
+		response.Usage.InputTokens += result.Usage.InputTokens
+		response.Usage.OutputTokens += result.Usage.OutputTokens
+		response.Usage.TotalTokens += result.Usage.TotalTokens
+		response.Usage.ModelCalls += result.Usage.ModelCalls
+		response.Usage.ToolCalls += result.Usage.ToolCalls
+		response.Usage.CostUSD += result.Usage.CostUSD
+		if result.StartedAt != nil && result.FinishedAt != nil && result.FinishedAt.After(*result.StartedAt) {
+			durations = append(durations, float64(result.FinishedAt.Sub(*result.StartedAt).Milliseconds()))
+		}
+	}
+	response.Runs.Active = response.Runs.Queued + response.Runs.Provisioning + response.Runs.Running + response.Runs.Finalizing + response.Runs.Verifying
+	response.Runs.Terminal = response.Runs.Total - response.Runs.Active
+	if response.Runs.Terminal > 0 {
+		response.Runs.SuccessRate = float64(response.Runs.Succeeded) / float64(response.Runs.Terminal)
+	}
+	response.Duration = summarizeDurations(durations)
+	writeJSON(w, http.StatusOK, response)
+}
+
+func summarizeDurations(values []float64) overviewDuration {
+	if len(values) == 0 {
+		return overviewDuration{}
+	}
+	sorted := append([]float64(nil), values...)
+	sort.Float64s(sorted)
+	var total float64
+	for _, value := range sorted {
+		total += value
+	}
+	return overviewDuration{
+		Samples:   len(sorted),
+		AverageMS: total / float64(len(sorted)),
+		P50MS:     nearestRank(sorted, 0.50),
+		P95MS:     nearestRank(sorted, 0.95),
+	}
+}
+
+func nearestRank(sorted []float64, percentile float64) float64 {
+	index := int(math.Ceil(percentile*float64(len(sorted)))) - 1
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(sorted) {
+		index = len(sorted) - 1
+	}
+	return sorted[index]
+}
+
 func (s *Server) runs(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
-	case http.MethodPost:
-		s.createRun(w, r)
 	case http.MethodGet:
-		runs, err := s.store.ListRuns(r.Context(), 100)
+		records, err := s.store.ListRuns(r.Context(), 100)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, runs)
-	default:
-		methodNotAllowed(w, http.MethodGet, http.MethodPost)
-	}
-}
-
-func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
-	var request RunRequest
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid run request: "+err.Error())
-		return
-	}
-	spec := request.Run
-	if s.builder != nil {
-		var err error
-		spec, err = s.builder(request)
+		writeJSON(w, http.StatusOK, records)
+	case http.MethodPost:
+		defer r.Body.Close()
+		var request RunRequest
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid run request: "+err.Error())
+			return
+		}
+		if err := harness.ValidateDescriptor(request.Descriptor); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		spec, err := s.builder(request.Descriptor)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		run, err := s.runner.Start(context.WithoutCancel(r.Context()), spec)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.mu.Lock()
+		s.live[run.ID] = run
+		s.mu.Unlock()
+		writeJSON(w, http.StatusAccepted, map[string]string{"run_id": run.ID})
+	default:
+		methodNotAllowed(w, http.MethodGet, http.MethodPost)
 	}
-	run, err := s.runner.Start(context.WithoutCancel(r.Context()), spec)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	s.mu.Lock()
-	s.live[run.ID] = run
-	s.mu.Unlock()
-	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": run.ID})
 }
-
 func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/v1/runs/")
 	parts := strings.Split(strings.Trim(path, "/"), "/")
@@ -219,23 +309,15 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 	}
 	switch parts[1] {
 	case "events":
-		if r.Method != http.MethodGet {
-			methodNotAllowed(w, http.MethodGet)
-			return
-		}
 		s.streamEvents(w, r, runID)
 	case "logs":
-		if r.Method != http.MethodGet {
-			methodNotAllowed(w, http.MethodGet)
-			return
-		}
-		s.runLogs(w, r, runID)
+		s.logs(w, r, runID)
 	case "verdict":
-		if r.Method != http.MethodGet {
-			methodNotAllowed(w, http.MethodGet)
-			return
-		}
-		s.runVerdict(w, r, runID)
+		s.verdict(w, r, runID)
+	case "artifacts":
+		listRunItems(w, r, runID, s.store.ListArtifacts)
+	case "graph":
+		s.graph(w, r, runID)
 	case "cancel":
 		if r.Method != http.MethodPost {
 			methodNotAllowed(w, http.MethodPost)
@@ -260,7 +342,9 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 			SessionID string `json:"session_id"`
 			Message   string `json:"message"`
 		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&body); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid steer request")
 			return
 		}
@@ -279,7 +363,86 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type graphReason struct {
+	Active          bool   `json:"active"`
+	FrontierVersion uint64 `json:"frontier_version"`
+	FreeSlots       []int  `json:"free_slots,omitempty"`
+}
+
+type graphResponse struct {
+	Facts         []harness.Fact          `json:"facts"`
+	Intents       []harness.Intent        `json:"intents"`
+	Hints         []harness.Hint          `json:"hints"`
+	Attempts      []harness.IntentAttempt `json:"attempts"`
+	Slots         []int                   `json:"slots"`
+	BoardRevision uint64                  `json:"board_revision"`
+	Reason        graphReason             `json:"reason"`
+}
+
+func (s *Server) graph(w http.ResponseWriter, r *http.Request, runID string) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	if _, err := s.store.GetRun(r.Context(), runID); err != nil {
+		writeError(w, http.StatusNotFound, "run not found")
+		return
+	}
+	facts, err := s.store.ListFacts(r.Context(), runID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	intents, err := s.store.ListIntents(r.Context(), runID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	hints, err := s.store.ListHints(r.Context(), runID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	attempts, err := s.store.ListIntentAttempts(r.Context(), runID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	occupied := map[int]bool{}
+	for _, intent := range intents {
+		if intent.State == harness.IntentClaimed {
+			occupied[intent.Slot] = true
+		}
+	}
+	slots := make([]int, 0, 2)
+	for _, slot := range []int{1, 2} {
+		if !occupied[slot] {
+			slots = append(slots, slot)
+		}
+	}
+	revision, _ := s.store.GetBoardRevision(r.Context(), runID)
+	reason := graphReason{FreeSlots: slots, FrontierVersion: revision}
+	events, _ := s.store.ListEvents(r.Context(), runID, 0)
+	for _, event := range events {
+		switch event.Type {
+		case harness.EventReasonStarted:
+			reason.Active = true
+			var payload harness.ReasonPayload
+			if json.Unmarshal(event.Data, &payload) == nil {
+				reason.FrontierVersion = payload.FrontierVersion
+			}
+		case harness.EventReasonCompleted, harness.EventReasonRejected:
+			reason.Active = false
+		}
+	}
+	writeJSON(w, http.StatusOK, graphResponse{Facts: facts, Intents: intents, Hints: hints, Attempts: attempts, Slots: slots, BoardRevision: revision, Reason: reason})
+}
+
 func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, runID string) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
 	if _, err := s.store.GetRun(r.Context(), runID); err != nil {
 		writeError(w, http.StatusNotFound, "run not found")
 		return
@@ -290,116 +453,89 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request, runID stri
 		return
 	}
 	after := int64(0)
+	if value := r.Header.Get("Last-Event-ID"); value != "" {
+		after, _ = strconv.ParseInt(value, 10, 64)
+	}
 	if value := r.URL.Query().Get("after_seq"); value != "" {
-		parsed, err := strconv.ParseInt(value, 10, 64)
-		if err != nil || parsed < 0 {
-			writeError(w, http.StatusBadRequest, "after_seq must be a non-negative integer")
-			return
-		}
-		after = parsed
-	} else if value := r.Header.Get("Last-Event-ID"); value != "" {
-		if parsed, err := strconv.ParseInt(value, 10, 64); err == nil && parsed >= 0 {
-			after = parsed
+		candidate, _ := strconv.ParseInt(value, 10, 64)
+		if candidate > after {
+			after = candidate
 		}
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-	lastSeq := after
-	for {
-		events, err := s.store.ListEvents(r.Context(), runID, lastSeq)
-		if err != nil {
-			return
-		}
+	writeEvents := func(events []harness.Event) {
 		for _, event := range events {
 			data, _ := json.Marshal(event)
-			_, _ = fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", event.Seq, event.Type, data)
-			lastSeq = event.Seq
-		}
-		flusher.Flush()
-		record, err := s.store.GetRun(r.Context(), runID)
-		if err != nil {
-			return
-		}
-		if isTerminal(record.Status) && len(events) == 0 {
-			return
-		}
-		select {
-		case <-r.Context().Done():
-			return
-		case <-time.After(100 * time.Millisecond):
+			fmt.Fprintf(w, "id: %d\ndata: %s\n\n", event.Seq, data)
+			flusher.Flush()
+			after = event.Seq
 		}
 	}
-}
-
-func (s *Server) runLogs(w http.ResponseWriter, r *http.Request, runID string) {
-	if _, err := s.store.GetRun(r.Context(), runID); err != nil {
-		writeError(w, http.StatusNotFound, "run not found")
-		return
-	}
-	after, limit, tail, err := parseLogQuery(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	var logs []harness.LogRecord
-	if reader, ok := s.store.(harness.LogPageReader); ok {
-		logs, err = reader.ListLogsPage(r.Context(), runID, after, limit, tail)
-	} else {
-		var all []harness.LogRecord
-		all, err = s.store.ListLogs(r.Context(), runID, after)
-		if err == nil {
-			if tail && after == 0 && len(all) > limit {
-				all = all[len(all)-limit:]
-			} else if len(all) > limit {
-				all = all[:limit]
-			}
-			logs = all
-		}
-	}
+	events, err := s.store.ListEvents(r.Context(), runID, after)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if logs == nil {
-		logs = []harness.LogRecord{}
-	}
-	writeJSON(w, http.StatusOK, logs)
-}
-
-func parseLogQuery(r *http.Request) (int64, int, bool, error) {
-	query := r.URL.Query()
-	after := int64(0)
-	if value := query.Get("after_seq"); value != "" {
-		parsed, err := strconv.ParseInt(value, 10, 64)
-		if err != nil || parsed < 0 {
-			return 0, 0, false, fmt.Errorf("after_seq must be a non-negative integer")
-		}
-		after = parsed
-	}
-	limit := 1000
-	if value := query.Get("limit"); value != "" {
-		parsed, err := strconv.Atoi(value)
-		if err != nil || parsed < 1 || parsed > 5000 {
-			return 0, 0, false, fmt.Errorf("limit must be between 1 and 5000")
-		}
-		limit = parsed
-	}
-	tail := false
-	if value := query.Get("tail"); value != "" {
-		parsed, err := strconv.ParseBool(value)
+	writeEvents(events)
+	live := s.lookupLive(runID)
+	if live == nil {
+		// The Run may have finalized between the initial replay query and the
+		// live-handle lookup. Re-read the tail so run.finalized cannot be lost.
+		remaining, err := s.store.ListEvents(r.Context(), runID, after)
 		if err != nil {
-			return 0, 0, false, fmt.Errorf("tail must be a boolean")
+			return
 		}
-		tail = parsed
+		writeEvents(remaining)
+		return
 	}
-	return after, limit, tail, nil
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+		}
+		events, err := s.store.ListEvents(r.Context(), runID, after)
+		if err != nil {
+			return
+		}
+		writeEvents(events)
+		select {
+		case <-live.Done():
+			remaining, _ := s.store.ListEvents(r.Context(), runID, after)
+			writeEvents(remaining)
+			return
+		default:
+		}
+	}
 }
-
-func (s *Server) runVerdict(w http.ResponseWriter, r *http.Request, runID string) {
-	if _, err := s.store.GetRun(r.Context(), runID); err != nil {
-		writeError(w, http.StatusNotFound, "run not found")
+func (s *Server) logs(w http.ResponseWriter, r *http.Request, runID string) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	after, _ := strconv.ParseInt(r.URL.Query().Get("after_seq"), 10, 64)
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	tail := r.URL.Query().Get("tail") == "true"
+	items, err := s.store.ListLogs(r.Context(), runID, after)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// tail=limit returns the newest page, which is what a client needs to open
+	// an existing log stream. limit alone keeps the oldest page after_seq.
+	if tail && limit > 0 && len(items) > limit {
+		items = items[len(items)-limit:]
+	} else if !tail && limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+func (s *Server) verdict(w http.ResponseWriter, r *http.Request, runID string) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
 		return
 	}
 	verdict, err := s.store.GetVerdict(r.Context(), runID)
@@ -409,150 +545,44 @@ func (s *Server) runVerdict(w http.ResponseWriter, r *http.Request, runID string
 	}
 	writeJSON(w, http.StatusOK, verdict)
 }
-
-func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
+func (s *Server) lookupLive(runID string) *harness.Run {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run := s.live[runID]
+	if run != nil {
+		select {
+		case <-run.Done():
+			delete(s.live, runID)
+			run = nil
+		default:
+		}
+	}
+	return run
+}
+func listRunItems[T any](w http.ResponseWriter, r *http.Request, runID string, list func(context.Context, string) ([]T, error)) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w, http.MethodGet)
 		return
 	}
-	runs, err := s.store.ListRuns(r.Context(), 100)
+	items, err := list(r.Context(), runID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	sweeps, err := s.store.ListSweeps(r.Context(), 100)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, buildOverview(runs, sweeps))
+	writeJSON(w, http.StatusOK, items)
 }
 
-func buildOverview(runs []harness.RunRecord, sweeps []harness.SweepRecord) Overview {
-	overview := Overview{
-		GeneratedAt: time.Now().UTC(),
-		Window:      100,
-		Runs:        RunOverview{Total: len(runs)},
-	}
-	durations := make([]float64, 0)
-	for _, run := range runs {
-		switch run.Status {
-		case harness.StatusQueued:
-			overview.Runs.Queued++
-		case harness.StatusStarting:
-			overview.Runs.Starting++
-		case harness.StatusRunning:
-			overview.Runs.Running++
-		case harness.StatusVerifying:
-			overview.Runs.Verifying++
-		case harness.StatusSucceeded:
-			overview.Runs.Succeeded++
-		case harness.StatusFailed:
-			overview.Runs.Failed++
-		case harness.StatusCancelled:
-			overview.Runs.Cancelled++
-		case harness.StatusTimedOut:
-			overview.Runs.TimedOut++
-		case harness.StatusInterrupted:
-			overview.Runs.Interrupted++
-		}
-		if isActive(run.Status) {
-			overview.Runs.Active++
-		}
-		if isTerminal(run.Status) {
-			overview.Runs.Terminal++
-		}
-		if len(run.Result) != 0 {
-			var result harness.Result
-			if json.Unmarshal(run.Result, &result) == nil {
-				overview.Usage.InputTokens += result.Usage.InputTokens
-				overview.Usage.OutputTokens += result.Usage.OutputTokens
-				overview.Usage.TotalTokens += result.Usage.TotalTokens
-				overview.Usage.ModelCalls += result.Usage.ModelCalls
-				overview.Usage.ToolCalls += result.Usage.ToolCalls
-				overview.Usage.CostUSD += result.Usage.CostUSD
-			}
-		}
-		if run.StartedAt != nil && run.FinishedAt != nil && !run.FinishedAt.Before(*run.StartedAt) {
-			durations = append(durations, float64(run.FinishedAt.Sub(*run.StartedAt).Milliseconds()))
-		}
-	}
-	if overview.Runs.Terminal > 0 {
-		overview.Runs.SuccessRate = round(float64(overview.Runs.Succeeded)/float64(overview.Runs.Terminal), 4)
-	}
-	overview.Duration = summarizeDurations(durations)
-	overview.Usage.CostUSD = round(overview.Usage.CostUSD, 6)
-	overview.Sweeps.Total = len(sweeps)
-	for _, sweep := range sweeps {
-		if isActive(sweep.Status) {
-			overview.Sweeps.Active++
-		}
-		switch sweep.Status {
-		case harness.StatusSucceeded:
-			overview.Sweeps.Succeeded++
-		case harness.StatusFailed:
-			overview.Sweeps.Failed++
-		}
-	}
-	return overview
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
 }
-
-func summarizeDurations(values []float64) DurationOverview {
-	if len(values) == 0 {
-		return DurationOverview{}
-	}
-	sort.Float64s(values)
-	total := 0.0
-	for _, value := range values {
-		total += value
-	}
-	return DurationOverview{
-		Samples:   len(values),
-		AverageMS: round(total/float64(len(values)), 3),
-		P50MS:     percentile(values, 0.50),
-		P95MS:     percentile(values, 0.95),
-	}
+func writeError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]string{"error": message})
 }
-
-func percentile(sorted []float64, p float64) float64 {
-	index := int(math.Ceil(p*float64(len(sorted)))) - 1
-	if index < 0 {
-		index = 0
-	}
-	if index >= len(sorted) {
-		index = len(sorted) - 1
-	}
-	return sorted[index]
-}
-
-func round(value float64, places int) float64 {
-	scale := math.Pow10(places)
-	return math.Round(value*scale) / scale
-}
-
-func isActive(status harness.Status) bool {
-	switch status {
-	case harness.StatusQueued, harness.StatusStarting, harness.StatusRunning, harness.StatusVerifying:
-		return true
-	default:
-		return false
-	}
-}
-
-func (s *Server) lookupLive(runID string) *harness.Run {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.live[runID]
-}
-
-func isTerminal(status harness.Status) bool {
-	switch status {
-	case harness.StatusSucceeded, harness.StatusFailed, harness.StatusCancelled,
-		harness.StatusTimedOut, harness.StatusInterrupted:
-		return true
-	default:
-		return false
-	}
+func methodNotAllowed(w http.ResponseWriter, allowed ...string) {
+	w.Header().Set("Allow", strings.Join(allowed, ", "))
+	writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 }
 
 func (s *Server) sweepListCreate(w http.ResponseWriter, r *http.Request) {
@@ -562,23 +592,28 @@ func (s *Server) sweepListCreate(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		s.mu.Lock()
 		out := make([]SweepState, 0, len(s.sweeps))
-		for _, sweep := range s.sweeps {
-			out = append(out, snapshotSweepLocked(sweep))
+		for _, state := range s.sweeps {
+			out = append(out, snapshotSweepLocked(state))
 		}
 		s.mu.Unlock()
 		if len(out) == 0 {
-			sweeps, err := s.store.ListSweeps(r.Context(), 100)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-			for _, record := range sweeps {
-				var state SweepState
-				if json.Unmarshal(record.Result, &state) == nil {
-					out = append(out, state)
+			if reader, ok := s.store.(SweepStore); ok {
+				records, err := reader.ListSweeps(r.Context(), 100)
+				if err != nil {
+					writeError(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+				for _, record := range records {
+					var state SweepState
+					if json.Unmarshal(record.Result, &state) == nil {
+						out = append(out, state)
+					}
 				}
 			}
+			writeJSON(w, http.StatusOK, out)
+			return
 		}
+		sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 		writeJSON(w, http.StatusOK, out)
 	default:
 		methodNotAllowed(w, http.MethodGet, http.MethodPost)
@@ -592,13 +627,23 @@ func (s *Server) createSweep(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 	var request SweepRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&request); err != nil {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid sweep request: "+err.Error())
+		return
+	}
+	if err := harness.ValidateDescriptor(request.Descriptor); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid sweep descriptor: "+err.Error())
 		return
 	}
 	plan, err := s.sweepBuilder(request)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(plan.ChallengeCodes) == 0 || plan.Build == nil {
+		writeError(w, http.StatusBadRequest, "sweep plan requires challenge codes and a builder")
 		return
 	}
 	if plan.Parallel <= 0 {
@@ -621,8 +666,8 @@ func (s *Server) executeSweep(state *SweepState, plan SweepPlan) {
 	s.updateSweep(state, func() { state.Status = harness.StatusRunning })
 	sem := make(chan struct{}, plan.Parallel)
 	var wg sync.WaitGroup
-	for _, code := range plan.ChallengeCodes {
-		code := code
+	for _, rawCode := range plan.ChallengeCodes {
+		code := rawCode
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -630,21 +675,24 @@ func (s *Server) executeSweep(state *SweepState, plan SweepPlan) {
 			defer func() { <-sem }()
 			spec, err := plan.Build(code)
 			if err != nil {
-				s.appendSweepError(state, err)
+				s.appendSweepError(state, fmt.Errorf("build %s: %w", code, err))
 				return
 			}
 			run, err := s.runner.Start(context.WithoutCancel(context.Background()), spec)
 			if err != nil {
-				s.appendSweepError(state, err)
+				s.appendSweepError(state, fmt.Errorf("start %s: %w", code, err))
 				return
 			}
 			s.mu.Lock()
 			state.RunIDs = append(state.RunIDs, run.ID)
 			s.mu.Unlock()
-			result, _ := run.Wait(context.Background())
+			result, runErr := run.Wait(context.Background())
 			s.mu.Lock()
 			state.Results = append(state.Results, result)
 			s.mu.Unlock()
+			if runErr != nil {
+				s.appendSweepError(state, fmt.Errorf("wait %s: %w", code, runErr))
+			}
 		}()
 	}
 	wg.Wait()
@@ -652,7 +700,7 @@ func (s *Server) executeSweep(state *SweepState, plan SweepPlan) {
 		finished := time.Now().UTC()
 		state.FinishedAt = &finished
 		state.Status = harness.StatusSucceeded
-		if state.Error != "" || len(state.Results) == 0 {
+		if state.Error != "" || len(state.Results) != len(plan.ChallengeCodes) {
 			state.Status = harness.StatusFailed
 		}
 	})
@@ -666,24 +714,28 @@ func (s *Server) updateSweep(state *SweepState, mutate func()) {
 	s.persistSweep(snapshot)
 }
 
-func (s *Server) appendSweepError(state *SweepState, err error) {
-	s.updateSweep(state, func() {
-		if state.Error != "" {
-			state.Error += "; "
-		}
-		state.Error += err.Error()
-	})
-}
-
 func (s *Server) persistSweep(snapshot SweepState) {
+	writer, ok := s.store.(SweepStore)
+	if !ok {
+		return
+	}
 	result, err := json.Marshal(snapshot)
 	if err != nil {
 		return
 	}
-	_ = s.store.SaveSweep(context.Background(), harness.SweepRecord{
+	_ = writer.SaveSweep(context.Background(), harness.SweepRecord{
 		ID: snapshot.ID, Status: snapshot.Status, Result: result,
 		Error: snapshot.Error, CreatedAt: snapshot.CreatedAt, FinishedAt: snapshot.FinishedAt,
 	})
+}
+
+func (s *Server) appendSweepError(state *SweepState, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if state.Error != "" {
+		state.Error += "; "
+	}
+	state.Error += err.Error()
 }
 
 func (s *Server) sweepGet(w http.ResponseWriter, r *http.Request) {
@@ -700,7 +752,12 @@ func (s *Server) sweepGet(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 	if state == nil {
-		record, err := s.store.GetSweep(r.Context(), id)
+		reader, ok := s.store.(SweepStore)
+		if !ok {
+			writeError(w, http.StatusNotFound, "sweep not found")
+			return
+		}
+		record, err := reader.GetSweep(r.Context(), id)
 		if err != nil {
 			writeError(w, http.StatusNotFound, "sweep not found")
 			return
@@ -722,19 +779,4 @@ func snapshotSweepLocked(state *SweepState) SweepState {
 		snapshot.FinishedAt = &finished
 	}
 	return snapshot
-}
-
-func writeJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
-}
-
-func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]string{"error": message})
-}
-
-func methodNotAllowed(w http.ResponseWriter, methods ...string) {
-	w.Header().Set("Allow", strings.Join(methods, ", "))
-	writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 }

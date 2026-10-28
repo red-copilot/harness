@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/red-copilot/harness/internal/naming"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -19,9 +21,15 @@ import (
 // swap the implementation without changing Pi or the runner.
 type Runner struct {
 	Docker string
+	// Owner scopes orphan cleanup to this harness deployment. Two processes
+	// sharing one Docker daemon must not reclaim each other's live Targets.
+	// Empty means every labeled resource, which is only safe in tests.
+	Owner string
 }
 
-func New() *Runner { return &Runner{Docker: "docker"} }
+// New returns the production starter and cleaner. The owner defaults to the
+// host name so backends constructed elsewhere agree on the same label.
+func New() *Runner { return &Runner{Docker: "docker", Owner: defaultOwner()} }
 
 func (r *Runner) docker() string {
 	if r != nil && r.Docker != "" {
@@ -83,6 +91,9 @@ func BuildRunArgsChecked(spec harness.ProcessSpec) ([]string, error) {
 		if mount.Source == "" || mount.Destination == "" {
 			return nil, errors.New("mount source and destination are required")
 		}
+		if err := validateAgentMount(mount); err != nil {
+			return nil, err
+		}
 		value := mount.Source + ":" + mount.Destination
 		if mount.ReadOnly {
 			value += ":ro"
@@ -108,6 +119,66 @@ func BuildRunArgsChecked(spec harness.ProcessSpec) ([]string, error) {
 	args = append(args, spec.Image)
 	args = append(args, spec.Command...)
 	return args, nil
+}
+
+func validateAgentMount(mount harness.Mount) error {
+	source := filepath.Clean(mount.Source)
+	destination := filepath.Clean(mount.Destination)
+	if filepath.Base(source) == "docker.sock" || filepath.Base(destination) == "docker.sock" {
+		return errors.New("docker control socket mounts are forbidden")
+	}
+	for _, forbidden := range []string{"/var/run", "/run"} {
+		if source == forbidden || destination == forbidden {
+			return fmt.Errorf("mounting runtime directory %s is forbidden", forbidden)
+		}
+	}
+	resolved, err := filepath.EvalSymlinks(source)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("resolve mount source: %w", err)
+	}
+	if filepath.Base(resolved) == "docker.sock" {
+		return errors.New("docker control socket mounts are forbidden")
+	}
+	for _, forbidden := range []string{"/var/run", "/run"} {
+		if resolved == forbidden {
+			return fmt.Errorf("mounting runtime directory %s is forbidden", forbidden)
+		}
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return fmt.Errorf("stat mount source: %w", err)
+	}
+	if info.Mode()&os.ModeSocket != 0 {
+		return errors.New("mounting Unix sockets is forbidden")
+	}
+	if info.IsDir() && containsDockerSocketPath(resolved) {
+		return errors.New("mounts containing a docker control socket are forbidden")
+	}
+	return nil
+}
+
+func containsDockerSocketPath(root string) bool {
+	candidates := []string{"/var/run/docker.sock", "/run/docker.sock"}
+	if host := os.Getenv("DOCKER_HOST"); strings.HasPrefix(host, "unix://") {
+		candidates = append(candidates, strings.TrimPrefix(host, "unix://"))
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		candidates = append(candidates, filepath.Join(home, ".docker", "run", "docker.sock"))
+	}
+	if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
+		candidates = append(candidates, filepath.Join(runtimeDir, "docker.sock"))
+	}
+	root = filepath.Clean(root)
+	for _, candidate := range candidates {
+		rel, err := filepath.Rel(root, filepath.Clean(candidate))
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Runner) Start(ctx context.Context, spec harness.ProcessSpec) (harness.Process, error) {
@@ -206,11 +277,17 @@ func (p *process) Kill(ctx context.Context) error {
 	return err
 }
 
-// CleanupOrphans removes labeled containers and networks from interrupted runs.
+// CleanupOrphans removes labeled containers and networks from interrupted runs
+// of this deployment. Resources owned by another harness process are left
+// alone even when it is still running.
 func (r *Runner) CleanupOrphans(ctx context.Context) error {
+	filters := []string{"--filter", "label=harness.managed=true"}
+	if r != nil && r.Owner != "" {
+		filters = append(filters, "--filter", "label=harness.owner="+naming.Identifier(r.Owner, "target"))
+	}
 	commands := [][]string{
-		{"ps", "-aq", "--filter", "label=harness.managed=true"},
-		{"network", "ls", "-q", "--filter", "label=harness.managed=true"},
+		append([]string{"ps", "-aq"}, filters...),
+		append([]string{"network", "ls", "-q"}, filters...),
 	}
 	var ids []string
 	for _, args := range commands[:1] {

@@ -1,13 +1,14 @@
 # Red Harness 第一性原理架构研究
 
 - 日期：2026-10-28
-- 状态：架构研究，结论已选定；实现迁移另行执行
+- 状态：架构研究，结论已选定并已实施
 - 研究方式：基于本仓库代码、测试与设计的静态证据
-- 发布基线：`main@0bbee5e`
-- 最新 v2 证据：`5bbddb9`
+- 历史发布基线：`main@0bbee5e`
+- v2 实现底稿：`5bbddb9`
+- 当前实现：Fact/Intent v2（schema v6）
 - 读者：Red Harness 维护者与架构师
 
-> **结论先行：** Fact/Intent v2 是唯一目标架构，应一次性切换。`main@0bbee5e` 的单 Agent、`ExplorationState` 与 Frontier steering 不再扩展；Branch 树和 writable Knowledge 不保留为第二控制语义。旧 Branch/Knowledge 数据只作为只读审计历史保存。
+> **结论先行：** Fact/Intent v2 是唯一控制架构，并已一次性切换。`main@0bbee5e` 的单 Agent、`ExplorationState` 与 Frontier steering 已退役；Branch 树和 writable Knowledge 不保留为第二控制语义。旧 Branch/Knowledge 数据只保存在切换前的验证备份中。
 
 > 本文比较的是架构，不宣称任一实现已经通过完整 Go、race、Web、Docker 或 live TSec/VPN 验证。下文列出的测试是静态阅读到的代码证据，并非本次运行结果。
 
@@ -43,7 +44,7 @@ v2 的胜出不是因为“双槽”或“blackboard”这个名称，而是因�
 - 执行者只返回不可变结果；`engine` 循环是 board 状态的唯一写者。
 - `CanonicalWriter.Commit` 与 `Finalize` 把 board revision、规范化记录、历史和事件放进原子边界。
 - `RunPhase` 与 `RunOutcome` 分离，成功需要成功 verdict；失败路径不会被“看起来完成”覆盖。
-- 旧 Branch/Knowledge 表保留只读，避免为架构切换销毁审计。
+- 切换前先验证 SQLite 备份，再创建全新 v2 数据库；旧历史保留在备份中。
 
 v2 也有明确的未解成本：固定两个 Executor 是产品选择，不是自然定律；Reason/Explore/Conclude 协议复杂度上升；Reasoner 失败上限可能降低探索覆盖率；没有 checkpoint/resume；TSec `BENCHMARK_TOKEN` 仍是容器信任边界内的产品例外。静态研究不能证明这些取舍在真实 TSec 题目上总体更优。
 
@@ -306,25 +307,25 @@ Caller / CLI / HTTP / Web
 - `main@0bbee5e` 的 `ExplorationState`/Frontier 不再扩展，不进入新运行路径。
 - `Planner` 改名为 `Reasoner`，不再产生子节点。
 - 恰好两个 Executors；不再有 writable Branch/Knowledge 控制路径。
-- 旧 Branch/Knowledge 表和事件保留为只读历史，不在新 Run 中写入。
+- 旧 Branch/Knowledge 数据不作为新的可写控制路径；生产切换后仅保存在验证备份中。
 - 不保留双写、双 CLI 配置或长期兼容层；迁移应是可审计的断代，而不是长期双路径。
 
 ### 7.2 数据库和回滚
 
-- 迁移仅做 additive/backfill；旧 Run/Event/Log 不得被清理。
-- schema v6 由 v2 二进制写入；旧数据保留只读。
-- 执行迁移前必须备份 SQLite 文件。
-- 数据库升级视为单向边界：旧二进制回滚不是“切回旧代码继续写”，而是先恢复备份。
-- 迁移失败或不支持的新 version 必须 fail closed，不能猜测降级。
+- 生产切换采用备份后重建：先验证备份的 SHA-256、大小和关键表行数，再创建全新 schema v6 数据库。
+- 旧 Run/Event/Branch/Knowledge 不复制到新可写库；其审计留存在验证过的备份中。
+- schema v6 由 v2 二进制创建；`OpenFresh` 拒绝覆盖已有数据库或 WAL/SHM。
+- 数据库升级视为单向边界：旧二进制回滚必须先恢复备份，不能继续写新 schema。
+- 新库初始化失败、备份校验失败或不支持的新 version 必须 fail closed。
 
 ### 7.3 迁移顺序
 
 1. 冻结旧控制语义；停止新增 Branch/Knowledge 写者。
 2. 准备 v2 descriptor、`harness/v2` 配置和两个 Executor。
-3. 备份并验证 SQLite；确认迁移 additive/backfill 不删 events/logs，并对代表旧库执行迁移前后行数核对。
-4. 启用 v2 Reasoner/RunController；旧 Run 只读。
+3. 备份并验证 SQLite；记录 SHA-256、大小与关键表行数，确认备份完整。
+4. 以 `OpenFresh` 创建全新 v2 库并启用 Reasoner/RunController；旧历史只从备份恢复。
 5. 观察 Reasoner 失败、slot 补位、证据归档、cleanup 和 Verifier/backend 竞争。
-6. 删除旧写入入口、旧 CLI 写路径和旧控制文档；保留只读历史兼容，不以“停止调用”代替删除第二写者。
+6. 删除旧写入入口、旧 CLI 写路径和旧控制代码；不以“停止调用”代替删除第二写者。
 7. 待真实 TSec 冒烟与统计确认后，再评估并发参数和上下文预算。
 
 ## 8. 风险登记
@@ -337,7 +338,7 @@ Caller / CLI / HTTP / Web
 | 上下文截断 | 有界上下文会丢失长尾证据，影响模型判断 | 保留 origin/goal 与确定性排序；记录 truncation；评估 artifact 可访问性 |
 | Evidence archive 故障 | 不能生成 Finding Fact，可能降低完成率 | ArtifactStoreError 直接终止；不把缺证据当成负事实 |
 | TSec token | 容器可读取产品例外凭据，脱敏不能阻止读取 | 明确容器在凭据信任边界内；限制 mounts、能力、网络和 secret passthrough |
-| SQLite 单向升级 | 旧二进制回滚可能无法继续写入 | 迁移前备份；回滚恢复备份；文档明确不可降级 |
+| SQLite 单向升级 | 旧二进制回滚可能无法继续写入 | 切换前验证备份；回滚恢复备份；新库不复制旧 Run |
 | 静态验证不足 | 本文发现的是代码级强制点，不证明 Docker/TSec/race 全通过 | 迁移验收阶段运行完整矩阵；Docker/live 检查只有在实际执行后才可声称通过 |
 | 模型语义质量 | 结构合法不代表推理正确；Fact 仍可能语义错误 | 只把 Fact 当后续提案的来源，不让其成为成功；用 Verifier/backend 裁定 |
 | Web/事件兼容 | 新 board 与旧 Branch 同时可读，展示可能混淆 | 旧事件只读 fallback；新 Run 只写 Fact/Intent 事件；未知事件局部忽略 |
@@ -349,16 +350,16 @@ Caller / CLI / HTTP / Web
 - 每个不可约约束都能追溯到代码强制点或明确风险，而不是仅存在于 prompt/文档。
 - 产品参数与第一性原理分开列出。
 - 三条路线都有代表 commit/文件和明确淘汰理由。
-- 目标架构说明单一控制写者、证据链、权威裁决和失败模型。
-- 迁移说明一次性切换、旧数据只读、数据库备份与不可回滚边界。
+- 当前架构说明单一控制写者、证据链、权威裁决和失败模型。
+- 迁移说明一次性切换、验证备份后重建、旧数据留档与不可回滚边界。
 - 不把静态研究写成运行测试结论。
 
 结论：
 
-1. **Fact/Intent v2 是目标架构。**
+1. **Fact/Intent v2 是唯一控制架构，且已成为当前实现。**
 2. **`main@0bbee5e` 是发布基线，不是目标实现。**
 3. **Branch v1/v2 是重要中间态，但不是第二生产控制路径。**
-4. **立即切换，旧 Branch/Knowledge 只读保留，迁移前备份。**
-5. **完整 Go/race/Web/Docker/live TSec 验证必须留到实施迁移阶段，且只有实际运行后才能报告通过。**
+4. **已切换；旧 Branch/Knowledge 仅保留在验证备份中，不进入新可写库。**
+5. **完整 Go/race/Web/Docker/live TSec 验证必须在实施阶段实际运行后才能报告通过。**
 
-本次研究不修改 Go、前端、SQLite schema 或公开 API；`docs/architecture.md` 只同步方向与现状标签。
+本文保留架构研究与路线比较；具体实现、schema v6、当前测试结果和迁移操作以代码、`docs/architecture.md` 与 `docs/migration-v2.md` 为准。

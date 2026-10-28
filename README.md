@@ -1,227 +1,139 @@
-![Red Copilot — Security Engineering for the Agentic Era](https://raw.githubusercontent.com/red-copilot/.github/main/assets/red-copilot-banner.svg)
+# Red Harness · First-Principles Offensive Agent SDK
 
-# Red Harness · Go SDK
+Red Harness v2 是面向安全 Agent 开发者的纯 Go SDK。它固定一条可审计的探索控制路径：一个 Run、一个逻辑 Target、两个 Executor 槽位、代码强制的预算与证据边界，以及只能由 `Verifier` 或 backend completion 产生的权威成功结论。
 
-**A Go-native execution boundary for security agents, available as a library, CLI, and local HTTP service.**
+> **Caller-managed isolation:** v2 只支持 `caller_managed`。SDK 校验 agent 声明的 Target 引用并记录信任假设，但不实施网络 ACL。调用方必须保证容器只能访问授权 Target 与必要控制端。
 
-**面向安全智能体的 Go 原生执行边界，提供库、CLI 与本地 HTTP 服务三种接入方式。** 它与 Python Runtime 相互独立，拥有自己的执行、隔离、审计和验证契约。
-
-The agent owns its reasoning loop. The SDK governs execution, container isolation, budgets, Pi RPC transport, persistent audit records, recovery, and the hand-off to an authoritative verifier.
-
-<sub>推理循环由智能体负责；SDK 负责执行控制、容器隔离、预算约束、Pi RPC 通信、持久化审计、恢复，以及向权威验证器交付结果。</sub>
-
-> **Evidence over claims:** Agent statements and tool exit codes are observations, not proof. Only the verifier or benchmark evaluator can produce an authoritative verdict.
->
-> **证据优先：** 智能体自述与工具退出码只是观测，不等于证明；权威结论由验证器或竞赛评测器给出。
-
-<p>
-  <a href="https://github.com/red-copilot/red-copilot">Python Runtime</a> ·
-  <a href="https://github.com/red-copilot/harness">Go SDK</a> ·
-  <a href="https://github.com/red-copilot/red-x">ARL 3.0</a>
-</p>
-
-## Architecture · 架构
+## Architecture
 
 ```text
-Go Library / CLI / HTTP
-          │
-          ▼
-     Run Controller
-          │
-     ┌────┴─────┐
-     ▼          ▼
-Agent Runtime  SQLite Store
-     │          │
-     ▼          ▼
-Isolated Agent  Events / Runs
-     │
-     ▼
-Target Environment
-     │
-     ▼
-Verifier / Benchmark Evaluator
-     │
-     ▼
-Authoritative Verdict
+core    Pure domain contracts · validators · policy · typed events
+engine  Single-writer Run lifecycle · Fact/Intent actor · authority arbitration
+root    Thin harness façade over core/engine
+adapters Pi · Docker · TSec · Verifier · SQLite
+surfaces CLI · HTTP/SSE · Web
 ```
 
-## Requirements · 环境要求
+- `github.com/red-copilot/harness/core` 只依赖 Go 标准库。
+- `github.com/red-copilot/harness/engine` 不依赖任何适配器、CLI、HTTP 或 Web。
+- 根 `harness` 包只重导出常用入口，不承载状态机或 I/O。
+- 成功的唯一来源是 `Verifier.Verify` 或 `CompletionSource.Observe` 的 terminal success。
+- Agent 文本、Shell 退出码、Observation、Fact 和 Reason completion 都不能建立成功 verdict。
+- 没有第二条可写 Branch/Knowledge 控制路径，没有 checkpoint/resume。
 
-- Go 1.24+
-- Docker, with Docker Compose for Compose targets
-- A Pi/Kali image, or build the bundled image:
+### Fact / Intent Engine
 
-```bash
-go build ./cmd/harness
-./harness image build --tag ghcr.io/red-copilot/harness-pi-kali:0.1.0
-```
+- 一个 Run 固定两个 Executor 槽位，每个槽位同时最多执行一个 Intent/Attempt。
+- Bootstrap 先直接尝试任务，完成后由串行 Reasoner 读取有界 Fact/Intent 图并补位。
+- Reasoner 只能为当前空闲槽位提议 Intent；stale board revision 或超量提议整体拒绝。
+- Explore 一次只推进一个 Intent，并产出 evidence-backed Finding Fact 或 Negative Fact。
+- Execute 超时或输出不可解析时，在同一存活 session 上进入 Conclude 收尾。
+- Finding Fact 必须引用当前 Attempt 的 Observation/Artifact；Negative Fact 不要求 Artifact。
+- `goal_candidate` 只触发 Verifier，不是成功结论。
+- Reasoner 连续失败达到 `max_reasoner_failures` 后停止新增工作并进入权威终态流程。
 
-## Library · Go 库接入
+## Library
 
 ```go
 store, err := sqlite.Open(".harness/harness.db")
-if err != nil {
-    log.Fatal(err)
-}
+if err != nil { log.Fatal(err) }
 defer store.Close()
 
-dockerRuntime := docker.New()
+runtime := pi.NewFactory(pi.Config{Provider: "openai", Model: "gpt-5", Thinking: "high"})
 runner, err := harness.NewRunner(harness.Config{
-    Store:          store,
-    Starter:        dockerRuntime,
-    DefaultFactory: pi.NewFactory(),
-    WorkspaceRoot:  ".harness/workspaces",
-    Cleaner:        dockerRuntime,
+    Store: store, Starter: docker.New(), WorkspaceRoot: ".harness/workspaces",
 })
-if err != nil {
-    log.Fatal(err)
-}
+if err != nil { log.Fatal(err) }
 defer runner.Close(context.Background())
 
-result, err := runner.Run(ctx, harness.RunSpec{
+spec := harness.RunSpec{
     Task: harness.Task{ID: "demo", Objective: "Find and submit the flag."},
-    Target: harness.Target{ID: "local", Addresses: []string{"10.0.0.5:8080"}},
-    Agents: []harness.AgentSpec{{
-        ID: "pi",
-        Pi: &harness.PiSpec{Provider: "openai", Model: "gpt-5", Thinking: "high"},
-        EnvFrom: []string{"OPENAI_API_KEY"},
-    }},
+    Target: harness.TargetSpec{
+        ID: "local", Addresses: []string{"10.0.0.5:8080"},
+        Isolation: harness.IsolationCallerManaged,
+    },
+    Reasoner: harness.AgentSpec{ID: "reasoner", Runtime: runtime},
+    Executors: []harness.AgentSpec{
+        {ID: "executor-1", Runtime: runtime},
+        {ID: "executor-2", Runtime: runtime},
+    },
+    Policy: harness.DefaultRunPolicy(),
+    Artifacts: store,
     Verifier: verify.Command{Path: "./verify.sh"},
-})
+}
+result, err := runner.Run(context.Background(), spec)
 ```
 
-Only the verifier or benchmark evaluator can produce an authoritative success verdict. Agent messages, tool exit codes, and self-reported completion are observations—not proof.
+`RunDescriptor` schema version 为 2，CLI 配置使用 `apiVersion: harness/v2`。`RunSpec` 在可序列化 descriptor 之上绑定 runtime、backend、verifier 和 artifact store。
 
-<sub>只有验证器或基准评测器能够给出权威的成功结论。智能体消息、工具退出码和自述完成状态都只是观测，不是证明。</sub>
+## Default limits
 
-## CLI · 命令行
+| Policy | Default |
+|---|---:|
+| Executor slots | 2 |
+| Total Intents | 20 |
+| Attempts per Intent | 3 |
+| Tool calls per Attempt | 20 |
+| Attempt wall time | 10 minutes |
+| Conclude timeout | 90 seconds |
+| Stagnation rounds | 3 |
+| Reasoner tool calls | 4 |
+| Reasoner wall time | 2 minutes |
+| Reasoner failures | 3 |
+| Model board context | 64 items / 64 KiB |
+| Evidence | 16 files / 10 MiB each / 50 MiB total |
 
-Create a Go-first `harness/v1alpha1` YAML/JSON file, then run:
+两个槽位独立补位，不等待 round barrier。Reasoner 全局串行；每轮最多创建与空闲槽位数相同的 Intent。
+
+## Evidence and audit
+
+- Attempt 报告中的证据路径必须是 workspace 内的普通文件。
+- SDK 拒绝绝对路径、`..`、symlink escape、目录、数量/大小超限和哈希不一致。
+- 文本 Artifact 在哈希前脱敏；二进制 Artifact 命中已知 secret 时拒绝归档。
+- Observation 只能引用已归档 Artifact；Finding Fact 只能引用当前 Attempt 的 Observation。
+- SQLite 是 canonical audit store。board revision、规范化记录和对应事件通过 `Commit` 原子提交。
+- Intent/Attempt 历史版本只追加；当前行只是可查询投影。
+- 生产切换使用备份后重建：验证 SHA-256 与行数清单后创建全新 schema v6 数据库；旧历史不进入新可写库。
+
+## CLI
 
 ```bash
-./harness run --file examples/run.yaml
-```
-
-The CLI also supports:
-
-```text
-harness serve
-harness run --file run.yaml
-harness tsec list
-harness tsec run --file examples/tsec.yaml --challenge WEB-001
-harness tsec run --file examples/tsec.yaml --all --parallel 3
-harness runs show --id run_...
-harness runs events --id run_...
 harness doctor
-harness migrate --task task.yaml --agent agent.yaml --out run.json
+harness run --config examples/run.yaml
+harness serve --config examples/run.yaml --listen 127.0.0.1:8080
+harness tsec sweep --config examples/tsec.yaml
+harness runs show --id <run-id>
+harness runs events --id <run-id> --after 0
 ```
 
-The CLI loads `.env` from the current working directory before command
-dispatch. Explicitly exported variables take precedence over values in the
-file. Agent provider and model defaults can be supplied with `PI_PROVIDER` and
-`PI_MODEL`; provider credentials use the provider-specific variable named by
-the run's `env_passthrough`. Keep `.env` private with mode `600`; it is ignored
-by Git.
+旧 `workflow`、`agents`、`targets`、`planner`、核心 `pi` 和 `exploration.configure` 键会 fail closed，并指向迁移文档。
 
-## HTTP API · 本地服务
+## Security boundary
 
-```bash
-export BENCHMARK_BASE_URL=...
-export BENCHMARK_TOKEN=...
-./harness serve --listen 127.0.0.1:8080
-```
+默认 Pi + Docker 容器保留：
 
-The service is intentionally local/single-user and has no authentication or
-tenant isolation.
-Keep the listener bound to loopback unless you configure an external security boundary. Do not expose this service directly to an untrusted network.
+- 只读根文件系统
+- 无 Docker socket
+- `no-new-privileges`
+- capability drop，按角色显式添加
+- CPU、内存与 PID 限制
+- 仅显式 Task/Skills/Workspace 挂载
 
-该服务面向本地单用户场景，不提供认证或租户隔离。除非另行配置安全边界，否则应仅监听 loopback，不要直接暴露给不可信网络。
+`BENCHMARK_TOKEN` 是显式凭据例外，可进入 agent 容器；所有 canonical 写入统一经过 Redactor，SQLite、Artifact、Result、Verdict 与错误中不得出现明文。
 
-- `POST /v1/runs` creates an asynchronous run.
-- `GET /v1/runs/{id}` returns the SQLite-backed record.
-- `GET /v1/runs/{id}/events` streams SSE with `after_seq` replay. When `after_seq`
-  is absent, `Last-Event-ID` is used for browser reconnects.
-- `GET /v1/runs/{id}/logs` returns bounded logs with `after_seq`, `limit`, and
-  `tail` query parameters.
-- `GET /v1/runs/{id}/verdict` returns the authoritative verdict record.
-- `GET /v1/overview` returns the latest-100-run observability summary.
-- `POST /v1/runs/{id}/cancel` cancels a live run.
-- `POST /v1/runs/{id}/steer` sends operator guidance to a live session.
-- `POST /v1/tsec/sweeps` starts a batch of TSec challenge runs.
+HTTP 控制面面向受信操作者，默认只监听 `127.0.0.1`。若显式暴露到其他接口，操作者必须自行提供认证、授权和网络保护；服务端不会把远程请求方视为安全边界。`/v1/tsec/sweeps` 是统一 v2 Run 引擎之上的批量编排，不是第二控制写者。
 
-The embedded read-only observability console is served at `/` by
-`harness serve`.
-
-## TSec · 竞赛适配
-
-TSec uses the platform API directly from Go:
-
-- SDK owns `list`, `start`, `close` and completion polling.
-- Pi owns `submit` through the embedded `tsec-submit` skill.
-- The embedded `tools` skill routes the agent to installed scanners, HTTP,
-  credential, file-transfer and pivoting commands.
-- `BENCHMARK_TOKEN` is passed into the agent container for the embedded submission skill. Known token values are redacted before events and logs are written to SQLite.
-- **Security boundary:** redaction protects persisted records; it does not prevent code running inside the agent container from reading the token. Treat the container as inside the credential trust boundary.
-- The skill never starts or closes a challenge and is not intended to print the token.
-
-Go 版会将 `BENCHMARK_TOKEN` 传入智能体容器供提交 skill 使用。写入 SQLite 前会对已知 Token 值脱敏，但脱敏不能阻止容器内代码读取 Token；因此容器属于凭据信任边界的一部分。
-
-See [`docs/tsec.md`](docs/tsec.md).
-
-## Storage and Security · 存储与安全
-
-SQLite at `.harness/harness.db` is the canonical persistence layer. Raw RPC
-events, agent stdout/stderr, session outcomes and verdicts are stored there.
-Workspace files are runtime artifacts, not the authoritative record.
-
-Containers use a read-only root filesystem, `no-new-privileges`, dropped
-capabilities with `NET_RAW` by default, bounded CPU/memory/PIDs and no Docker
-socket. The default HTTP listener is `127.0.0.1:8080`.
-
-## Observability UI · 可观测界面
-
-The React + Vite + TypeScript console lives in `web/` and is embedded into the
-Go binary from `webui/dist`. It provides a read-only view of runs, live events,
-raw logs, authoritative verdicts and TSec sweeps. It does not create, cancel or
-steer runs.
-
-Development uses the Vite proxy to the local API:
+## Verification
 
 ```bash
-./harness serve --listen 127.0.0.1:8080
-npm --prefix web install
-npm --prefix web run dev
-```
-
-Open `http://127.0.0.1:5173`. `VITE_PROXY_TARGET` can override the proxy target.
-
-Production builds the frontend before the Go binary:
-
-```bash
-npm --prefix web run build
+go test ./...
+go test -race ./...
+go vet ./...
 go build ./cmd/harness
-./harness serve
-```
-
-The UI build is intentionally not committed. `go build` and `go test` still work
-without it; an unbuilt server shows build instructions instead of the SPA.
-
-Frontend checks:
-
-```bash
 npm --prefix web run lint
 npm --prefix web run typecheck
 npm --prefix web run test
 npm --prefix web run build
 ```
 
-## Tests · 测试
-
-```bash
-go test ./...
-go test -race ./...
-go vet ./...
-```
-
-Docker and live TSec/VPN tests are environment-dependent and should be run
-explicitly rather than as part of the default unit suite.
+Docker integration 与 live TSec/VPN 检查依赖运行环境，未实际运行时不得声称通过。

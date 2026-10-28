@@ -1,6 +1,8 @@
 package docker
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -40,5 +42,30 @@ func TestBuildRunArgsHardensAndScopesContainer(t *testing.T) {
 func TestBuildRunArgsRejectsMissingImage(t *testing.T) {
 	if _, err := BuildRunArgsChecked(harness.ProcessSpec{}); err == nil {
 		t.Fatal("expected missing image error")
+	}
+}
+
+func TestBuildRunArgsRejectsDockerSocketMounts(t *testing.T) {
+	dir := t.TempDir()
+	socket := filepath.Join(dir, "docker.sock")
+	if err := os.WriteFile(socket, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "socket-link")
+	if err := os.Symlink(socket, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, mount := range []harness.Mount{
+		{Source: "/", Destination: "/host"},
+		{Source: "/var", Destination: "/host-var"},
+		{Source: "/run", Destination: "/host-run"},
+		{Source: "/var/run/docker.sock", Destination: "/var/run/docker.sock"},
+		{Source: socket, Destination: "/run/docker.sock"},
+		{Source: link, Destination: "/tmp/control.sock"},
+		{Source: "/var/run", Destination: "/host-run"},
+	} {
+		if _, err := BuildRunArgsChecked(harness.ProcessSpec{Image: "image", Mounts: []harness.Mount{mount}}); err == nil {
+			t.Fatalf("docker socket mount accepted: %+v", mount)
+		}
 	}
 }

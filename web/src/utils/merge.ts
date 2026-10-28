@@ -1,3 +1,7 @@
+export function sortedBySeq<T extends { seq: number }>(items: readonly T[]): T[] {
+  return [...items].sort((a, b) => a.seq - b.seq)
+}
+
 export function mergeBySeq<T extends { seq: number }>(
   current: T[],
   incoming: T[],

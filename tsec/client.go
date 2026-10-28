@@ -412,32 +412,32 @@ func NewBackend(client *Client, code string) *Backend {
 	return &Backend{Client: client, Code: code, Network: "host", CheckVPN: true}
 }
 
-func (b *Backend) Provision(ctx context.Context, req harness.ProvisionRequest) (harness.Target, error) {
+func (b *Backend) Provision(ctx context.Context, req harness.ProvisionRequest) (harness.TargetBinding, error) {
 	if b.CheckVPN {
 		if _, err := b.Client.CheckVPN(ctx); err != nil {
-			return harness.Target{}, err
+			return harness.TargetBinding{}, err
 		}
 	}
 	started, err := b.Client.StartChallenge(ctx, b.Code)
 	if err != nil {
-		return harness.Target{}, err
+		return harness.TargetBinding{}, err
 	}
-	metadata := map[string]string{
-		"challenge_code":     b.Code,
-		"benchmark_base_url": b.Client.BaseURL(),
-		"network":            b.Network,
+	runtime := &harness.TargetRuntime{
+		ChallengeCode: b.Code,
+		BenchmarkURL:  b.Client.BaseURL(),
+		Network:       b.Network,
 	}
 	if b.UseHint {
 		hint, err := b.Client.GetHint(ctx, b.Code)
 		if err == nil && hint.Hint != "" {
-			metadata["hint"] = hint.Hint
-			metadata["hint_used"] = "true"
+			runtime.Hint = hint.Hint
+			runtime.HintUsed = true
 		}
 	}
-	return harness.Target{ID: b.Code, Addresses: started.ContainerAddr, Metadata: metadata}, nil
+	return harness.TargetBinding{TargetID: req.Target.ID, Addresses: started.ContainerAddr, Isolation: req.Target.Isolation, Runtime: runtime}, nil
 }
 
-func (b *Backend) Observe(ctx context.Context, target harness.Target) (harness.Completion, error) {
+func (b *Backend) Observe(ctx context.Context, target harness.TargetBinding) (harness.Completion, error) {
 	challenges, err := b.Client.ListChallenges(ctx)
 	if err != nil {
 		return harness.Completion{}, err
@@ -449,6 +449,7 @@ func (b *Backend) Observe(ctx context.Context, target harness.Target) (harness.C
 		if challenge.IsCompleted {
 			return harness.Completion{
 				Done: true, Success: true, Score: float64(challenge.TotalScore),
+				Progress: challenge.CorrectFlagCount, Total: challenge.FlagCount,
 				Message: "challenge completed",
 				Metadata: map[string]string{
 					"flag_count":         strconv.Itoa(challenge.FlagCount),
@@ -456,12 +457,19 @@ func (b *Backend) Observe(ctx context.Context, target harness.Target) (harness.C
 				},
 			}, nil
 		}
-		return harness.Completion{}, nil
+		return harness.Completion{
+			Progress: challenge.CorrectFlagCount,
+			Total:    challenge.FlagCount,
+			Metadata: map[string]string{
+				"flag_count":         strconv.Itoa(challenge.FlagCount),
+				"correct_flag_count": strconv.Itoa(challenge.CorrectFlagCount),
+			},
+		}, nil
 	}
 	return harness.Completion{}, &Error{Code: "challenge_not_found", Message: "challenge not found: " + b.Code}
 }
 
-func (b *Backend) Close(ctx context.Context, target harness.Target) error {
+func (b *Backend) Close(ctx context.Context, target harness.TargetBinding) error {
 	_, err := b.Client.CloseChallenge(ctx, b.Code)
 	return err
 }

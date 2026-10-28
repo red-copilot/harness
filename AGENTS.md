@@ -5,25 +5,16 @@
 This is a standalone Go SDK for the Red Harness execution and trust boundary.
 It does not depend on Python or the legacy `red-copilot` runtime.
 
-The repository currently distinguishes two states:
-
-- **Released baseline:** `main@0bbee5e` uses the single-session exploration path
-  documented in `docs/architecture.md`: Pi `turn_end` events reduce into
-  `ExplorationState`, a bounded Frontier is projected, and `Steer` delivers the
-  next focus.
-- **Approved target:** Fact/Intent v2, documented in
-  `docs/first-principles-architecture.md`. It is not yet the implementation on
-  `main`; commit `5bbddb9` is local implementation evidence, not the current
-  working tree.
-- Do not describe the target architecture as released behavior. Do not extend
-  the baseline exploration semantics unless the task is explicitly about
-  maintaining that baseline; new exploration work should target the migration.
+Fact/Intent v2 is the current implementation on `main`. The released
+`main@0bbee5e` single-session exploration path is historical context only and
+must not be reintroduced or extended.
 
 ## Current Project Structure
 
-- `types.go`, `runner.go`, `run.go`: public harness contracts and run lifecycle.
-- `state.go`, `frontier.go`: current exploration state reduction and Frontier
-  projection.
+- `core/`: pure domain contracts, policy, validators and typed events.
+- `engine/`: single-writer Run lifecycle, Fact/Intent board, two Executor slots,
+  budgets, authority arbitration and persistence ports.
+- Root `harness`: thin façade over common `core`/`engine` entry points.
 - `pi/`: Pi RPC session implementation and hardened command construction.
 - `sandbox/docker/`: Docker process starter, external/image/Compose target backends.
 - `tsec/`: TSec API client, challenge backend and completion polling.
@@ -39,10 +30,10 @@ The repository currently distinguishes two states:
 - `docs/`: current architecture, Pi/TSec contracts, migration guidance and the
   first-principles architecture study.
 
-## Approved Target Shape
+## Current Architecture
 
-The migration target is the Fact/Intent v2 architecture in
-`docs/first-principles-architecture.md`:
+The Fact/Intent v2 architecture is documented in
+`docs/first-principles-architecture.md` and `docs/architecture.md`.
 
 - `core/`: pure domain contracts, policy, validators and typed events; standard
   library only.
@@ -53,9 +44,9 @@ The migration target is the Fact/Intent v2 architecture in
 - Adapters: `pi`, `sandbox/docker`, `tsec`, `verify`, `store/sqlite`.
 - Surfaces: `server`, `internal/cli`, `webui` and `web`.
 
-The target has one writable exploration path. New Runs use a serialized
-Reasoner and exactly two Executors; Branch/Knowledge control records are read-only
-legacy history.
+The current implementation has one writable exploration path. Every Run uses a
+serialized Reasoner and exactly two Executors. Branch/Knowledge are legacy
+schema only and must never regain a writable control path.
 
 ## Build and Test
 
@@ -96,19 +87,22 @@ was run.
   Only a `Verifier` or backend terminal completion may produce a successful
   verdict. Facts, Reason completion, goal candidates and `agent_settled` are
   observations, not success.
-- When implementing the approved target, preserve its trust invariants:
+- Preserve the v2 trust invariants:
   model output is a proposal; `Artifact -> Observation -> Fact` provenance is
   mandatory for findings; the engine loop is the only board writer; canonical
   commits are atomic; stale board revisions and malformed reports fail closed.
 - Do not introduce a second writable exploration path. Do not reintroduce
-  Branch/Knowledge writes for new v2 Runs; retain their records as read-only
-  audit history.
+  Branch/Knowledge writes. They are legacy schema compatibility only; new
+  records must use Fact/Intent.
 - Pi RPC uses strict LF JSONL framing and `agent_settled` for completion.
   `agent_end` is not completion.
-- SQLite is the canonical audit store. Keep events/logs append-only and do not
-  delete or rewrite history during migration. In v2, board records, Intent/Attempt
-  history and their events commit atomically; terminal Run, Verdict and
-  `run.finalized` finalize atomically.
+- SQLite is the canonical audit store. Keep events/logs append-only. Board
+  records, Intent/Attempt history and their events commit atomically; terminal
+  Run, Verdict and `run.finalized` finalize atomically.
+- The approved cutover is backup-then-rebuild: verify a SHA-256/row-count backup
+  manifest before creating a fresh v2 database. Never upgrade the production
+  database in place as if old Runs were v2 history. Rollback restores the
+  verified backup; the new schema is a one-way boundary.
 - Redact known secret values before persisting events, logs, Specs, Results,
   Verdicts and diagnostics. In v2, text evidence is redacted before hashing and
   binary evidence containing a known secret is rejected.

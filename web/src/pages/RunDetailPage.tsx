@@ -32,7 +32,7 @@ import {
 import type { ColumnsType } from 'antd/es/table'
 import { useCallback, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { ApiError, getRun, getVerdict } from '@/api/client'
+import { ApiError, getRun, getRunGraph, getVerdict } from '@/api/client'
 import type {
   EventRecord,
   LogRecord,
@@ -43,6 +43,7 @@ import type {
 } from '@/api/types'
 import { EmptyState } from '@/components/EmptyState'
 import { ExplorationTimeline } from '@/components/ExplorationTimeline'
+import { FactIntentGraph } from '@/components/FactIntentGraph'
 import { JsonViewer } from '@/components/JsonViewer'
 import { LogViewer } from '@/components/LogViewer'
 import { PageError } from '@/components/PageError'
@@ -53,6 +54,7 @@ import { useRunLogs } from '@/hooks/useRunLogs'
 import { useNow } from '@/hooks/useNow'
 import { useI18n } from '@/i18n/I18nContext'
 import {
+  agentIds,
   formatCost,
   formatDuration,
   formatRunDuration,
@@ -91,6 +93,7 @@ export default function RunDetailPage() {
     void queryClient.invalidateQueries({ queryKey: ['verdict', runId] })
     void queryClient.invalidateQueries({ queryKey: ['runs'] })
     void queryClient.invalidateQueries({ queryKey: ['overview'] })
+    void queryClient.invalidateQueries({ queryKey: ['run-graph', runId] })
   }, [queryClient, runId])
   const eventsState = useRunEvents(runId, paused, onFinished, Boolean(run && isTerminalStatus(run.status)))
   const logsState = useRunLogs(runId, live)
@@ -99,6 +102,13 @@ export default function RunDetailPage() {
     queryFn: ({ signal }) => getVerdict(runId!, signal),
     enabled: Boolean(runId),
     refetchInterval: live ? 5000 : false,
+  })
+  const graphQuery = useQuery({
+    queryKey: ['run-graph', runId],
+    queryFn: ({ signal }) => getRunGraph(runId!, signal),
+    enabled: Boolean(runId),
+    refetchInterval: live ? 2000 : false,
+    retry: false,
   })
 
   if (runQuery.isError) {
@@ -155,6 +165,7 @@ export default function RunDetailPage() {
       </div>
 
       <Tabs
+        className="run-detail-tabs"
         activeKey={tab}
         onChange={setTab}
         items={[
@@ -166,7 +177,12 @@ export default function RunDetailPage() {
           {
             key: 'exploration',
             label: t('run.tab.exploration'),
-            children: <ExplorationTimeline events={eventsState.events} />,
+            children:
+              graphQuery.data && graphQuery.data.facts.length > 0 ? (
+                <FactIntentGraph graph={graphQuery.data} />
+              ) : (
+                <ExplorationTimeline events={eventsState.events} />
+              ),
           },
           {
             key: 'events',
@@ -228,9 +244,8 @@ function RunOverview({ run, verdict }: { run: RunRecord; verdict: VerdictRecord 
             <StatusTag status={run.status} />
           </Descriptions.Item>
           <Descriptions.Item label={t('common.task')}>{run.spec?.task?.id ?? '—'}</Descriptions.Item>
-          <Descriptions.Item label={t('common.sweepId')}>{run.sweep_id || '—'}</Descriptions.Item>
           <Descriptions.Item label={t('common.agents')}>
-            {run.spec?.agents?.map((agent) => agent.id).join(', ') || '—'}
+            {agentIds(run.spec).join(', ') || '—'}
           </Descriptions.Item>
           <Descriptions.Item label={t('common.target')}>{address}</Descriptions.Item>
         </Descriptions>
@@ -291,7 +306,7 @@ function RunOverview({ run, verdict }: { run: RunRecord; verdict: VerdictRecord 
 
 function BudgetProgress({ run, usage }: { run: RunRecord; usage: Usage }) {
   const { t } = useI18n()
-  const budget = run.spec?.budget
+  const budget = run.spec?.policy?.budget
   const wallLimit = budget?.wall_time ?? 0
   const started = run.started_at ? new Date(run.started_at).getTime() : 0
   const now = useNow(!run.finished_at)

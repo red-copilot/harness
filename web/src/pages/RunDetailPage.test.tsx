@@ -10,62 +10,38 @@ vi.mock('@/hooks/useRunEvents', () => ({
       {
         seq: 1,
         run_id: 'run_1',
-        session_id: 'pi',
+        session_id: 'executor-1',
         source: 'agent',
-        type: 'turn_end',
+        type: 'agent.event',
         time: '2026-10-20T12:00:01Z',
-        data: { message: { content: [{ type: 'toolCall', name: 'bash' }] }, toolResults: [] },
+        data: { native_type: 'turn_end', data: { message: { content: [{ type: 'toolCall', name: 'bash' }] } } },
       },
       {
         seq: 2,
         run_id: 'run_1',
-        session_id: 'pi',
-        source: 'control',
-        type: 'exploration.state.updated',
+        session_id: '',
+        source: 'harness',
+        type: 'exploration.branch.created',
         time: '2026-10-20T12:00:02Z',
-        data: {
-          revision: 2,
-          attempts: [{ event_seq: 1, tools: ['bash'], execution_succeeded: true, observations: 1 }],
-          observations: [{ event_seq: 1, tool: 'bash', text: 'port 80 is open', error: false }],
-          items: [],
-        },
+        data: { branch: { id: 'root', depth: 0, topic: 'root', phase: 'open', outcome: 'pending', scope: 'target' } },
       },
       {
         seq: 3,
         run_id: 'run_1',
-        session_id: 'pi',
-        source: 'control',
-        type: 'exploration.frontier.updated',
+        session_id: '',
+        source: 'harness',
+        type: 'exploration.branch.created',
         time: '2026-10-20T12:00:03Z',
-        data: {
-          state_revision: 2,
-          frontier: {
-            items: [
-              {
-                id: 'question:verify:1',
-                kind: 'question',
-                text: 'Verify the port observation',
-                status: 'open',
-                priority: 90,
-              },
-            ],
-          },
-          focus: {
-            id: 'question:verify:1',
-            kind: 'question',
-            text: 'Verify the port observation',
-            status: 'open',
-            priority: 90,
-          },
-        },
+        data: { branch: { id: 'branch-1', parent_id: 'root', depth: 1, topic: 'web.verify', hypothesis: 'Verify the port observation', phase: 'closed', outcome: 'supported', scope: 'target' } },
       },
       {
         seq: 4,
         run_id: 'run_1',
+        session_id: '',
         source: 'harness',
-        type: 'run.finished',
-        time: '2026-10-20T12:00:00Z',
-        data: { status: 'succeeded' },
+        type: 'run.finalized',
+        time: '2026-10-20T12:00:04Z',
+        data: { phase: 'terminal', outcome: 'succeeded', status: 'succeeded' },
       },
     ],
     streamState: 'closed',
@@ -83,6 +59,8 @@ describe('RunDetailPage', () => {
       http.get('*/v1/runs/run_1', () =>
         HttpResponse.json({
           id: 'run_1',
+          phase: 'terminal',
+          outcome: 'succeeded',
           status: 'succeeded',
           created_at: '2026-10-20T11:59:00Z',
           started_at: '2026-10-20T12:00:00Z',
@@ -94,12 +72,17 @@ describe('RunDetailPage', () => {
           },
           result: {
             run_id: 'run_1',
+            phase: 'terminal',
+            outcome: 'succeeded',
             status: 'succeeded',
             usage: { total_tokens: 10, cost_usd: 0.1 },
             sessions: [{ id: 'pi', status: 'succeeded', exit_code: 0 }],
             verdict: { success: true, score: 3, message: 'flag accepted' },
           },
         }),
+      ),
+      http.get('*/v1/runs/run_1/graph', () =>
+        HttpResponse.json({ facts: [], intents: [], hints: [], attempts: [], slots: [1, 2] }),
       ),
       http.get('*/v1/runs/run_1/verdict', () =>
         HttpResponse.json({
@@ -121,9 +104,9 @@ describe('RunDetailPage', () => {
     expect(await screen.findByText('Find and prove the flag')).toBeInTheDocument()
     expect(await screen.findByText('权威判定：成功')).toBeInTheDocument()
     fireEvent.click(screen.getByText('探索'))
-    expect(await screen.findByText('State r2')).toBeInTheDocument()
+    expect((await screen.findAllByText('web.verify')).length).toBeGreaterThan(0)
     expect((await screen.findAllByText('Verify the port observation')).length).toBeGreaterThan(0)
     fireEvent.click(screen.getByText('事件 (4)'))
-    expect(await screen.findByText('run.finished')).toBeInTheDocument()
+    expect(await screen.findByText('run.finalized')).toBeInTheDocument()
   })
 })

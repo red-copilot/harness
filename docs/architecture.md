@@ -1,69 +1,76 @@
 # Architecture
 
-## Status and direction
+Red Harness is a pure Go execution and trust boundary for one autonomous security Run against one logical Target. It is not a generic agent framework: one writable control path, explicit authority, bounded exploration and an append-only audit.
 
-This file distinguishes the released baseline from the approved target architecture.
+Fact/Intent v2 is the current implementation on `main`. `0bbee5e` is retained only as historical evidence for the retired Frontier path; it is not a supported writable compatibility path.
 
-- **Released baseline:** `main@0bbee5e`. Its current executable control path is one long-lived Agent session per `AgentSpec`; Pi `turn_end` events are reduced into `ExplorationState`, projected into a bounded Frontier, and delivered with `Steer`. `agent_settled` ends the Pi session, while success still comes only from a `Verifier` or backend completion.
-- **Approved target:** Fact/Intent v2, using `core` + `engine`, a serialized Reasoner, exactly two Executor slots, evidence-backed Facts, `RunPhase`/`RunOutcome`, and atomic `CanonicalWriter.Commit`/`Finalize` operations.
-- **Migration status:** the target is not the current `main` implementation. The implementation evidence is the reachable local commit `5bbddb9`; migration is a separate implementation task. There is no second writable Branch/Knowledge control path in the target architecture; legacy records remain read-only.
+## Package Layers
 
-For the derivation, route comparison, code-enforcement map, migration boundary and risks, see [`first-principles-architecture.md`](first-principles-architecture.md). The study is based on static code and test inspection; it does not claim that `main` has passed v2 or environment-dependent checks.
+1. `core/` — pure domain contracts and mechanical validators. It imports only the standard library and contains Task/Target identity, Run lifecycle values, policy, Fact/Intent/Attempt/Observation/Artifact/Verdict and typed event contracts.
+2. `engine/` — application control kernel. It owns the Runner, Run handle, lifecycle state machine, Fact/Intent actor, two fixed Executor slots, budgets, cancellation, redaction boundary and authority arbitration. It imports `core` and standard library only.
+3. root `harness` — a thin façade over common `engine` and `core` entry points. It contains no state machine or I/O.
+4. adapters — `pi`, `sandbox/docker`, `tsec`, `verify`, `store/sqlite` implement engine ports and never import CLI, server or Web.
+5. surfaces — `server`, `internal/cli`, `webui` and `web` consume the same engine and canonical read projections.
 
-The released baseline is a Go modular monolith:
+## Run Lifecycle
 
-- `harness` owns run lifecycle, budgets, session fan-out, SQLite contracts and verdict handling.
-- `pi` implements the default `AgentSession` using Pi RPC.
-- `sandbox/docker` implements the hardened container process starter and local target backends.
-- `tsec` implements the benchmark API client, challenge backend and lifecycle polling.
-- `verify` implements the external command verifier.
-- `server` implements the asynchronous HTTP API, bounded logs and SSE replay.
-- `webui` embeds and serves the React observability SPA from the Go binary.
-- `internal/cli` provides the operational commands.
+```text
+phase:   queued → provisioning → running → finalizing → verifying → terminal
+outcome:                                                        succeeded | failed | cancelled | timed_out | stagnated | interrupted
+```
 
-## Run flow
+`RunPhase` and `RunOutcome` are canonical. Terminal state is claimed once and committed atomically with the Verdict and `run.finalized`. Startup recovery only marks unfinished Runs `interrupted` and appends the corresponding terminal event; side effects are never replayed.
 
-1. The runner persists a queued run and starts one target provision operation.
-2. Each agent gets an isolated workspace and a process-scoped `AgentSession`.
-3. Pi runs as a long-lived JSONL RPC subprocess. The runner reads stdout continuously and records raw events and stderr in SQLite.
-4. Each Pi `turn_end` is reduced into the session's exploration state. The controller then projects a bounded frontier and steers its focus before the next model call.
-5. `agent_settled` ends a Pi run. `agent_end` is only an intermediate observation.
-6. A backend completion or a caller-provided verifier produces the only authoritative verdict.
-7. Target, session processes and labeled Docker resources are closed in all outcomes.
+Budgets are grouped by `RunPolicy{Budget, Exploration, Context, Evidence}`. Zero values normalize once before Run creation; negative limits fail validation.
 
-## Exploration control
+## Fact / Intent Actor
 
-State and Frontier are deterministic projections over the canonical event log:
+- A Run starts with immutable `origin` and `goal` Facts.
+- Exactly two Executor sessions create two fixed slots. Each slot holds at most one active Attempt.
+- Bootstrap occupies slot-1 first. After Bootstrap settles, a serialized Reasoner fills free slots.
+- Reasoner reads a deterministic, bounded board snapshot carrying a board revision. It may create at most one Intent per free slot.
+- Stale revision, over-capacity or malformed Reasoner output is rejected and counted. After `max_reasoner_failures`, new exploration stops and authoritative finalization begins.
+- Accepted Intent creation and claim are committed in one board revision; no hidden pending queue exists.
+- Executor workers only return immutable results. The engine loop alone mutates board state.
+- Explore executes one Intent and returns one Finding or Negative Fact. Execute/Conclude are phases of the same Attempt.
+- Two slots refill independently; there is no round barrier.
 
-- `ExplorationState` records action attempts, bounded untrusted observations and open exploration items.
-- `ReduceExploration` applies one `turn_end` event, rejects sequence regression and is idempotent for a replayed event.
-- `ProjectExplorationFrontier` filters and orders open candidates/questions; it does not persist a second mutable frontier.
-- The runner records `exploration.state.updated` and `exploration.frontier.updated`, then sends one bounded focus through Pi steering before the next LLM call.
+## Context Bounds
 
-Tool output is always marked as an untrusted observation. Neither State nor
-Frontier can establish task success.
+The Context Builder bounds Reasoner and Explore inputs by deterministic item and byte limits. Origin and Goal are retained first; recent Facts and Hints fill the remaining budget. Single Fact/Intent/Hint sizes are bounded before persistence. Truncation is audited with `context.truncated`.
 
-## Trust boundary
+## Evidence and Facts
 
-The run root is Harness-owned. Agent workspaces, RPC messages, tool output and
-target output are untrusted. They may be stored for audit but cannot establish
-success. The verifier and benchmark completion are the only trusted verdict
-sources.
+- Finding Fact requires at least one Observation from the current Attempt.
+- Observation requires at least one archived Artifact.
+- Observation target references are authorized against the effective `TargetBinding`.
+- Artifact bytes are content-addressed and written before metadata/evidence metadata commits. A failed commit may leave an unreferenced blob, but never a metadata reference to missing bytes.
+- Negative Fact records a ruled-out or no-progress conclusion and cannot establish success.
+- Fact IDs and Attempt IDs are generated by the engine; model-provided identities are not trusted.
 
-The agent container receives only the task/skill/workspace mounts and explicit
-environment variables. It never receives a Docker socket. TSec credentials are
-an explicit exception chosen by the product contract; they are never written to
-SQLite in plaintext.
+## Authority
+
+- `CompletionSource` terminal `Done` is authoritative; non-terminal progress is audit-only.
+- Without a backend terminal result, Verifier runs only after the board is quiescent.
+- Backend terminal completion wins over a concurrent Verifier result.
+- Agent text, tool exit code, Fact, Reason completion and goal candidate are never success.
+- Session or Target cleanup failure downgrades a successful candidate to failed.
+- Missing authority, malformed Verdict, cancellation, wall-time expiry, canonical write failure and unrecoverable control errors all terminate non-successfully.
 
 ## Persistence
 
-The SQLite schema contains runs, sessions' events, logs, verdicts and sweeps.
-Raw RPC records and stderr are append-only. SSE consumers replay by event
-sequence. The service marks unfinished runs `interrupted` on startup and cleans
-labeled orphan containers/networks.
+SQLite schema v6 is canonical. Each board transition uses `CanonicalWriter.Commit`, which atomically writes normalized records, append-only Intent/Attempt versions, a board revision and typed events. `Finalize` atomically writes the terminal Run record, Verdict and final event. Sweeps are persisted summaries that orchestrate ordinary Runs; they are not a second Run control writer.
 
-There is no checkpoint/replay in v1.
+Events/logs have monotonic sequences for SSE replay. Readers ignore unsupported event types locally. All canonical writes pass through the Run-scoped redacting writer. Known secrets never enter SQLite, Artifact content, Result, Verdict, diagnostics or errors. Binary evidence containing a known secret is rejected.
 
-## Directional rule
+The production cutover uses `OpenFresh` after verifying a backup manifest with SHA-256 and row counts. Old Runs and Branch/Knowledge history remain in that verified backup; they are not copied into the writable v2 database. A rollback restores the backup and is the only supported downgrade.
 
-The approved direction is to replace incremental Frontier steering with the Fact/Intent v2 control kernel. Do not add new exploration semantics to the released baseline: the target has one writable control path, a single board writer, evidence-backed Facts and an authoritative verdict boundary. Until the migration lands, the run flow above remains the truthful description of `main`.
+## HTTP and Web
+
+HTTP is a trusted-operator surface and defaults to loopback. `GET /v1/runs/{id}/graph` is the canonical Fact/Intent projection; it includes Facts, Intents, Hints, Attempts, free slots, board revision and latest Reasoner activity. SSE replays canonical events from `seq`. The Web console renders Runs as a two-slot Fact/Intent graph. `/v1/tsec/sweeps` remains a batch orchestration surface over the same v2 Run engine.
+
+## Isolation
+
+Only `caller_managed` isolation is supported. `TargetSpec` is stable authorization identity; `TargetBinding` holds per-Run runtime addresses. The SDK performs semantic reference checks, not network ACLs. Callers own egress rules.
+
+Containers never receive the Docker socket and retain read-only root, `no-new-privileges`, dropped capabilities and CPU/memory/PID limits.

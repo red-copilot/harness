@@ -12,6 +12,7 @@ import { PageHeader } from '@/components/PageHeader'
 import { RunTable } from '@/components/RunTable'
 import { useI18n } from '@/i18n/I18nContext'
 import type { MessageKey } from '@/i18n/messages'
+import { agentIds } from '@/utils/format'
 
 export default function RunsPage() {
   const { t } = useI18n()
@@ -86,12 +87,11 @@ function filterRuns(runs: RunRecord[], statuses: RunStatus[], search: string): R
     if (!needle) return true
     const haystack = [
       run.id,
-      run.sweep_id,
       run.error,
       run.spec?.task?.id,
       run.spec?.task?.objective,
       ...(run.spec?.target?.addresses ?? []),
-      ...(run.spec?.agents?.map((agent) => agent.id) ?? []),
+      ...agentIds(run.spec),
     ]
       .filter(Boolean)
       .join(' ')

@@ -38,8 +38,11 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.ts'],
     css: true,
     globals: true,
-    testTimeout: 15000,
-    hookTimeout: 15000,
+    // Full antd pages in jsdom take tens of seconds on a loaded host; the
+    // default budget turned CPU contention into indistinguishable test failures.
+    testTimeout: 60000,
+    hookTimeout: 60000,
+    exclude: ['e2e/**', 'node_modules/**'],
     server: {
       deps: {
         inline: ['@ant-design/colors', '@ant-design/icons'],
