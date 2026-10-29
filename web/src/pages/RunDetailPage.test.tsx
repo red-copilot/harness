@@ -1,4 +1,4 @@
-import { fireEvent, screen } from '@testing-library/react'
+import { fireEvent, screen, within } from '@testing-library/react'
 import { Route, Routes } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import RunDetailPage from './RunDetailPage'
@@ -75,7 +75,7 @@ describe('RunDetailPage', () => {
             outcome: 'succeeded',
             usage: { total_tokens: 10, cost_usd: 0.1 },
             sessions: [{ id: 'pi', status: 'succeeded', exit_code: 0 }],
-            verdict: { success: true, score: 3, message: 'flag accepted' },
+            verdict: { authority: 'verifier', success: true, score: 3, message: 'flag accepted' },
           },
         }),
       ),
@@ -120,5 +120,54 @@ describe('RunDetailPage', () => {
     expect((await screen.findAllByText('Verify the port observation')).length).toBeGreaterThan(0)
     fireEvent.click(screen.getByText('事件 (4)'))
     expect(await screen.findByText('run.finalized')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('run.finalized'))
+    const drawer = await screen.findByRole('dialog')
+    expect(within(drawer).queryByText('事件 Raw')).not.toBeInTheDocument()
+  })
+
+  it('uses finished-run copy when a terminal run has no verdict', async () => {
+    server.use(
+      http.get('*/v1/runs/run_1', () =>
+        HttpResponse.json({
+          id: 'run_1',
+          phase: 'terminal',
+          outcome: 'interrupted',
+          created_at: '2026-10-20T11:59:00Z',
+          finished_at: '2026-10-20T12:01:00Z',
+          spec: { task: { id: 'demo', objective: 'Find and prove the flag' } },
+          result: {
+            run_id: 'run_1',
+            phase: 'terminal',
+            outcome: 'interrupted',
+            usage: { total_tokens: 10, cost_usd: 0.1 },
+            sessions: [],
+          },
+        }),
+      ),
+      http.get('*/v1/runs/run_1/board', () =>
+        HttpResponse.json({
+          claims: [],
+          intents: [],
+          hints: [],
+          attempts: [],
+          observations: [],
+          artifacts: [],
+          slots: [1],
+          board_revision: 0,
+          reason: { active: false, frontier_version: 0 },
+        }),
+      ),
+      http.get('*/v1/runs/run_1/verdict', () =>
+        HttpResponse.json({ error: 'verdict not found' }, { status: 404 }),
+      ),
+    )
+    renderWithProviders(
+      <Routes>
+        <Route path="/runs/:runId" element={<RunDetailPage />} />
+      </Routes>,
+      { route: '/runs/run_1' },
+    )
+    expect(await screen.findByText('本次运行已结束，但没有 verifier/backend 判定。')).toBeInTheDocument()
+    expect(screen.queryByText('运行仍在进行，或本次运行没有 verifier/backend 判定。')).not.toBeInTheDocument()
   })
 })

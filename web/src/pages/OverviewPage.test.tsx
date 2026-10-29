@@ -46,5 +46,7 @@ describe('OverviewPage', () => {
     expect(await screen.findByText('运行总览')).toBeInTheDocument()
     expect(await screen.findByText('50.0%')).toBeInTheDocument()
     expect(await screen.findByText('run_1')).toBeInTheDocument()
+    const table = document.querySelector('.ant-table-content table')
+    expect(table?.getAttribute('style')).toContain('table-layout: fixed')
   })
 })

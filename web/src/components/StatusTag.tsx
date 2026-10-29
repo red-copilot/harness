@@ -7,7 +7,7 @@ import { statusColor } from '@/utils/status'
 export function StatusTag({ status }: { status: RunStatus }) {
   const { t } = useI18n()
   return (
-    <Tag color={statusColor(status)} className="status-tag">
+    <Tag color={statusColor(status)} className={`status-tag status-${status}`}>
       <span className={`status-dot status-${status}`} />
       {t(`status.${status}` as MessageKey)}
     </Tag>

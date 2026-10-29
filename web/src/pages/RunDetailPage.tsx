@@ -208,7 +208,7 @@ export default function RunDetailPage() {
           {
             key: 'verdict',
             label: t('run.tab.verdict'),
-            children: <RunVerdict verdict={verdict} />,
+            children: <RunVerdict verdict={verdict} terminal={isTerminalStatus(runStatus(run))} />,
           },
         ]}
       />
@@ -289,7 +289,7 @@ function RunOverview({ run, verdict }: { run: RunRecord; verdict: VerdictRecord 
       </Card>
 
       <Card title={t('common.verdict')}>
-        <VerdictSummary verdict={verdict} />
+        <VerdictSummary verdict={verdict} terminal={isTerminalStatus(runStatus(run))} />
       </Card>
 
       <Drawer title={t('run.rawSpec')} size={760} open={specOpen} onClose={() => setSpecOpen(false)}>
@@ -449,7 +449,9 @@ function RunEvents({
           <Tabs
             items={[
               { key: 'data', label: t('run.eventData'), children: <JsonViewer value={selected.data} /> },
-              { key: 'raw', label: t('run.eventRaw'), children: <JsonViewer value={selected.raw} /> },
+              ...(selected.raw == null
+                ? []
+                : [{ key: 'raw', label: t('run.eventRaw'), children: <JsonViewer value={selected.raw} /> }]),
             ]}
           />
         ) : null}
@@ -532,13 +534,18 @@ function RunLogs({
   )
 }
 
-function RunVerdict({ verdict }: { verdict: VerdictRecord | null }) {
+function RunVerdict({ verdict, terminal }: { verdict: VerdictRecord | null; terminal: boolean }) {
   const { t } = useI18n()
   if (!verdict) {
     return (
       <Card>
         <EmptyState description={t('run.noVerdict')} />
-        <Alert type="info" showIcon title={t('run.verdictPending')} description={t('run.authoritativeNote')} />
+        <Alert
+          type="info"
+          showIcon
+          title={terminal ? t('run.verdictPendingTerminal') : t('run.verdictPending')}
+          description={t('run.authoritativeNote')}
+        />
       </Card>
     )
   }
@@ -565,9 +572,18 @@ function RunVerdict({ verdict }: { verdict: VerdictRecord | null }) {
   )
 }
 
-function VerdictSummary({ verdict }: { verdict: VerdictRecord | null }) {
+function VerdictSummary({ verdict, terminal }: { verdict: VerdictRecord | null; terminal: boolean }) {
   const { t } = useI18n()
-  if (!verdict) return <Alert type="info" showIcon title={t('run.noVerdict')} description={t('run.verdictPending')} />
+  if (!verdict) {
+    return (
+      <Alert
+        type="info"
+        showIcon
+        title={t('run.noVerdict')}
+        description={terminal ? t('run.verdictPendingTerminal') : t('run.verdictPending')}
+      />
+    )
+  }
   return (
     <Alert
       type={verdict.success ? 'success' : 'error'}
@@ -588,6 +604,7 @@ function fallbackVerdict(run: RunRecord): VerdictRecord | null {
   if (!verdict) return null
   return {
     run_id: run.id,
+    authority: verdict.authority,
     success: verdict.success,
     score: verdict.score,
     message: verdict.message,

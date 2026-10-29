@@ -13,4 +13,10 @@ describe('StatusTag', () => {
     renderWithProviders(<StatusTag status="succeeded" />, { locale: 'en' })
     expect(screen.getByText('Succeeded')).toBeInTheDocument()
   })
+
+  it('puts the status class on the tag so the color variable resolves', () => {
+    renderWithProviders(<StatusTag status="stagnated" />)
+    const tag = document.querySelector('.status-tag')
+    expect(tag).toHaveClass('status-stagnated')
+  })
 })

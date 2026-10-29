@@ -16,7 +16,7 @@ describe('SweepDetailPage', () => {
             {
               run_id: 'run_1',
               status: 'succeeded',
-              verdict: { success: true, score: 2 },
+              verdict: { authority: 'verifier', success: true, score: 2 },
               usage: { total_tokens: 8, cost_usd: 0.01 },
               started_at: '2026-10-20T12:00:00Z',
               finished_at: '2026-10-20T12:00:02Z',

@@ -53,13 +53,26 @@ describe('ClaimIntentGraph', () => {
     renderWithProviders(<ClaimIntentGraph graph={graph} />)
     fireEvent.click(screen.getByTestId('exploration-node-intent-1'))
     let drawer = screen.getByRole('dialog')
+    expect(drawer.querySelector('.ant-drawer-title')?.textContent).toBe('直接尝试')
     expect(within(drawer).getAllByText('Probe the service').length).toBeGreaterThan(0)
     expect(within(drawer).getByText('attempt-1')).toBeInTheDocument()
     expect(within(drawer).getByText('Login page exposed')).toBeInTheDocument()
     expect(within(drawer).getByText('login.html')).toBeInTheDocument()
     fireEvent.click(screen.getByTestId('exploration-node-origin'))
     drawer = screen.getByRole('dialog')
+    expect(drawer.querySelector('.ant-drawer-title')?.textContent).toBe('初始节点')
     expect(within(drawer).getByText('Focus on the admin route')).toBeInTheDocument()
+  })
+
+  it('does not repeat an unresolved intent description inside its node', () => {
+    const pendingGraph: BoardResponse = {
+      ...graph,
+      claims: graph.claims.filter((claim) => claim.id !== 'claim-2'),
+      intents: [{ ...graph.intents[1], result_claim_id: undefined, state: 'open' }],
+    }
+    renderWithProviders(<ClaimIntentGraph graph={pendingGraph} />)
+    const node = screen.getByTestId('exploration-node-intent-2')
+    expect(within(node).getAllByText('Trace the admin route')).toHaveLength(1)
   })
 
   it('handles nullable collections from older server responses', () => {

@@ -4,7 +4,6 @@ import { useQuery } from '@tanstack/react-query'
 import { Button, Card, Input, Select, Space, Typography } from 'antd'
 import { useMemo, useState } from 'react'
 import { getSweeps } from '@/api/client'
-import { RUN_STATUSES } from '@/api/types'
 import type { RunStatus, SweepState } from '@/api/types'
 import { EmptyState } from '@/components/EmptyState'
 import { PageError } from '@/components/PageError'
@@ -12,6 +11,8 @@ import { PageHeader } from '@/components/PageHeader'
 import { SweepTable } from '@/components/SweepTable'
 import { useI18n } from '@/i18n/I18nContext'
 import type { MessageKey } from '@/i18n/messages'
+
+const SWEEP_STATUSES: RunStatus[] = ['queued', 'running', 'succeeded', 'failed']
 
 export default function SweepsPage() {
   const { t } = useI18n()
@@ -36,7 +37,7 @@ export default function SweepsPage() {
               placeholder={t('sweeps.statusFilter')}
               value={statuses}
               onChange={setStatuses}
-              options={RUN_STATUSES.map((status) => ({ value: status, label: t(`status.${status}` as MessageKey) }))}
+              options={SWEEP_STATUSES.map((status) => ({ value: status, label: t(`status.${status}` as MessageKey) }))}
               className="status-filter"
             />
             <Input allowClear prefix={<SearchOutlined />} placeholder={t('sweeps.searchPlaceholder')}

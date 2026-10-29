@@ -291,6 +291,7 @@ body {
 .status-bar-segment {
   min-width: 2px;
   height: 100%;
+  background: var(--status-color, var(--muted));
 }
 
 .status-legend {
@@ -316,6 +317,11 @@ body {
 .bar-running,
 .status-running {
   --status-color: #3b82f6;
+}
+
+.bar-finalizing,
+.status-finalizing {
+  --status-color: #6366f1;
 }
 
 .bar-verifying,
@@ -346,6 +352,11 @@ body {
 .bar-interrupted,
 .status-interrupted {
   --status-color: #64748b;
+}
+
+.bar-stagnated,
+.status-stagnated {
+  --status-color: #b45309;
 }
 
 .status-tag {
@@ -542,6 +553,17 @@ body {
   overflow: hidden;
   color: var(--text);
   text-overflow: ellipsis;
+}
+
+.json-viewer {
+  position: relative;
+}
+
+.json-viewer-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
 }
 
 .json-viewer pre {
@@ -1252,6 +1274,11 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.exploration-detail-description {
+  margin: 0 !important;
+  white-space: pre-wrap;
 }
 
 .exploration-activity,

@@ -17,16 +17,18 @@ export function JsonViewer({ value, title }: { value: unknown; title?: string })
       setCopied(false)
     }
   }
+  const copyButton = (
+    <Tooltip title={copied ? t('common.copied') : t('common.copy')}>
+      <Button type="text" icon={<CopyOutlined />} onClick={() => void copy()} aria-label={t('common.copy')} />
+    </Tooltip>
+  )
   return (
     <Card
       title={title}
       className="json-viewer"
-      extra={
-        <Tooltip title={copied ? t('common.copied') : t('common.copy')}>
-          <Button type="text" icon={<CopyOutlined />} onClick={() => void copy()} aria-label={t('common.copy')} />
-        </Tooltip>
-      }
+      extra={title ? copyButton : undefined}
     >
+      {title ? null : <div className="json-viewer-actions">{copyButton}</div>}
       <pre>{text}</pre>
     </Card>
   )

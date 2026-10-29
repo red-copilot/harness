@@ -106,6 +106,7 @@ export function RunTable({
       dataSource={runs}
       pagination={pagination === false ? false : { pageSize: pagination.pageSize, showSizeChanger: false }}
       scroll={{ x: 1200 }}
+      tableLayout="fixed"
       onRow={(run) => ({ onClick: () => navigate(`/runs/${run.id}`), className: 'clickable-row' })}
     />
   )

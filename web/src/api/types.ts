@@ -216,6 +216,7 @@ export interface Usage {
 }
 
 export interface Verdict {
+  authority: 'verifier' | 'backend'
   success: boolean
   score?: number
   message?: string
@@ -387,6 +388,7 @@ export interface SweepState {
 
 export interface VerdictRecord {
   run_id: string
+  authority: 'verifier' | 'backend'
   success: boolean
   score?: number
   message?: string

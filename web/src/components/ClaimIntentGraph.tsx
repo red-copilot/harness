@@ -5,7 +5,7 @@ import type { Artifact, BoardResponse, Claim, Hint, IntentAttempt, Observation }
 import { useI18n } from '@/i18n/I18nContext'
 import type { MessageKey } from '@/i18n/messages'
 import { TimeText } from '@/components/TimeText'
-import { formatBytes, isZeroTime, truncate } from '@/utils/format'
+import { formatBytes, isZeroTime } from '@/utils/format'
 import {
   layoutExplorationGraph,
   type ExplorationGraphNode,
@@ -90,7 +90,7 @@ export function ClaimIntentGraph({ graph }: { graph: BoardResponse }) {
       <Drawer
         open={Boolean(selectedNode)}
         onClose={() => setSelectedNodeID(null)}
-        title={selectedNode ? nodeTitle(selectedNode, t) : t('run.graph.detailTitle')}
+        title={selectedNode ? nodeDrawerTitle(selectedNode, t) : t('run.graph.detailTitle')}
         size="min(560px, 100vw)"
         destroyOnHidden
       >
@@ -148,8 +148,6 @@ const ExplorationNodeButton = memo(function ExplorationNodeButton({ node, select
           <Tag color={claimColor(result.kind)}>{resultLabel}</Tag>
           <span>{result.description}</span>
         </span>
-      ) : node.kind === 'intent' ? (
-        <span className="exploration-graph-node-brief">{truncate(intent?.description ?? '', 96)}</span>
       ) : null}
       <span className="exploration-graph-node-meta">
         {node.kind === 'origin' ? t('run.graph.originMeta') : (
@@ -168,8 +166,12 @@ function ExplorationNodeDetail({ node, hints }: { node: ExplorationGraphNode; hi
   const { t } = useI18n()
   const intent = node.intent
   const result = node.resultClaim
+  const description = node.kind === 'origin' ? node.origin?.description : intent?.description
   return (
     <div className="exploration-detail">
+      {description ? (
+        <Typography.Paragraph className="exploration-detail-description">{description}</Typography.Paragraph>
+      ) : null}
       {node.unresolvedFrom.length > 0 ? (
         <Alert type="warning" showIcon title={t('run.graph.detail.unresolved')} description={node.unresolvedFrom.join(', ')} />
       ) : null}
@@ -331,6 +333,12 @@ function claimColor(kind: Claim['kind']): string {
 function nodeTitle(node: ExplorationGraphNode, t: (key: MessageKey) => string): string {
   if (node.kind === 'origin') return node.origin?.description || t('run.graph.originFallback')
   return node.intent?.description || t('run.graph.frontier')
+}
+
+function nodeDrawerTitle(node: ExplorationGraphNode, t: (key: MessageKey) => string): string {
+  if (node.kind === 'origin') return t('run.graph.initial')
+  if (!node.intent) return t('run.graph.frontier')
+  return t(node.intent.kind === 'bootstrap' ? 'run.graph.kind.bootstrap' : 'run.graph.kind.explore')
 }
 
 function edgeClass(root: boolean, planned: boolean): string {

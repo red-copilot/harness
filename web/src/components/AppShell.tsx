@@ -164,7 +164,7 @@ export function AppShell() {
       <Drawer
         className="mobile-nav-drawer"
         placement="left"
-        width={288}
+        size={288}
         open={compactNavigation && mobileNavOpen}
         onClose={() => setMobileNavOpen(false)}
         closable={false}
