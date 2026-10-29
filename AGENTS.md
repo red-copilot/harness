@@ -2,12 +2,16 @@
 
 ## Status and Direction
 
-This is a standalone Go SDK for the Red Harness execution and trust boundary.
-It does not depend on Python or the legacy `red-copilot` runtime.
+This is a standalone Go SDK (`github.com/red-copilot/harness`, Go 1.24) for the
+Red Harness execution and trust boundary. It does not depend on Python or the
+legacy `red-copilot` runtime.
 
-Claim/Intent v3 is the current implementation on `main`. The released
-`main@0bbee5e` single-session exploration path is historical context only and
-must not be reintroduced or extended.
+Claim/Intent v3 is the current implementation on `main`; architecture v3 uses
+SQLite schema v7. The released `main@0bbee5e` single-session exploration path is
+historical context only and must not be reintroduced or extended.
+
+`CLAUDE.md` contains overlapping guidance with a more detailed Run flow; keep
+both files consistent when architecture rules change.
 
 ## Current Project Structure
 
@@ -21,8 +25,11 @@ must not be reintroduced or extended.
 - `verify/`: external command verifier.
 - `store/sqlite/`: canonical SQLite event/log/result persistence.
 - `server/`: asynchronous HTTP API, bounded logs and SSE replay.
+- `api/`: OpenAPI 3.0.3 contract (`openapi.yaml`) and generated Go types.
 - `internal/cli/`, `cmd/harness/`: operational CLI and composition roots.
-- `web/`, `webui/`: React/Vite observability console and its embedded Go server.
+  Subcommands: `serve`, `run`, `tsec`, `runs`, `doctor`, `backup`, `migrate`.
+- `web/`, `webui/`: React 19/Vite observability console and its embedded Go
+  server. Vite builds directly into `webui/dist`.
 - `skills/tsec-submit/`: embedded Pi skill and authoritative API reference.
 - `skills/tools/`: embedded security-tool selection skill with one reference
   per preinstalled command.
@@ -53,13 +60,17 @@ go vet ./...
 go build ./cmd/harness
 ```
 
-Frontend checks:
+Focused CLI smoke checks use `go run ./cmd/harness <command>`; see
+`examples/run.yaml`, `examples/tsec.yaml` and `examples/verify.sh` for configs.
+
+Frontend checks (Node >=18.19; CI uses `npm ci --prefix web`):
 
 ```bash
 npm --prefix web run lint
 npm --prefix web run typecheck
 npm --prefix web run test
 npm --prefix web run build
+npm --prefix web run test:e2e   # Playwright; needs installed browsers
 ```
 
 Docker integration and live TSec/VPN checks are environment-dependent; do not
@@ -75,6 +86,34 @@ they may allocate a remote challenge instance. Never print or commit the token.
 For documentation-only changes, at minimum run `git diff --check` and verify
 links, commit references and code symbols; do not claim the full Go/Web matrix
 was run.
+
+## API and Embedded UI Contract
+
+- `api/openapi.yaml` is the contract source. Regenerate Go with
+  `go generate ./api` and TypeScript with `npm --prefix web run api:generate`.
+- Never hand-edit `api/generated.go` or `web/src/api/generated.ts`.
+  `npm --prefix web run api:check` fails when the checked-in TypeScript types
+  drift from the OpenAPI document.
+- Vite writes to `webui/dist`, which `webui/embed.go` embeds with
+  `//go:embed all:dist`. Run `npm --prefix web run build` before
+  `go build ./cmd/harness` when shipping UI changes; otherwise the binary keeps
+  the previously embedded assets or serves the "UI is not built" page.
+- `webui/dist/*` is gitignored except `.gitkeep`, so a fresh checkout builds
+  without a frontend build but serves no console.
+
+## Read Before Changing Sensitive Areas
+
+- Package boundaries: `import_boundary_test.go` (`TestCoreImportsStdlibOnly`,
+  `TestEngineDoesNotImportAdaptersOrSurfaces`,
+  `TestAdaptersDoNotImportSurfaces`) and the target/evidence contract tests in
+  `architecture_contract_test.go`.
+- Engine semantics: `docs/first-principles-architecture.md` and
+  `docs/architecture.md`.
+- Pi RPC framing and completion: `docs/pi.md`.
+- TSec lifecycle and credential handling: `docs/tsec.md`.
+- SQLite schema, backup/cutover and rollback: `docs/migration-v3.md`.
+- HTTP contract: `api/openapi.yaml` plus the HTTP section of
+  `docs/architecture.md`.
 
 ## Engineering Rules
 
