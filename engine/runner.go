@@ -20,6 +20,9 @@ type Runner struct {
 	pollInterval  time.Duration
 	closeTimeout  time.Duration
 	cleaner       ResourceCleaner
+	sessionSlots  chan struct{}
+	closed        chan struct{}
+	closeOnce     sync.Once
 
 	mu   sync.Mutex
 	runs map[string]*Run
@@ -52,7 +55,11 @@ func NewRunner(cfg Config) (*Runner, error) {
 	// The composition root installs the redacting boundary, so no Run and no
 	// adapter can reach the canonical store without redaction.
 	redacting := newRedactingStore(cfg.Store)
-	runner := &Runner{store: redacting, redacting: redacting, starter: cfg.Starter, workspaceRoot: cfg.WorkspaceRoot, maxSessions: cfg.MaxSessions, pollInterval: cfg.PollInterval, closeTimeout: cfg.CloseTimeout, cleaner: cfg.Cleaner, runs: map[string]*Run{}}
+	runner := &Runner{
+		store: redacting, redacting: redacting, starter: cfg.Starter, workspaceRoot: cfg.WorkspaceRoot,
+		maxSessions: cfg.MaxSessions, pollInterval: cfg.PollInterval, closeTimeout: cfg.CloseTimeout, cleaner: cfg.Cleaner,
+		runs: map[string]*Run{}, sessionSlots: make(chan struct{}, cfg.MaxSessions), closed: make(chan struct{}),
+	}
 	if !cfg.SkipRecovery {
 		if err := cfg.Store.MarkInterrupted(context.Background()); err != nil {
 			return nil, fmt.Errorf("mark interrupted runs: %w", err)
@@ -77,14 +84,24 @@ func (r *Runner) Start(ctx context.Context, spec RunSpec) (*Run, error) {
 	if required := 2; required > r.maxSessions {
 		return nil, fmt.Errorf("run requires %d sessions but runner allows %d", required, r.maxSessions)
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	releaseSessions, err := r.acquireSessions(ctx, 2)
+	if err != nil {
+		return nil, err
+	}
+	started := false
+	defer func() {
+		if !started {
+			releaseSessions()
+		}
+	}()
 	runID, err := randomID()
 	if err != nil {
 		return nil, err
 	}
 	now := time.Now().UTC()
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	baseCtx := ctx
 	var timeoutCancel context.CancelFunc
 	if spec.Policy.Budget.WallTime > 0 {
@@ -102,6 +119,7 @@ func (r *Runner) Start(ctx context.Context, spec RunSpec) (*Run, error) {
 		workspaceRoot = r.workspaceRoot
 	}
 	controller := newRunController(r, runID, runCtx, cancel, filepath.Join(workspaceRoot, runID), spec.Policy.Budget, redactor, spec.MaterializeSkills)
+	controller.maxObserveFailures = spec.Policy.Exploration.MaxAuthorityObserveFailures
 	run := newRun(controller)
 	descriptor := spec.Descriptor()
 	specJSON, _ := json.Marshal(descriptor)
@@ -131,7 +149,9 @@ func (r *Runner) Start(ctx context.Context, spec RunSpec) (*Run, error) {
 		r.redacting.unregister(runID)
 		return nil, err
 	}
+	started = true
 	go func() {
+		defer releaseSessions()
 		defer r.redacting.unregister(runID)
 		controller.run(spec)
 	}()
@@ -151,6 +171,7 @@ func (r *Runner) Run(ctx context.Context, spec RunSpec) (Result, error) {
 // store is closed. Closing a canonical store under a live Run would break the
 // audit, so a run that refuses to stop within CloseTimeout is reported instead.
 func (r *Runner) Close(ctx context.Context) error {
+	r.closeOnce.Do(func() { close(r.closed) })
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -177,4 +198,33 @@ func (r *Runner) Close(ctx context.Context) error {
 		}
 	}
 	return r.store.Close()
+}
+
+func (r *Runner) acquireSessions(ctx context.Context, count int) (func(), error) {
+	release := func(acquired int) func() {
+		return func() {
+			for i := 0; i < acquired; i++ {
+				<-r.sessionSlots
+			}
+		}
+	}
+	select {
+	case <-r.closed:
+		return nil, errors.New("runner is closed")
+	default:
+	}
+	acquired := 0
+	for acquired < count {
+		select {
+		case r.sessionSlots <- struct{}{}:
+			acquired++
+		case <-ctx.Done():
+			release(acquired)()
+			return nil, ctx.Err()
+		case <-r.closed:
+			release(acquired)()
+			return nil, errors.New("runner is closed")
+		}
+	}
+	return release(acquired), nil
 }

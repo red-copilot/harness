@@ -88,9 +88,6 @@ func (s *redactingStore) Commit(ctx context.Context, commit Commit) ([]Event, er
 	for i := range commit.Intents {
 		commit.Intents[i] = core.RedactIntent(r, commit.Intents[i])
 	}
-	for i := range commit.Hints {
-		commit.Hints[i] = core.RedactHint(r, commit.Hints[i])
-	}
 	for i := range commit.Attempts {
 		commit.Attempts[i] = core.RedactIntentAttempt(r, commit.Attempts[i])
 	}
@@ -139,9 +136,6 @@ func (s *redactingStore) ListClaims(ctx context.Context, runID string) ([]Claim,
 }
 func (s *redactingStore) ListIntents(ctx context.Context, runID string) ([]Intent, error) {
 	return s.inner.ListIntents(ctx, runID)
-}
-func (s *redactingStore) ListHints(ctx context.Context, runID string) ([]Hint, error) {
-	return s.inner.ListHints(ctx, runID)
 }
 func (s *redactingStore) ListIntentAttempts(ctx context.Context, runID string) ([]IntentAttempt, error) {
 	return s.inner.ListIntentAttempts(ctx, runID)

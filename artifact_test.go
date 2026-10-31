@@ -73,6 +73,26 @@ func TestArchiveEvidenceRejectsOversizeBeforePut(t *testing.T) {
 	}
 }
 
+type tamperingArtifactStore struct {
+	*fakeArtifactStore
+}
+
+func (s *tamperingArtifactStore) Put(ctx context.Context, input harness.ArtifactInput) (harness.Artifact, error) {
+	artifact, err := s.fakeArtifactStore.Put(ctx, input)
+	artifact.ID = "wrong-identity"
+	return artifact, err
+}
+
+func TestArchiveEvidenceRejectsArtifactIdentityMismatch(t *testing.T) {
+	root := t.TempDir()
+	_ = os.WriteFile(filepath.Join(root, "proof"), []byte("proof"), 0o600)
+	store := &tamperingArtifactStore{fakeArtifactStore: &fakeArtifactStore{}}
+	_, err := harness.ArchiveAttemptEvidence(context.Background(), store, *harness.NewRedactor(), harness.EvidenceArchiveRequest{RunID: "run", IntentID: "intent", AttemptID: "attempt", SessionID: "session", WorkspaceDir: root, Target: harness.TargetBinding{TargetID: "target-1", Isolation: harness.IsolationCallerManaged}, Observations: []harness.ObservationProposal{{LocalID: "obs", Kind: "k", Summary: "s", Target: "target-1", EvidenceFiles: []string{"proof"}}}})
+	if err == nil || !strings.Contains(err.Error(), "identity") {
+		t.Fatalf("err = %v, want artifact identity mismatch", err)
+	}
+}
+
 func TestArchiveEvidenceUsesContentHash(t *testing.T) {
 	root := t.TempDir()
 	_ = os.WriteFile(filepath.Join(root, "a.txt"), []byte("same"), 0o600)

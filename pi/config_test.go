@@ -171,6 +171,7 @@ type testProcess struct {
 	mu        sync.Mutex
 	exited    bool
 	responses chan string
+	killErr   error
 }
 
 func newTestProcess(stdout []byte) *testProcess {
@@ -191,7 +192,7 @@ func (p *testProcess) Wait(ctx context.Context) (harness.ExitStatus, error) {
 		return harness.ExitStatus{}, nil
 	}
 }
-func (p *testProcess) Kill(context.Context) error { p.close(); return nil }
+func (p *testProcess) Kill(context.Context) error { p.close(); return p.killErr }
 func (p *testProcess) close()                     { p.once.Do(func() { close(p.wait) }) }
 
 type nopWriteCloser struct{}
@@ -249,8 +250,12 @@ var _ = errors.Is
 // agent-visible workspace, so the Run's known secrets must be gone before the
 // file exists.
 func TestFactoryRedactsKnownSecretsInModelsJSON(t *testing.T) {
-	secret := "sk-live-models-secret"
-	runtimeConfig, err := json.Marshal(Config{ModelsJSON: `{"providers":{"p":{"apiKey":"` + secret + `"}}}`})
+	secret := "sk-\"live\\models-secret"
+	modelsJSON, err := json.Marshal(map[string]any{"providers": map[string]any{"p": map[string]any{"apiKey": secret}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeConfig, err := json.Marshal(Config{ModelsJSON: string(modelsJSON)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,10 +273,35 @@ func TestFactoryRedactsKnownSecretsInModelsJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), secret) {
+	var decoded struct {
+		Providers map[string]struct {
+			APIKey string `json:"apiKey"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("models.json is invalid: %v", err)
+	}
+	if decoded.Providers["p"].APIKey == secret {
 		t.Fatalf("models.json retained a known secret: %s", data)
 	}
 	if !strings.Contains(string(data), harness.RedactedValue) || !json.Valid(data) {
 		t.Fatalf("models.json = %s, want valid redacted JSON", data)
+	}
+}
+
+func TestSessionClosePropagatesKillFailure(t *testing.T) {
+	killErr := errors.New("remove container failed")
+	proc := &testProcess{
+		stdin:   nopWriteCloser{},
+		stdout:  strings.NewReader(""),
+		stderr:  strings.NewReader(""),
+		wait:    make(chan struct{}),
+		killErr: killErr,
+	}
+	session := newSession(proc)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if err := session.Close(ctx); !errors.Is(err, killErr) {
+		t.Fatalf("Close err = %v, want %v", err, killErr)
 	}
 }

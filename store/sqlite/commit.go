@@ -14,6 +14,9 @@ import (
 // Commit atomically persists one board revision, its normalized records and
 // all corresponding canonical events.
 func (s *Store) Commit(ctx context.Context, commit engine.Commit) ([]core.Event, error) {
+	if err := validateCommitScope(commit); err != nil {
+		return nil, err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -26,6 +29,16 @@ func (s *Store) Commit(ctx context.Context, commit engine.Commit) ([]core.Event,
 	if phase == string(core.RunPhaseTerminal) {
 		return nil, fmt.Errorf("run %s is finalized", commit.RunID)
 	}
+	var currentRevision uint64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(revision),0) FROM board_commits WHERE run_id=?`, commit.RunID).Scan(&currentRevision); err != nil {
+		return nil, fmt.Errorf("load board revision: %w", err)
+	}
+	if commit.ExpectedRevision != currentRevision {
+		return nil, fmt.Errorf("stale board revision: expected %d, current %d", commit.ExpectedRevision, currentRevision)
+	}
+	if commit.Revision <= currentRevision {
+		return nil, fmt.Errorf("board revision %d must advance from %d", commit.Revision, currentRevision)
+	}
 	for _, claim := range commit.Claims {
 		if err := saveClaimTx(ctx, tx, claim); err != nil {
 			return nil, err
@@ -33,11 +46,6 @@ func (s *Store) Commit(ctx context.Context, commit engine.Commit) ([]core.Event,
 	}
 	for _, intent := range commit.Intents {
 		if err := saveIntentTx(ctx, tx, intent); err != nil {
-			return nil, err
-		}
-	}
-	for _, hint := range commit.Hints {
-		if err := saveHintTx(ctx, tx, hint); err != nil {
 			return nil, err
 		}
 	}
@@ -77,6 +85,45 @@ func (s *Store) Commit(ctx context.Context, commit engine.Commit) ([]core.Event,
 	return storedEvents, nil
 }
 
+// validateCommitScope prevents a caller from mixing another Run's records or
+// events into a canonical board commit.
+func validateCommitScope(commit engine.Commit) error {
+	if commit.RunID == "" {
+		return fmt.Errorf("commit run_id is required")
+	}
+	for _, claim := range commit.Claims {
+		if claim.RunID != commit.RunID {
+			return fmt.Errorf("claim %q belongs to run %q, not %q", claim.ID, claim.RunID, commit.RunID)
+		}
+	}
+	for _, intent := range commit.Intents {
+		if intent.RunID != commit.RunID {
+			return fmt.Errorf("intent %q belongs to run %q, not %q", intent.ID, intent.RunID, commit.RunID)
+		}
+	}
+	for _, attempt := range commit.Attempts {
+		if attempt.RunID != commit.RunID {
+			return fmt.Errorf("attempt %q belongs to run %q, not %q", attempt.ID, attempt.RunID, commit.RunID)
+		}
+	}
+	for _, observation := range commit.Observations {
+		if observation.RunID != commit.RunID {
+			return fmt.Errorf("observation %q belongs to run %q, not %q", observation.ID, observation.RunID, commit.RunID)
+		}
+	}
+	for _, artifact := range commit.Artifacts {
+		if artifact.RunID != commit.RunID {
+			return fmt.Errorf("artifact %q belongs to run %q, not %q", artifact.ID, artifact.RunID, commit.RunID)
+		}
+	}
+	for _, event := range commit.Events {
+		if event.RunID != commit.RunID {
+			return fmt.Errorf("event %q belongs to run %q, not %q", event.Type, event.RunID, commit.RunID)
+		}
+	}
+	return nil
+}
+
 func saveClaimTx(ctx context.Context, tx *sql.Tx, claim core.Claim) error {
 	payload, err := json.Marshal(claim)
 	if err != nil {
@@ -91,7 +138,7 @@ func saveIntentTx(ctx context.Context, tx *sql.Tx, intent core.Intent) error {
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO intents(run_id,id,kind,state,slot,executor_id,result_claim_id,created_at,claimed_at,concluded_at,error,payload) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id,id) DO UPDATE SET kind=excluded.kind,state=excluded.state,slot=excluded.slot,executor_id=excluded.executor_id,result_claim_id=excluded.result_claim_id,claimed_at=excluded.claimed_at,concluded_at=excluded.concluded_at,error=excluded.error,payload=excluded.payload`, intent.RunID, intent.ID, intent.Kind, intent.State, intent.Slot, intent.ExecutorID, intent.ResultClaimID, formatTime(intent.CreatedAt), formatTimePtr(intent.ClaimedAt), formatTimePtr(intent.ConcludedAt), intent.Error, payload); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO intents(run_id,id,state,executor_id,result_claim_id,created_at,claimed_at,concluded_at,error,payload) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id,id) DO UPDATE SET state=excluded.state,executor_id=excluded.executor_id,result_claim_id=excluded.result_claim_id,claimed_at=excluded.claimed_at,concluded_at=excluded.concluded_at,error=excluded.error,payload=excluded.payload`, intent.RunID, intent.ID, intent.State, intent.ExecutorID, intent.ResultClaimID, formatTime(intent.CreatedAt), formatTimePtr(intent.ClaimedAt), formatTimePtr(intent.ConcludedAt), intent.Error, payload); err != nil {
 		return err
 	}
 	for ordinal, claimID := range intent.FromClaimIDs {
@@ -107,21 +154,12 @@ func saveIntentTx(ctx context.Context, tx *sql.Tx, intent core.Intent) error {
 	return err
 }
 
-func saveHintTx(ctx context.Context, tx *sql.Tx, hint core.Hint) error {
-	payload, err := json.Marshal(hint)
-	if err != nil {
-		return err
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO hints(run_id,id,creator,created_at,payload) VALUES(?,?,?,?,?) ON CONFLICT(run_id,id) DO NOTHING`, hint.RunID, hint.ID, hint.Creator, formatTime(hint.CreatedAt), payload)
-	return err
-}
-
 func saveAttemptTx(ctx context.Context, tx *sql.Tx, attempt core.IntentAttempt) error {
 	payload, err := json.Marshal(attempt)
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO attempts(run_id,id,intent_id,slot,session_id,phase,conclusion,started_at,finished_at,error,payload) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id,id) DO UPDATE SET intent_id=excluded.intent_id,slot=excluded.slot,session_id=excluded.session_id,phase=excluded.phase,conclusion=excluded.conclusion,finished_at=excluded.finished_at,error=excluded.error,payload=excluded.payload`, attempt.RunID, attempt.ID, attempt.IntentID, attempt.Slot, attempt.SessionID, attempt.Phase, attempt.Conclusion, formatTime(attempt.StartedAt), formatTime(attempt.FinishedAt), attempt.Error, payload); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO attempts(run_id,id,intent_id,session_id,phase,conclusion,started_at,finished_at,error,payload) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id,id) DO UPDATE SET intent_id=excluded.intent_id,session_id=excluded.session_id,phase=excluded.phase,conclusion=excluded.conclusion,finished_at=excluded.finished_at,error=excluded.error,payload=excluded.payload`, attempt.RunID, attempt.ID, attempt.IntentID, attempt.SessionID, attempt.Phase, attempt.Conclusion, formatTime(attempt.StartedAt), formatTimeOrEmpty(attempt.FinishedAt), attempt.Error, payload); err != nil {
 		return err
 	}
 	var version int

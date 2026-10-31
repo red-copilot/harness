@@ -25,7 +25,6 @@ const (
 	EventAuthorityCompleted    EventType = "authority.completed"
 	EventAuthorityObserveError EventType = "authority.observe_error"
 	EventClaimCreated          EventType = "claim.created"
-	EventHintCreated           EventType = "hint.created"
 	EventReasonStarted         EventType = "reason.started"
 	EventReasonCompleted       EventType = "reason.completed"
 	EventReasonRejected        EventType = "reason.rejected"
@@ -91,10 +90,6 @@ type ClaimCreatedPayload struct {
 	Claim Claim `json:"claim"`
 }
 
-type HintCreatedPayload struct {
-	Hint Hint `json:"hint"`
-}
-
 type IntentPayload struct {
 	Intent Intent `json:"intent"`
 }
@@ -104,14 +99,18 @@ type IntentAttemptPayload struct {
 }
 
 type ReasonPayload struct {
-	FrontierVersion uint64 `json:"frontier_version"`
-	FreeSlots       []int  `json:"free_slots,omitempty"`
-	Error           string `json:"error,omitempty"`
+	BoardRevision   uint64           `json:"board_revision"`
+	CanCreateIntent bool             `json:"can_create_intent,omitempty"`
+	Intents         []IntentProposal `json:"intents,omitempty"`
+	GoalCandidate   *GoalCandidate   `json:"goal_candidate,omitempty"`
+	Error           string           `json:"error,omitempty"`
 }
 
 type IntentRejectedPayload struct {
-	FrontierVersion uint64 `json:"frontier_version"`
-	Reason          string `json:"reason"`
+	BoardRevision uint64           `json:"board_revision"`
+	Intents       []IntentProposal `json:"intents,omitempty"`
+	GoalCandidate *GoalCandidate   `json:"goal_candidate,omitempty"`
+	Reason        string           `json:"reason"`
 }
 
 type RunFinalizedPayload struct {
@@ -127,7 +126,7 @@ type eventContract struct {
 var eventContracts = map[EventType]eventContract{
 	EventRunCreated:            {version: 1, payload: RunCreatedPayload{}},
 	EventRunPhase:              {version: 1, payload: RunPhasePayload{}},
-	EventRunProvisioned:        {version: 1, payload: RunProvisionedPayload{}},
+	EventRunProvisioned:        {version: 2, payload: RunProvisionedPayload{}},
 	EventRunFinalized:          {version: 1, payload: RunFinalizedPayload{}},
 	EventAgentSessionStarted:   {version: 1, payload: AgentSessionStartedPayload{}},
 	EventAgent:                 {version: 2, payload: AgentEventPayload{}},
@@ -138,19 +137,18 @@ var eventContracts = map[EventType]eventContract{
 	EventAuthorityCompleted:    {version: 1, payload: AuthorityProgressPayload{}},
 	EventAuthorityObserveError: {version: 1, payload: AuthorityErrorPayload{}},
 	EventClaimCreated:          {version: 1, payload: ClaimCreatedPayload{}},
-	EventHintCreated:           {version: 1, payload: HintCreatedPayload{}},
-	EventReasonStarted:         {version: 1, payload: ReasonPayload{}},
-	EventReasonCompleted:       {version: 1, payload: ReasonPayload{}},
-	EventReasonRejected:        {version: 1, payload: ReasonPayload{}},
-	EventIntentCreated:         {version: 1, payload: IntentPayload{}},
-	EventIntentClaimed:         {version: 1, payload: IntentPayload{}},
-	EventIntentReleased:        {version: 1, payload: IntentPayload{}},
-	EventIntentConcluded:       {version: 1, payload: IntentPayload{}},
-	EventIntentAbandoned:       {version: 1, payload: IntentPayload{}},
-	EventIntentRejected:        {version: 1, payload: IntentRejectedPayload{}},
-	EventAttemptStarted:        {version: 1, payload: IntentAttemptPayload{}},
-	EventAttemptConcluded:      {version: 1, payload: IntentAttemptPayload{}},
-	EventAttemptFailed:         {version: 1, payload: IntentAttemptPayload{}},
+	EventReasonStarted:         {version: 2, payload: ReasonPayload{}},
+	EventReasonCompleted:       {version: 2, payload: ReasonPayload{}},
+	EventReasonRejected:        {version: 2, payload: ReasonPayload{}},
+	EventIntentCreated:         {version: 2, payload: IntentPayload{}},
+	EventIntentClaimed:         {version: 2, payload: IntentPayload{}},
+	EventIntentReleased:        {version: 2, payload: IntentPayload{}},
+	EventIntentConcluded:       {version: 2, payload: IntentPayload{}},
+	EventIntentAbandoned:       {version: 2, payload: IntentPayload{}},
+	EventIntentRejected:        {version: 2, payload: IntentRejectedPayload{}},
+	EventAttemptStarted:        {version: 2, payload: IntentAttemptPayload{}},
+	EventAttemptConcluded:      {version: 2, payload: IntentAttemptPayload{}},
+	EventAttemptFailed:         {version: 2, payload: IntentAttemptPayload{}},
 }
 
 // EventTypes returns the canonical event vocabulary in deterministic order.

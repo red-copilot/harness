@@ -41,15 +41,29 @@ type TurnLimits struct {
 	MaxToolCalls      int
 	MaxAssistantBytes int
 	ToolTimeout       time.Duration
+	// ReportOnly permits only writes to the protocol report file. The Conclude
+	// fallback uses it so an untrusted agent cannot continue exploring by
+	// ignoring the prompt.
+	ReportOnly bool
 }
+
+// SessionStatus describes the disposition of one runtime session.
+type SessionStatus string
+
+const (
+	SessionRunning   SessionStatus = "running"
+	SessionSucceeded SessionStatus = "succeeded"
+	SessionFailed    SessionStatus = "failed"
+	SessionCancelled SessionStatus = "cancelled"
+)
 
 // SessionResult is the immutable terminal projection of one runtime session.
 type SessionResult struct {
-	ID       string `json:"id"`
-	Status   Status `json:"status"`
-	ExitCode int    `json:"exit_code,omitempty"`
-	Usage    Usage  `json:"usage,omitempty"`
-	Error    string `json:"error,omitempty"`
+	ID       string        `json:"id"`
+	Status   SessionStatus `json:"status"`
+	ExitCode int           `json:"exit_code,omitempty"`
+	Usage    Usage         `json:"usage,omitempty"`
+	Error    string        `json:"error,omitempty"`
 }
 
 // AgentEventKind is the runtime-neutral signal the turn protocol consumes.

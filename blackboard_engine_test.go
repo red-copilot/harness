@@ -31,75 +31,71 @@ func (s *singleReasonStrategy) Parse(req harness.ReasonRequest, _ harness.TurnRe
 	defer s.mu.Unlock()
 	s.calls++
 	if s.calls == 1 {
-		return harness.ReasonReport{FrontierVersion: req.FrontierVersion, Intents: []harness.IntentProposal{{From: []string{"origin"}, Description: "first"}}}, nil
+		return harness.ReasonReport{BoardRevision: req.BoardRevision, Intents: []harness.IntentProposal{{From: []string{"origin"}, Description: "first"}}}, nil
 	}
-	return harness.ReasonReport{FrontierVersion: req.FrontierVersion}, nil
+	return harness.ReasonReport{BoardRevision: req.BoardRevision}, nil
 }
 
-func TestBlackboardEngineRunsBootstrapReasonAndTwoSettledSlots(t *testing.T) {
+type oneIntentReasonStrategy struct{}
+
+func (oneIntentReasonStrategy) Prompt(harness.ReasonRequest) (string, error) { return "reason", nil }
+func (oneIntentReasonStrategy) Parse(req harness.ReasonRequest, _ harness.TurnResult) (harness.ReasonReport, error) {
+	return harness.ReasonReport{BoardRevision: req.BoardRevision, Intents: []harness.IntentProposal{{From: []string{"origin"}, Description: "probe"}}}, nil
+}
+
+func TestBlackboardEngineRunsReasonAndOneAttempt(t *testing.T) {
 	store := newMemoryStore()
 	spec := integrationSpec(t, store)
 	spec.Verifier = fakeVerifier{verdict: harness.Verdict{Success: true, Message: "verified"}}
 	spec.ReasonStrategy = &singleReasonStrategy{}
 	spec.Executor.ID = "executor-1"
-	spec.Policy.Exploration.MaxOpenIntents = 1
 	spec.Policy.Exploration.MaxTotalIntents = 4
 	spec.Policy.Exploration.MaxAttemptsPerIntent = 1
 	spec.Policy.Exploration.StagnationRounds = 1
 	spec.Policy.Exploration.MaxWallTimePerAttempt = time.Second
 	spec.Policy.Exploration.ConcludeTimeout = 100 * time.Millisecond
-	planner := &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
-		return promptReportSession(req.WorkspaceDir, `{"frontier_version":1,"intents":[{"from":["origin"],"description":"probe"}]}`)
+	spec.Reasoner.Runtime = &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
+		return promptReportSession(req.WorkspaceDir, `{"board_revision":1,"intents":[{"from":["origin"],"description":"probe"}]}`)
 	}}
-	executor := &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
-		return promptReportSession(req.WorkspaceDir, `{"phase":"concluded","claim":{"kind":"negative","description":"test"}}`)
+	spec.Executor.Runtime = &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
+		return promptReportSessionWithEvidence(req.WorkspaceDir, evidenceBackedReport("negative", "test"), map[string]string{"evidence.txt": "test"})
 	}}
-	spec.Reasoner.Runtime = planner
-	spec.Executor.Runtime = executor
 
 	result, err := newTestRunner(t, store).Run(context.Background(), spec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Claims) < 2 {
-		t.Fatalf("claims = %+v intents=%+v attempts=%+v, want bootstrap plus one concluded intent", result.Claims, result.Intents, result.IntentAttempts)
+	if len(result.Claims) < 3 {
+		t.Fatalf("claims = %+v, want origin, goal and an evidenced negative", result.Claims)
 	}
-	if len(result.Intents) < 2 {
-		t.Fatalf("intents = %+v, want bootstrap plus one admitted intent", result.Intents)
+	if len(result.Intents) != 1 {
+		t.Fatalf("intents = %+v, want one admitted intent", result.Intents)
 	}
-	if len(result.IntentAttempts) < 2 {
-		t.Fatalf("attempts = %+v, want bootstrap plus one attempt", result.IntentAttempts)
+	if len(result.IntentAttempts) != 1 {
+		t.Fatalf("attempts = %+v, want one attempt", result.IntentAttempts)
 	}
 }
 
-func TestBlackboardEngineSkipsBootstrapWhenDisabled(t *testing.T) {
+func TestBlackboardEngineStartsReasonWithoutBootstrap(t *testing.T) {
 	store := newMemoryStore()
 	spec := integrationSpec(t, store)
-	disabled := false
-	spec.Policy.Exploration.BootstrapEnabled = &disabled
-	spec.Policy.Exploration.MaxOpenIntents = 1
+	spec.Verifier = fakeVerifier{verdict: harness.Verdict{Success: false}}
+	spec.ReasonStrategy = &singleReasonStrategy{}
 	spec.Policy.Exploration.MaxAttemptsPerIntent = 1
 	spec.Policy.Exploration.StagnationRounds = 1
-	spec.ReasonStrategy = &singleReasonStrategy{}
 	spec.Reasoner.Runtime = &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
-		return promptReportSession(req.WorkspaceDir, `{"frontier_version":1,"intents":[{"from":["origin"],"description":"probe"}]}`)
+		return promptReportSession(req.WorkspaceDir, `{"board_revision":1,"intents":[{"from":["origin"],"description":"probe"}]}`)
 	}}
-	executor := &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
-		return promptReportSession(req.WorkspaceDir, `{"phase":"concluded","claim":{"kind":"negative","description":"explored"}}`)
+	spec.Executor.Runtime = &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
+		return promptReportSessionWithEvidence(req.WorkspaceDir, evidenceBackedReport("negative", "explored"), map[string]string{"evidence.txt": "explored"})
 	}}
-	spec.Executor.Runtime = executor
 
 	result, err := newTestRunner(t, store).Run(context.Background(), spec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(result.Intents) == 0 {
-		t.Fatal("reasoner did not create Intents when bootstrap was disabled")
-	}
-	for _, intent := range result.Intents {
-		if intent.Kind == harness.IntentBootstrap {
-			t.Fatalf("bootstrap Intent ran despite BootstrapEnabled=false: %+v", intent)
-		}
+		t.Fatal("reasoner did not create an Intent")
 	}
 }
 
@@ -107,14 +103,15 @@ func TestBlackboardEngineStopsAtMaxAttemptsPerIntent(t *testing.T) {
 	store := newMemoryStore()
 	spec := integrationSpec(t, store)
 	spec.Verifier = fakeVerifier{verdict: harness.Verdict{Success: false}}
-	spec.ReasonStrategy = noIntentReasonStrategy{}
+	spec.ReasonStrategy = oneIntentReasonStrategy{}
 	spec.Executor.ID = "executor-1"
+	spec.Policy.Exploration.MaxTotalIntents = 1
 	spec.Policy.Exploration.MaxAttemptsPerIntent = 2
-	spec.Policy.Exploration.StagnationRounds = 1
+	spec.Policy.Exploration.StagnationRounds = 3
 	spec.Policy.Exploration.MaxWallTimePerAttempt = time.Second
 	spec.Policy.Exploration.ConcludeTimeout = 100 * time.Millisecond
 	spec.Reasoner.Runtime = &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
-		return promptReportSession(req.WorkspaceDir, `{"frontier_version":1,"intents":[]}`)
+		return promptReportSession(req.WorkspaceDir, `{"board_revision":1,"intents":[{"from":["origin"],"description":"probe"}]}`)
 	}}
 	executor := &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
 		return promptReportSession(req.WorkspaceDir, "not json")
@@ -128,7 +125,7 @@ func TestBlackboardEngineStopsAtMaxAttemptsPerIntent(t *testing.T) {
 		t.Fatalf("attempts = %d, want <= 2", len(result.IntentAttempts))
 	}
 	if len(result.Intents) == 0 || result.Intents[0].State != harness.IntentAbandoned {
-		t.Fatalf("intents = %+v, want abandoned bootstrap", result.Intents)
+		t.Fatalf("intents = %+v, want abandoned intent", result.Intents)
 	}
 }
 
@@ -136,16 +133,17 @@ func TestBlackboardEngineStopsOnEvidenceValidationFailure(t *testing.T) {
 	store := newMemoryStore()
 	spec := integrationSpec(t, store)
 	spec.Verifier = fakeVerifier{verdict: harness.Verdict{Success: false}}
-	spec.ReasonStrategy = noIntentReasonStrategy{}
+	spec.ReasonStrategy = oneIntentReasonStrategy{}
 	spec.Executor.ID = "executor-1"
+	spec.Policy.Exploration.MaxTotalIntents = 1
 	spec.Policy.Exploration.MaxAttemptsPerIntent = 2
-	spec.Policy.Exploration.StagnationRounds = 1
+	spec.Policy.Exploration.StagnationRounds = 3
 	spec.Policy.Exploration.MaxWallTimePerAttempt = time.Second
 	spec.Policy.Exploration.ConcludeTimeout = 100 * time.Millisecond
 	spec.Reasoner.Runtime = &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
-		return promptReportSession(req.WorkspaceDir, `{"frontier_version":1,"intents":[]}`)
+		return promptReportSession(req.WorkspaceDir, `{"board_revision":1,"intents":[{"from":["origin"],"description":"probe"}]}`)
 	}}
-	bad := `{"phase":"concluded","claim":{"kind":"finding","description":"found","observation_refs":["obs-1"]},"observations":[{"local_id":"obs-1","kind":"test","summary":"result","target":"TARGET_ID","evidence_files":["proof.txt"]}]}`
+	bad := `{"phase":"concluded","claim":{"kind":"finding","description":"found","observation_refs":["obs-1"]},"observations":[{"local_id":"obs-1","kind":"test","summary":"result","target":"target-1","evidence_files":["proof.txt"]}]}`
 	executor := &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
 		return promptReportSession(req.WorkspaceDir, bad)
 	}}
@@ -158,7 +156,7 @@ func TestBlackboardEngineStopsOnEvidenceValidationFailure(t *testing.T) {
 		t.Fatalf("attempts = %d, want <= 2", len(result.IntentAttempts))
 	}
 	if len(result.Intents) == 0 || result.Intents[0].State != harness.IntentAbandoned {
-		t.Fatalf("intents = %+v, want abandoned bootstrap", result.Intents)
+		t.Fatalf("intents = %+v, want abandoned intent", result.Intents)
 	}
 }
 
@@ -169,9 +167,9 @@ func TestArtifactStoreFailureTerminatesRunWithoutVerification(t *testing.T) {
 	spec.Artifacts = &fakeArtifactStore{fail: artifactErr}
 	verifier := &recordingVerifier{}
 	spec.Verifier = verifier
-	spec.ReasonStrategy = noIntentReasonStrategy{}
+	spec.ReasonStrategy = oneIntentReasonStrategy{}
 	spec.Reasoner.Runtime = &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
-		return promptReportSession(req.WorkspaceDir, `{"frontier_version":1,"intents":[{"from":["origin"],"description":"probe"}]}`)
+		return promptReportSession(req.WorkspaceDir, `{"board_revision":1,"intents":[{"from":["origin"],"description":"probe"}]}`)
 	}}
 	finding := `{"phase":"concluded","claim":{"kind":"finding","description":"confirmed","observation_refs":["obs-1"]},"observations":[{"local_id":"obs-1","kind":"test","summary":"result","target":"target-1","evidence_files":["proof.txt"]}]}`
 	executor := &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {

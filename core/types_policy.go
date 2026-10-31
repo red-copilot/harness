@@ -7,7 +7,6 @@ import (
 
 // ExplorationPolicy contains all mechanically enforced Claim/Intent limits.
 type ExplorationPolicy struct {
-	MaxOpenIntents         int           `json:"max_open_intents" yaml:"max_open_intents"`
 	MaxTotalIntents        int           `json:"max_total_intents" yaml:"max_total_intents"`
 	MaxAttemptsPerIntent   int           `json:"max_attempts_per_intent" yaml:"max_attempts_per_intent"`
 	MaxToolCallsPerAttempt int           `json:"max_tool_calls_per_attempt" yaml:"max_tool_calls_per_attempt"`
@@ -17,7 +16,9 @@ type ExplorationPolicy struct {
 	MaxReasonerToolCalls   int           `json:"max_reasoner_tool_calls" yaml:"max_reasoner_tool_calls"`
 	MaxReasonerWallTime    time.Duration `json:"max_reasoner_wall_time" yaml:"max_reasoner_wall_time"`
 	MaxReasonerFailures    int           `json:"max_reasoner_failures" yaml:"max_reasoner_failures"`
-	BootstrapEnabled       *bool         `json:"bootstrap_enabled,omitempty" yaml:"bootstrap_enabled,omitempty"`
+	// MaxAuthorityObserveFailures bounds tolerated transient backend Observe
+	// errors. The final authority observation is always strict.
+	MaxAuthorityObserveFailures int `json:"max_authority_observe_failures" yaml:"max_authority_observe_failures"`
 }
 
 // ContextPolicy owns deterministic model-context bounds.
@@ -26,9 +27,7 @@ type ContextPolicy struct {
 	MaxBoardBytes     int64 `json:"max_board_bytes" yaml:"max_board_bytes"`
 	MaxClaimBytes     int   `json:"max_claim_bytes" yaml:"max_claim_bytes"`
 	MaxIntentBytes    int   `json:"max_intent_bytes" yaml:"max_intent_bytes"`
-	MaxHintBytes      int   `json:"max_hint_bytes" yaml:"max_hint_bytes"`
 	MaxAssistantBytes int   `json:"max_assistant_bytes" yaml:"max_assistant_bytes"`
-	MaxReportBytes    int64 `json:"max_report_bytes" yaml:"max_report_bytes"`
 }
 
 // EvidencePolicy owns report and artifact bounds.
@@ -53,21 +52,19 @@ type AttemptBudget struct {
 	MaxWallTime  time.Duration `json:"max_wall_time"`
 }
 
-// DefaultRunPolicy returns the v2 policy defaults.
+// DefaultRunPolicy returns the v4 policy defaults.
 func DefaultRunPolicy() RunPolicy {
-	bootstrap := true
 	return RunPolicy{
 		Exploration: ExplorationPolicy{
-			MaxOpenIntents: 2, MaxTotalIntents: 20, MaxAttemptsPerIntent: 3,
+			MaxTotalIntents: 20, MaxAttemptsPerIntent: 3,
 			MaxToolCallsPerAttempt: 20, MaxWallTimePerAttempt: 10 * time.Minute,
 			ConcludeTimeout: 90 * time.Second, StagnationRounds: 3,
 			MaxReasonerToolCalls: 4, MaxReasonerWallTime: 2 * time.Minute,
-			MaxReasonerFailures: 3, BootstrapEnabled: &bootstrap,
+			MaxReasonerFailures: 3, MaxAuthorityObserveFailures: 3,
 		},
 		Context: ContextPolicy{
 			MaxBoardItems: 64, MaxBoardBytes: 64 << 10, MaxClaimBytes: 2 << 10,
-			MaxIntentBytes: 2 << 10, MaxHintBytes: 8 << 10,
-			MaxAssistantBytes: 1 << 20, MaxReportBytes: 1 << 20,
+			MaxIntentBytes: 2 << 10, MaxAssistantBytes: 1 << 20,
 		},
 		Evidence: EvidencePolicy{
 			MaxReportBytes: 1 << 20, MaxEvidenceFilesPerAttempt: 16,
@@ -81,9 +78,6 @@ func DefaultRunPolicy() RunPolicy {
 func NormalizeRunPolicy(policy RunPolicy) RunPolicy {
 	defaults := DefaultRunPolicy()
 	e, d := &policy.Exploration, defaults.Exploration
-	if e.MaxOpenIntents == 0 {
-		e.MaxOpenIntents = d.MaxOpenIntents
-	}
 	if e.MaxTotalIntents == 0 {
 		e.MaxTotalIntents = d.MaxTotalIntents
 	}
@@ -111,8 +105,8 @@ func NormalizeRunPolicy(policy RunPolicy) RunPolicy {
 	if e.MaxReasonerFailures == 0 {
 		e.MaxReasonerFailures = d.MaxReasonerFailures
 	}
-	if e.BootstrapEnabled == nil {
-		e.BootstrapEnabled = d.BootstrapEnabled
+	if e.MaxAuthorityObserveFailures == 0 {
+		e.MaxAuthorityObserveFailures = d.MaxAuthorityObserveFailures
 	}
 	c, dc := &policy.Context, defaults.Context
 	if c.MaxBoardItems == 0 {
@@ -127,14 +121,8 @@ func NormalizeRunPolicy(policy RunPolicy) RunPolicy {
 	if c.MaxIntentBytes == 0 {
 		c.MaxIntentBytes = dc.MaxIntentBytes
 	}
-	if c.MaxHintBytes == 0 {
-		c.MaxHintBytes = dc.MaxHintBytes
-	}
 	if c.MaxAssistantBytes == 0 {
 		c.MaxAssistantBytes = dc.MaxAssistantBytes
-	}
-	if c.MaxReportBytes == 0 {
-		c.MaxReportBytes = dc.MaxReportBytes
 	}
 	ev, de := &policy.Evidence, defaults.Evidence
 	if ev.MaxReportBytes == 0 {
@@ -158,20 +146,19 @@ func ValidateRunPolicy(policy RunPolicy) error {
 		name  string
 		value int64
 	}{
-		{"max_open_intents", int64(policy.Exploration.MaxOpenIntents)},
 		{"max_total_intents", int64(policy.Exploration.MaxTotalIntents)},
 		{"max_attempts_per_intent", int64(policy.Exploration.MaxAttemptsPerIntent)},
 		{"max_tool_calls_per_attempt", int64(policy.Exploration.MaxToolCallsPerAttempt)},
 		{"stagnation_rounds", int64(policy.Exploration.StagnationRounds)},
 		{"max_reasoner_tool_calls", int64(policy.Exploration.MaxReasonerToolCalls)},
 		{"max_reasoner_failures", int64(policy.Exploration.MaxReasonerFailures)},
+		{"max_authority_observe_failures", int64(policy.Exploration.MaxAuthorityObserveFailures)},
 		{"max_board_items", int64(policy.Context.MaxBoardItems)},
 		{"max_board_bytes", policy.Context.MaxBoardBytes},
 		{"max_claim_bytes", int64(policy.Context.MaxClaimBytes)},
 		{"max_intent_bytes", int64(policy.Context.MaxIntentBytes)},
-		{"max_hint_bytes", int64(policy.Context.MaxHintBytes)},
 		{"max_assistant_bytes", int64(policy.Context.MaxAssistantBytes)},
-		{"max_report_bytes", policy.Context.MaxReportBytes},
+		{"max_report_bytes", policy.Evidence.MaxReportBytes},
 		{"max_evidence_files_per_attempt", int64(policy.Evidence.MaxEvidenceFilesPerAttempt)},
 		{"max_artifact_bytes", policy.Evidence.MaxArtifactBytes},
 		{"max_attempt_artifact_bytes", policy.Evidence.MaxAttemptArtifactBytes},
@@ -183,9 +170,6 @@ func ValidateRunPolicy(policy RunPolicy) error {
 		if limit.value < 0 {
 			return fmt.Errorf("%s must not be negative", limit.name)
 		}
-	}
-	if policy.Exploration.MaxOpenIntents < 1 || policy.Exploration.MaxOpenIntents > 2 {
-		return fmt.Errorf("max_open_intents must be 1 or 2")
 	}
 	if policy.Exploration.MaxWallTimePerAttempt < 0 || policy.Exploration.MaxReasonerWallTime < 0 || policy.Exploration.ConcludeTimeout < 0 || policy.Budget.WallTime < 0 {
 		return fmt.Errorf("durations must not be negative")

@@ -53,7 +53,6 @@ func TestEngineDoesNotImportAdaptersOrSurfaces(t *testing.T) {
 	forbidden := []string{
 		modulePath + "/pi",
 		modulePath + "/sandbox",
-		modulePath + "/tsec",
 		modulePath + "/verify",
 		modulePath + "/store",
 		modulePath + "/server",
@@ -88,7 +87,7 @@ func TestEngineDoesNotImportAdaptersOrSurfaces(t *testing.T) {
 func TestAdaptersDoNotImportSurfaces(t *testing.T) {
 	forbidden := []string{modulePath + "/server", modulePath + "/internal/cli", modulePath + "/webui"}
 	checked := 0
-	for _, root := range []string{"pi", "sandbox/docker", "tsec", "verify", "store/sqlite"} {
+	for _, root := range []string{"pi", "sandbox/docker", "verify", "store/sqlite"} {
 		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 			if err != nil {
 				return err

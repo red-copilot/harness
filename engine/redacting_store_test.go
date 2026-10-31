@@ -38,7 +38,6 @@ func TestRedactingStoreCoversBoardCommitAndFinalization(t *testing.T) {
 		RunID: "run-1", Revision: 1,
 		Claims:       []Claim{{ID: "f", RunID: "run-1", TaskID: "task", Kind: ClaimNegative, Description: secret, CreatedAt: now}},
 		Intents:      []Intent{{ID: "i", RunID: "run-1", Description: secret, CreatedAt: now}},
-		Hints:        []Hint{{ID: "h", RunID: "run-1", Content: secret, CreatedAt: now}},
 		Attempts:     []IntentAttempt{{ID: "a", RunID: "run-1", Conclusion: secret, StartedAt: now}},
 		Observations: []Observation{{ID: "o", RunID: "run-1", Summary: secret, CreatedAt: now}},
 		Artifacts:    []Artifact{{ID: "r", RunID: "run-1", Name: secret, CreatedAt: now}},

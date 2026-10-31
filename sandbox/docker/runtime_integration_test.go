@@ -20,7 +20,7 @@ func TestDockerStarterRoundTrip(t *testing.T) {
 	defer cancel()
 	runner := New()
 	proc, err := runner.Start(ctx, harness.ProcessSpec{
-		Image:   "harness/pi-kali:local",
+		Image:   "ghcr.io/red-copilot/harness-pi-kali:0.1.0",
 		Command: []string{"sh", "-c", "read line; printf '%s\\n' \"$line\""},
 		Network: "none", Name: "harness_roundtrip_test", ReadOnlyRoot: true,
 		PidsLimit: 64, Memory: "128m", CPUs: "1",

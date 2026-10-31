@@ -28,7 +28,7 @@ func (s *scriptedExploreSession) Prompt(ctx context.Context, prompt string) erro
 		<-ctx.Done()
 		return ctx.Err()
 	}
-	s.events <- AgentEvent{Kind: AgentEventMessage, Text: `{"intent_id":"intent-1","phase":"concluded","claim":{"kind":"negative","description":"nothing confirmed"}}`}
+	s.events <- AgentEvent{Kind: AgentEventMessage, Text: `{"intent_id":"intent-1","phase":"concluded","claim":{"kind":"negative","description":"nothing confirmed","observation_refs":["obs-1"]},"observations":[{"local_id":"obs-1","kind":"test","summary":"nothing confirmed"}]}`}
 	s.events <- AgentEvent{Kind: AgentEventSettled}
 	return nil
 }
@@ -117,8 +117,11 @@ func TestExploreParseRequiresFindingEvidence(t *testing.T) {
 			t.Fatalf("invalid explore report accepted: %s", body)
 		}
 	}
-	if _, err := strategy.Parse(testExploreRequest(), TurnResult{Report: []byte(`{"intent_id":"intent-1","phase":"concluded","claim":{"kind":"negative","description":"nothing"}}`)}); err != nil {
-		t.Fatalf("negative report rejected: %v", err)
+	if _, err := strategy.Parse(testExploreRequest(), TurnResult{Report: []byte(`{"intent_id":"intent-1","phase":"concluded","claim":{"kind":"negative","description":"nothing"}}`)}); err == nil {
+		t.Fatal("negative report without evidence accepted")
+	}
+	if _, err := strategy.Parse(testExploreRequest(), TurnResult{Report: []byte(`{"intent_id":"intent-1","phase":"concluded","claim":{"kind":"negative","description":"nothing","observation_refs":["obs-1"]},"observations":[{"local_id":"obs-1","kind":"test","summary":"nothing"}]}`)}); err != nil {
+		t.Fatalf("evidence-backed negative report rejected: %v", err)
 	}
 }
 
@@ -242,7 +245,7 @@ func TestExploreParserRejectsNarrativeJSON(t *testing.T) {
 
 func TestExploreParserAcceptsPromptIntentPlaceholder(t *testing.T) {
 	req := testExploreRequest()
-	turn := TurnResult{Report: []byte(`{"intent_id":"INTENT_ID","phase":"concluded","claim":{"kind":"negative","description":"nothing"}}`)}
+	turn := TurnResult{Report: []byte(`{"intent_id":"INTENT_ID","phase":"concluded","claim":{"kind":"negative","description":"nothing","observation_refs":["obs-1"]},"observations":[{"local_id":"obs-1","kind":"test","summary":"nothing"}]}`)}
 	report, err := (defaultExploreStrategy{}).Parse(req, turn)
 	if err != nil {
 		t.Fatal(err)

@@ -22,6 +22,10 @@ import (
 // DefaultImage is the pinned image the SDK ships for Pi in Kali.
 const DefaultImage = "ghcr.io/red-copilot/harness-pi-kali:0.1.0"
 
+const maxRPCFrameBytes = 4 << 20
+
+var errRPCFrameTooLarge = errors.New("rpc frame exceeds byte limit")
+
 // Config is immutable Pi adapter configuration. RuntimeConfig on an AgentSpec
 // may override these fields with the same JSON shape.
 type Config struct {
@@ -72,7 +76,10 @@ func (f *Factory) NewSession(ctx context.Context, req harness.RuntimeRequest) (h
 		// is written. Credentials belong in the agent environment, not here.
 		modelsJSON := config.ModelsJSON
 		if req.Redactor != nil {
-			modelsJSON = req.Redactor.Redact(modelsJSON)
+			modelsJSON = string(req.Redactor.RedactJSON([]byte(modelsJSON)))
+		}
+		if !json.Valid([]byte(modelsJSON)) {
+			return nil, errors.New("pi models_json became invalid after redaction")
 		}
 		if err := os.WriteFile(filepath.Join(piDir, "models.json"), []byte(modelsJSON), 0o600); err != nil {
 			return nil, fmt.Errorf("write pi models.json: %w", err)
@@ -320,15 +327,27 @@ func (s *session) Close(ctx context.Context) error {
 	s.closeOnce.Do(func() {
 		s.closing.Store(true)
 		s.closeStdin()
+		exited := false
 		select {
 		case <-s.exited:
+			exited = true
 		case <-time.After(2 * time.Second):
-			_ = s.proc.Kill(ctx)
+			if killErr := s.proc.Kill(ctx); killErr != nil {
+				err = errors.Join(err, fmt.Errorf("kill pi process: %w", killErr))
+			}
 		case <-ctx.Done():
-			_ = s.proc.Kill(ctx)
+			if killErr := s.proc.Kill(ctx); killErr != nil {
+				err = errors.Join(err, fmt.Errorf("kill pi process: %w", killErr))
+			}
 		}
 		s.cancel()
-		_ = s.proc.Kill(ctx)
+		if !exited {
+			select {
+			case <-s.exited:
+			case <-time.After(2 * time.Second):
+				err = errors.Join(err, errors.New("pi process did not exit after kill"))
+			}
+		}
 		s.waitReaders(2 * time.Second)
 		s.streamMu.Lock()
 		s.streamsClosed = true
@@ -420,7 +439,15 @@ func (s *session) waitReaders(timeout time.Duration) {
 
 func (s *session) readStdout() {
 	for {
-		line, err := s.stdout.ReadBytes('\n')
+		line, err := readBoundedLine(s.stdout, maxRPCFrameBytes)
+		if errors.Is(err, errRPCFrameTooLarge) {
+			s.emitEvent(harness.AgentEvent{
+				Type: "rpc.too_large", Kind: harness.AgentEventError,
+				Text: fmt.Sprintf("rpc frame exceeds %d bytes", maxRPCFrameBytes),
+				Data: mustRaw(map[string]int{"limit": maxRPCFrameBytes}),
+			})
+			return
+		}
 		if len(line) > 0 {
 			if line[len(line)-1] != '\n' {
 				s.emitEvent(harness.AgentEvent{Type: "rpc.malformed", Data: mustRaw(map[string]string{"error": "strict LF framing required", "line": string(line)})})
@@ -465,7 +492,12 @@ func (s *session) handleStdoutLine(line []byte) {
 
 func (s *session) readStderr() {
 	for {
-		line, err := s.stderr.ReadString('\n')
+		frame, err := readBoundedLine(s.stderr, maxRPCFrameBytes)
+		line := string(frame)
+		if errors.Is(err, errRPCFrameTooLarge) {
+			line = fmt.Sprintf("[stderr record exceeds %d bytes]\n", maxRPCFrameBytes)
+			err = nil
+		}
 		if len(line) > 0 {
 			s.streamMu.RLock()
 			if s.streamsClosed {
@@ -481,6 +513,27 @@ func (s *session) readStderr() {
 		if err != nil {
 			return
 		}
+	}
+}
+
+func readBoundedLine(reader *bufio.Reader, maxBytes int) ([]byte, error) {
+	if maxBytes <= 0 {
+		return reader.ReadBytes('\n')
+	}
+	var line []byte
+	for {
+		fragment, err := reader.ReadSlice('\n')
+		if len(line)+len(fragment) > maxBytes {
+			for errors.Is(err, bufio.ErrBufferFull) {
+				_, err = reader.ReadSlice('\n')
+			}
+			return nil, errRPCFrameTooLarge
+		}
+		line = append(line, fragment...)
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return line, err
 	}
 }
 

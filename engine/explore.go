@@ -20,22 +20,18 @@ func (defaultExploreStrategy) ExecutePrompt(req ExploreRequest) (string, error) 
 	for _, claim := range req.Claims {
 		fmt.Fprintf(&out, "- id=%s kind=%s description=%s\n", claim.ID, claim.Kind, truncateUTF8(claim.Description, 1024))
 	}
-	out.WriteString("Hints:\n")
-	for _, hint := range req.Hints {
-		fmt.Fprintf(&out, "- %s\n", truncateUTF8(hint.Content, 512))
-	}
 	out.WriteString(reportProtocolInstruction)
 	out.WriteString(`Return exactly one JSON object and nothing else.
 Example finding: {"intent_id":"INTENT_ID","phase":"concluded","claim":{"kind":"finding","description":"confirmed result","observation_refs":["obs-1"]},"observations":[{"local_id":"obs-1","kind":"adapter.namespace","summary":"observed result","target":"TARGET_ID","evidence_files":["relative/file"]}]}
-Example negative: {"intent_id":"INTENT_ID","phase":"concluded","claim":{"kind":"negative","description":"what was ruled out"}}
-Only produce a finding or negative Claim. Do not create Intents, child nodes, Knowledge, or a success verdict. A finding requires evidence files.`)
+Example negative: {"intent_id":"INTENT_ID","phase":"concluded","claim":{"kind":"negative","description":"what was ruled out","observation_refs":["obs-1"]},"observations":[{"local_id":"obs-1","kind":"adapter.namespace","summary":"what was ruled out","target":"TARGET_ID","evidence_files":["relative/file"]}]}
+Only produce a finding or negative Claim. Do not create Intents, child nodes, Knowledge, or a success verdict. Every finding and negative requires evidence files.`)
 	return out.String(), nil
 }
 
 func (defaultExploreStrategy) ConcludePrompt(req ExploreRequest) (string, error) {
 	return fmt.Sprintf(`Stop exploring immediately. Do not run another investigative tool, scan, wait, or start any new action. Only use the file-writing tool to write the final report.
 Summarize only what was already confirmed for Intent %s.
-Return exactly one JSON object using the same schema as the execute phase. If nothing was confirmed, return a negative claim.
+Return exactly one JSON object using the same schema as the execute phase. If nothing was confirmed, return a negative claim with at least one evidence file.
 Do not create Intents, child nodes, Knowledge, or a success verdict.
 %s`, req.Intent.ID, reportProtocolInstruction), nil
 }
@@ -116,7 +112,15 @@ func runExploreAttempt(ctx context.Context, session AgentSession, req ExploreReq
 		_ = abortSession(session)
 		return AttemptReport{}, "conclude", err
 	}
-	concludeTurn, concludeErr := runAgentTurn(concludeCtx, session, concludePrompt, TurnLimits{MaxAssistantBytes: limits.MaxAssistantBytes}, sink, true)
+	toolTimeout := limits.ToolTimeout
+	if toolTimeout <= 0 {
+		toolTimeout = DefaultToolCallTimeout
+	}
+	concludeTurn, concludeErr := runAgentTurn(concludeCtx, session, concludePrompt, TurnLimits{
+		MaxAssistantBytes: limits.MaxAssistantBytes,
+		ToolTimeout:       toolTimeout,
+		ReportOnly:        true,
+	}, sink, true)
 	if concludeErr == nil && req.WorkspaceDir != "" {
 		concludeTurn.Report, concludeErr = readReport(req.WorkspaceDir, req.MaxReportBytes)
 	}

@@ -43,10 +43,10 @@ type (
 	TurnResult                 = core.TurnResult
 	TurnLimits                 = core.TurnLimits
 	SessionResult              = core.SessionResult
+	SessionStatus              = core.SessionStatus
 	ProcessSpec                = core.ProcessSpec
 	Process                    = core.Process
 	ExitStatus                 = core.ExitStatus
-	Status                     = core.Status
 	RunPhase                   = core.RunPhase
 	RunOutcome                 = core.RunOutcome
 	Budget                     = core.Budget
@@ -54,7 +54,6 @@ type (
 	ResourceSpec               = core.ResourceSpec
 	Completion                 = core.Completion
 	Result                     = core.Result
-	SweepRecord                = core.SweepRecord
 	RunDescriptor              = core.RunDescriptor
 	Event                      = core.Event
 	EventType                  = core.EventType
@@ -74,11 +73,9 @@ type (
 	ClaimKind                  = core.ClaimKind
 	ClaimProposal              = core.ClaimProposal
 	Intent                     = core.Intent
-	IntentKind                 = core.IntentKind
 	IntentState                = core.IntentState
 	IntentAttempt              = core.IntentAttempt
 	IntentAttemptPhase         = core.IntentAttemptPhase
-	Hint                       = core.Hint
 	IntentProposal             = core.IntentProposal
 	GoalCandidate              = core.GoalCandidate
 	ReasonReport               = core.ReasonReport
@@ -92,6 +89,7 @@ type (
 	Artifact                   = core.Artifact
 	ArtifactInput              = core.ArtifactInput
 	Verdict                    = core.Verdict
+	VerdictAuthority           = core.VerdictAuthority
 	EvidenceArchiveRequest     = core.EvidenceArchiveRequest
 	RunCreatedPayload          = core.RunCreatedPayload
 	RunPhasePayload            = core.RunPhasePayload
@@ -105,7 +103,6 @@ type (
 	AuthorityProgressPayload   = core.AuthorityProgressPayload
 	AuthorityErrorPayload      = core.AuthorityErrorPayload
 	ClaimCreatedPayload        = core.ClaimCreatedPayload
-	HintCreatedPayload         = core.HintCreatedPayload
 	IntentPayload              = core.IntentPayload
 	IntentAttemptPayload       = core.IntentAttemptPayload
 	ReasonPayload              = core.ReasonPayload
@@ -115,17 +112,10 @@ type (
 const (
 	CurrentSchemaVersion       = core.CurrentSchemaVersion
 	RedactedValue              = core.RedactedValue
-	StatusQueued               = core.StatusQueued
-	StatusProvisioning         = core.StatusProvisioning
-	StatusRunning              = core.StatusRunning
-	StatusFinalizing           = core.StatusFinalizing
-	StatusVerifying            = core.StatusVerifying
-	StatusSucceeded            = core.StatusSucceeded
-	StatusFailed               = core.StatusFailed
-	StatusCancelled            = core.StatusCancelled
-	StatusTimedOut             = core.StatusTimedOut
-	StatusInterrupted          = core.StatusInterrupted
-	StatusStagnated            = core.StatusStagnated
+	SessionRunning             = core.SessionRunning
+	SessionSucceeded           = core.SessionSucceeded
+	SessionFailed              = core.SessionFailed
+	SessionCancelled           = core.SessionCancelled
 	RunPhaseQueued             = core.RunPhaseQueued
 	RunPhaseProvisioning       = core.RunPhaseProvisioning
 	RunPhaseRunning            = core.RunPhaseRunning
@@ -138,6 +128,8 @@ const (
 	RunOutcomeTimedOut         = core.RunOutcomeTimedOut
 	RunOutcomeInterrupted      = core.RunOutcomeInterrupted
 	RunOutcomeStagnated        = core.RunOutcomeStagnated
+	VerdictAuthorityVerifier   = core.VerdictAuthorityVerifier
+	VerdictAuthorityBackend    = core.VerdictAuthorityBackend
 	IsolationCallerManaged     = core.IsolationCallerManaged
 	AgentRoleReasoner          = core.AgentRoleReasoner
 	AgentRoleExecutor          = core.AgentRoleExecutor
@@ -151,8 +143,6 @@ const (
 	ClaimGoal                  = core.ClaimGoal
 	ClaimFinding               = core.ClaimFinding
 	ClaimNegative              = core.ClaimNegative
-	IntentBootstrap            = core.IntentBootstrap
-	IntentExplore              = core.IntentExplore
 	IntentOpen                 = core.IntentOpen
 	IntentClaimed              = core.IntentClaimed
 	IntentConcluded            = core.IntentConcluded
@@ -175,7 +165,6 @@ const (
 	EventAuthorityCompleted    = core.EventAuthorityCompleted
 	EventAuthorityObserveError = core.EventAuthorityObserveError
 	EventClaimCreated          = core.EventClaimCreated
-	EventHintCreated           = core.EventHintCreated
 	EventReasonStarted         = core.EventReasonStarted
 	EventReasonCompleted       = core.EventReasonCompleted
 	EventReasonRejected        = core.EventReasonRejected
@@ -204,9 +193,6 @@ var (
 	DefaultRunPolicy         = core.DefaultRunPolicy
 	NormalizeRunPolicy       = core.NormalizeRunPolicy
 	ValidateRunPolicy        = core.ValidateRunPolicy
-	StatusForRunState        = core.StatusForRunState
-	RunStateFromStatus       = core.RunStateFromStatus
-	NormalizeRunState        = core.NormalizeRunState
 	ValidateRunState         = core.ValidateRunState
 	ValidateRunTransition    = core.ValidateRunTransition
 	TargetFingerprint        = core.TargetFingerprint

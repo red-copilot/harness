@@ -45,6 +45,9 @@ func ValidateRunSpec(spec RunSpec) error {
 	if err := core.ValidateRunPolicy(core.NormalizeRunPolicy(spec.Policy)); err != nil {
 		return fmt.Errorf("policy: %w", err)
 	}
+	if err := core.ValidateDescriptor(spec.Descriptor()); err != nil {
+		return fmt.Errorf("descriptor: %w", err)
+	}
 	if strings.TrimSpace(spec.Task.ID) == "" {
 		return errors.New("task.id is required")
 	}

@@ -1,7 +1,10 @@
 package pi
 
 import (
+	"bufio"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/red-copilot/harness"
@@ -113,4 +116,11 @@ func TestNormalizeEventKeepsMalformedRecordAuditOnly(t *testing.T) {
 func stringsOf(values []string) string {
 	data, _ := json.Marshal(values)
 	return string(data)
+}
+
+func TestReadBoundedLineRejectsOversizedFrame(t *testing.T) {
+	_, err := readBoundedLine(bufio.NewReader(strings.NewReader("123456789\n")), 4)
+	if !errors.Is(err, errRPCFrameTooLarge) {
+		t.Fatalf("err = %v, want errRPCFrameTooLarge", err)
+	}
 }

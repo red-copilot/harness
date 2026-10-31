@@ -13,47 +13,33 @@ import (
 	"github.com/red-copilot/harness"
 	"github.com/red-copilot/harness/pi"
 	"github.com/red-copilot/harness/sandbox/docker"
-	"github.com/red-copilot/harness/tsec"
 	"github.com/red-copilot/harness/verify"
 )
-
-type TSecFileConfig struct {
-	Challenge  string `json:"challenge,omitempty" yaml:"challenge,omitempty"`
-	All        bool   `json:"all,omitempty" yaml:"all,omitempty"`
-	Parallel   int    `json:"parallel,omitempty" yaml:"parallel,omitempty"`
-	BaseURL    string `json:"base_url,omitempty" yaml:"base_url,omitempty"`
-	Token      string `json:"token,omitempty" yaml:"token,omitempty"`
-	BaseURLEnv string `json:"base_url_env,omitempty" yaml:"base_url_env,omitempty"`
-	TokenEnv   string `json:"token_env,omitempty" yaml:"token_env,omitempty"`
-	UseHint    bool   `json:"use_hint,omitempty" yaml:"use_hint,omitempty"`
-	CheckVPN   bool   `json:"check_vpn,omitempty" yaml:"check_vpn,omitempty"`
-}
 
 // PolicyFile keeps the established flat exploration keys while mapping them
 // into the canonical RunPolicy before validation and execution.
 type PolicyFile struct {
-	MaxOpenIntents         int           `json:"max_open_intents,omitempty" yaml:"max_open_intents,omitempty"`
-	MaxTotalIntents        int           `json:"max_total_intents,omitempty" yaml:"max_total_intents,omitempty"`
-	MaxAttemptsPerIntent   int           `json:"max_attempts_per_intent,omitempty" yaml:"max_attempts_per_intent,omitempty"`
-	MaxToolCallsPerAttempt int           `json:"max_tool_calls_per_attempt,omitempty" yaml:"max_tool_calls_per_attempt,omitempty"`
-	MaxWallTimePerAttempt  time.Duration `json:"max_wall_time_per_attempt,omitempty" yaml:"max_wall_time_per_attempt,omitempty"`
-	ConcludeTimeout        time.Duration `json:"conclude_timeout,omitempty" yaml:"conclude_timeout,omitempty"`
-	StagnationRounds       int           `json:"stagnation_rounds,omitempty" yaml:"stagnation_rounds,omitempty"`
-	MaxReasonerToolCalls   int           `json:"max_reasoner_tool_calls,omitempty" yaml:"max_reasoner_tool_calls,omitempty"`
-	MaxReasonerWallTime    time.Duration `json:"max_reasoner_wall_time,omitempty" yaml:"max_reasoner_wall_time,omitempty"`
-	MaxReasonerFailures    int           `json:"max_reasoner_failures,omitempty" yaml:"max_reasoner_failures,omitempty"`
-	BootstrapEnabled       *bool         `json:"bootstrap_enabled,omitempty" yaml:"bootstrap_enabled,omitempty"`
+	MaxTotalIntents             int           `json:"max_total_intents,omitempty" yaml:"max_total_intents,omitempty"`
+	MaxAttemptsPerIntent        int           `json:"max_attempts_per_intent,omitempty" yaml:"max_attempts_per_intent,omitempty"`
+	MaxToolCallsPerAttempt      int           `json:"max_tool_calls_per_attempt,omitempty" yaml:"max_tool_calls_per_attempt,omitempty"`
+	MaxWallTimePerAttempt       time.Duration `json:"max_wall_time_per_attempt,omitempty" yaml:"max_wall_time_per_attempt,omitempty"`
+	ConcludeTimeout             time.Duration `json:"conclude_timeout,omitempty" yaml:"conclude_timeout,omitempty"`
+	StagnationRounds            int           `json:"stagnation_rounds,omitempty" yaml:"stagnation_rounds,omitempty"`
+	MaxReasonerToolCalls        int           `json:"max_reasoner_tool_calls,omitempty" yaml:"max_reasoner_tool_calls,omitempty"`
+	MaxReasonerWallTime         time.Duration `json:"max_reasoner_wall_time,omitempty" yaml:"max_reasoner_wall_time,omitempty"`
+	MaxReasonerFailures         int           `json:"max_reasoner_failures,omitempty" yaml:"max_reasoner_failures,omitempty"`
+	MaxAuthorityObserveFailures int           `json:"max_authority_observe_failures,omitempty" yaml:"max_authority_observe_failures,omitempty"`
 }
 
 func (p PolicyFile) toRunPolicy() harness.RunPolicy {
 	policy := harness.DefaultRunPolicy()
 	policy.Exploration = harness.ExplorationPolicy{
-		MaxOpenIntents: p.MaxOpenIntents, MaxTotalIntents: p.MaxTotalIntents,
+		MaxTotalIntents:      p.MaxTotalIntents,
 		MaxAttemptsPerIntent: p.MaxAttemptsPerIntent, MaxToolCallsPerAttempt: p.MaxToolCallsPerAttempt,
 		MaxWallTimePerAttempt: p.MaxWallTimePerAttempt, ConcludeTimeout: p.ConcludeTimeout,
 		StagnationRounds: p.StagnationRounds, MaxReasonerToolCalls: p.MaxReasonerToolCalls,
 		MaxReasonerWallTime: p.MaxReasonerWallTime, MaxReasonerFailures: p.MaxReasonerFailures,
-		BootstrapEnabled: p.BootstrapEnabled,
+		MaxAuthorityObserveFailures: p.MaxAuthorityObserveFailures,
 	}
 	return harness.NormalizeRunPolicy(policy)
 }
@@ -105,7 +91,6 @@ type FileConfig struct {
 	SecretEnv     []string         `json:"secret_env,omitempty" yaml:"secret_env,omitempty"`
 	WorkspaceRoot string           `json:"workspace_root,omitempty" yaml:"workspace_root,omitempty"`
 	Verifier      *verify.Command  `json:"verifier,omitempty" yaml:"verifier,omitempty"`
-	TSec          *TSecFileConfig  `json:"tsec,omitempty" yaml:"tsec,omitempty"`
 }
 
 func LoadConfig(path string) (*FileConfig, error) {
@@ -119,7 +104,7 @@ func LoadConfig(path string) (*FileConfig, error) {
 	}
 	for _, legacy := range []string{"workflow", "pi", "agents", "targets", "exploration"} {
 		if _, ok := raw[legacy]; ok {
-			return nil, fmt.Errorf("legacy key %q is unsupported; use apiVersion harness/v3 (see examples/run.yaml)", legacy)
+			return nil, fmt.Errorf("legacy key %q is unsupported; use apiVersion harness/v4 (see examples/run.yaml)", legacy)
 		}
 	}
 	var cfg FileConfig
@@ -129,24 +114,13 @@ func LoadConfig(path string) (*FileConfig, error) {
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
 	if cfg.APIVersion == "" {
-		cfg.APIVersion = "harness/v3"
+		cfg.APIVersion = "harness/v4"
 	}
-	if cfg.APIVersion != "harness/v3" {
+	if cfg.APIVersion != "harness/v4" {
 		return nil, fmt.Errorf("unsupported apiVersion %q", cfg.APIVersion)
 	}
 	if cfg.Target.Isolation == "" {
 		cfg.Target.Isolation = string(harness.IsolationCallerManaged)
-	}
-	if cfg.TSec != nil {
-		if cfg.TSec.BaseURLEnv == "" {
-			cfg.TSec.BaseURLEnv = "BENCHMARK_BASE_URL"
-		}
-		if cfg.TSec.TokenEnv == "" {
-			cfg.TSec.TokenEnv = "BENCHMARK_TOKEN"
-		}
-		if cfg.TSec.Parallel == 0 {
-			cfg.TSec.Parallel = 3
-		}
 	}
 	return &cfg, nil
 }
@@ -180,7 +154,7 @@ func (c *FileConfig) ToRunSpec(artifacts harness.ArtifactStore) (harness.RunSpec
 	target := harness.TargetSpec{ID: c.Target.ID, Addresses: append([]string(nil), c.Target.Addresses...), Isolation: harness.IsolationMode(c.Target.Isolation)}
 	policy := c.Policy.toRunPolicy()
 	policy.Budget = harness.Budget{WallTime: time.Duration(c.Budget.WallTimeSeconds) * time.Second, MaxTokens: c.Budget.MaxTokens, MaxModelCalls: c.Budget.MaxModelCalls, MaxToolCalls: c.Budget.MaxToolCalls, MaxCostUSD: c.Budget.MaxCostUSD}
-	spec := harness.RunSpec{Task: c.Task, Target: target, Policy: policy, Artifacts: artifacts, SecretEnv: append([]string(nil), c.SecretEnv...), WorkspaceRoot: c.WorkspaceRoot, MaterializeSkills: pi.MaterializeSkills}
+	spec := harness.RunSpec{Task: c.Task, Target: target, Policy: policy, Artifacts: artifacts, SecretEnv: append([]string(nil), c.SecretEnv...), WorkspaceRoot: c.WorkspaceRoot}
 	var err error
 	reasoner, convertErr := c.Reasoner.toHarness()
 	if convertErr != nil {
@@ -205,35 +179,6 @@ func (c *FileConfig) ToRunSpec(artifacts harness.ArtifactStore) (harness.RunSpec
 		spec.Provisioner = docker.ImageBackend{Image: c.Target.Image, Command: c.Target.Command, Ports: c.Target.Ports, Network: c.Target.Network, Addresses: c.Target.Addresses}
 	case "compose":
 		spec.Provisioner = docker.ComposeBackend{File: c.Target.ComposeFile, ProjectName: c.Target.ProjectName, Service: c.Target.Service, Port: c.Target.Port, Addresses: c.Target.Addresses}
-	case "tsec":
-		if c.TSec == nil {
-			return harness.RunSpec{}, errors.New("tsec configuration is required for target.kind tsec")
-		}
-		baseURL := c.TSec.BaseURL
-		if baseURL == "" {
-			baseURL = os.Getenv(c.TSec.BaseURLEnv)
-		}
-		token := c.TSec.Token
-		if token == "" {
-			token = os.Getenv(c.TSec.TokenEnv)
-		}
-		client, err := tsec.New(tsec.Config{BaseURL: baseURL, Token: token, CheckVPN: c.TSec.CheckVPN})
-		if err != nil {
-			return harness.RunSpec{}, err
-		}
-		challengeCode := c.Target.ID
-		if c.TSec.Challenge != "" {
-			challengeCode = c.TSec.Challenge
-		}
-		backend := tsec.NewBackend(client, challengeCode)
-		backend.CheckVPN = c.TSec.CheckVPN
-		backend.UseHint = c.TSec.UseHint
-		// TSec both provisions the challenge instance and is its authority.
-		spec.Provisioner = backend
-		spec.Backend = backend
-		spec.KnownSecrets = appendUniqueString(spec.KnownSecrets, token)
-		spec.SecretEnv = appendUniqueString(spec.SecretEnv, c.TSec.TokenEnv)
-		spec.Executor.EnvFrom = appendUniqueString(spec.Executor.EnvFrom, c.TSec.BaseURLEnv, c.TSec.TokenEnv)
 	default:
 		return harness.RunSpec{}, fmt.Errorf("unsupported target kind %q", c.Target.Kind)
 	}

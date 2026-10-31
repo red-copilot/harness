@@ -41,7 +41,7 @@ type runTransition struct {
 	err           error
 	sessionID     string
 	session       AgentSession
-	sessionStatus core.Status
+	sessionStatus core.SessionStatus
 	result        core.Result
 	board         *boardSnapshot
 }
@@ -87,21 +87,22 @@ type runController struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	events chan core.Event
-	hints  chan core.Hint
 	done   chan struct{}
 
-	root              string
-	taskDir           string
-	skillsDir         string
-	redaction         *core.Redactor
-	budget            core.Budget
-	materializeSkills func(string) error
+	root               string
+	taskDir            string
+	skillsDir          string
+	redaction          *core.Redactor
+	budget             core.Budget
+	maxObserveFailures int
+	materializeSkills  func(string) error
 
 	watchCancel context.CancelFunc
 	watchDone   chan struct{}
 
-	eventMu      sync.Mutex
-	eventsClosed bool
+	eventMu       sync.Mutex
+	eventsClosed  bool
+	boardRevision uint64
 
 	mu            sync.RWMutex
 	state         runControlState
@@ -211,7 +212,7 @@ func (c *runController) frozenLocked() *frozenRunState {
 		at := *startedAt
 		startedAt = &at
 	}
-	state := &frozenRunState{usage: c.state.usage, startedAt: startedAt, sessions: c.sessionResultsLocked(core.StatusSucceeded), controlErr: c.state.controlErr}
+	state := &frozenRunState{usage: c.state.usage, startedAt: startedAt, sessions: c.sessionResultsLocked(core.SessionSucceeded), controlErr: c.state.controlErr}
 	if c.state.board != nil {
 		copy := *c.state.board
 		state.board = &copy
@@ -219,7 +220,7 @@ func (c *runController) frozenLocked() *frozenRunState {
 	return state
 }
 
-func (c *runController) sessionResultsLocked(status core.Status) []core.SessionResult {
+func (c *runController) sessionResultsLocked(status core.SessionStatus) []core.SessionResult {
 	ids := make([]string, 0, len(c.state.sessions)+len(c.state.sessionHistory))
 	seen := map[string]struct{}{}
 	for id := range c.state.sessions {
@@ -300,18 +301,24 @@ func (c *runController) budgetExceeded() error {
 	return c.state.budgetErr
 }
 
+func (c *runController) controlErr() error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.state.controlErr
+}
+
 func (c *runController) addSession(id string, session AgentSession) {
 	_ = c.apply(runTransition{kind: runTransitionAddSession, sessionID: id, session: session})
 }
 
-func (c *runController) removeSession(id string, status core.Status) {
+func (c *runController) removeSession(id string, status core.SessionStatus) {
 	_ = c.apply(runTransition{kind: runTransitionRemoveSession, sessionID: id, sessionStatus: status})
 }
 
 func (c *runController) sessionResults() []core.SessionResult {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.sessionResultsLocked(core.StatusRunning)
+	return c.sessionResultsLocked(core.SessionRunning)
 }
 
 func (c *runController) sessionWorkspace(sessionID string) string {
@@ -398,8 +405,7 @@ func (c *runController) appendLog(record core.LogRecord) error {
 }
 
 func (c *runController) updatePhase(phase core.RunPhase) error {
-	phase, _, _, err := core.NormalizeRunState(phase, "", "")
-	if err != nil {
+	if err := core.ValidateRunState(phase, ""); err != nil {
 		return err
 	}
 	if result := c.apply(runTransition{kind: runTransitionPhase, phase: phase}); !result.applied {
@@ -455,7 +461,6 @@ func (c *runController) finishExecution(outcome core.RunOutcome, finalErr error,
 	if frozen.board != nil {
 		result.Claims = append([]core.Claim(nil), frozen.board.Claims...)
 		result.Intents = append([]core.Intent(nil), frozen.board.Intents...)
-		result.Hints = append([]core.Hint(nil), frozen.board.Hints...)
 		result.IntentAttempts = append([]core.IntentAttempt(nil), frozen.board.Attempts...)
 		result.Observations = append([]core.Observation(nil), frozen.board.Observations...)
 		result.Artifacts = append([]core.Artifact(nil), frozen.board.Artifacts...)
@@ -469,11 +474,13 @@ func (c *runController) finishExecution(outcome core.RunOutcome, finalErr error,
 	now := time.Now().UTC()
 	result.FinishedAt = &now
 	result.Error = errorText
-	if finalErr == nil && frozen.controlErr != nil {
-		finalErr = frozen.controlErr
+	if frozen.controlErr != nil {
+		// A canonical-write, authority or cleanup failure must always win over
+		// an otherwise successful or cancelled candidate.
+		finalErr = errors.Join(finalErr, frozen.controlErr)
 		outcome = core.RunOutcomeFailed
 		result.Outcome = outcome
-		result.Error = redactError(redactor, frozen.controlErr)
+		result.Error = redactError(redactor, finalErr)
 	}
 	result = core.RedactResult(redactor, result)
 	record, getErr := c.runner.store.GetRun(context.Background(), c.id)
@@ -490,7 +497,7 @@ func (c *runController) finishExecution(outcome core.RunOutcome, finalErr error,
 	record.FinishedAt = &now
 	var verdictRecord *core.VerdictRecord
 	if verdict != nil {
-		verdictRecord = &core.VerdictRecord{RunID: c.id, Success: verdict.Success, Score: verdict.Score, Message: redactor.Redact(verdict.Message), Evidence: redactor.RedactJSON(verdict.Evidence), CreatedAt: now}
+		verdictRecord = &core.VerdictRecord{RunID: c.id, Authority: verdict.Authority, Success: verdict.Success, Score: verdict.Score, Message: redactor.Redact(verdict.Message), Evidence: redactor.RedactJSON(verdict.Evidence), CreatedAt: now}
 	}
 	c.eventMu.Lock()
 	finalEvent, eventErr := c.canonicalEvent("harness", core.EventRunFinalized, core.RunFinalizedPayload{Outcome: outcome, Error: result.Error})
@@ -547,12 +554,33 @@ func (c *runController) run(spec RunSpec) {
 		return
 	}
 	target := core.TargetBinding{TargetID: core.TargetFingerprint(spec.Target), Addresses: append([]string(nil), spec.Target.Addresses...), Isolation: spec.Target.Isolation}
+	targetOwned := false
+	closeTarget := func() error {
+		if !targetOwned || spec.Provisioner == nil {
+			return nil
+		}
+		targetOwned = false
+		closeCtx, cancel := context.WithTimeout(context.Background(), c.runner.closeTimeout)
+		defer cancel()
+		if err := spec.Provisioner.Close(closeCtx, target); err != nil {
+			return fmt.Errorf("close target: %w", err)
+		}
+		return nil
+	}
+	failBeforeExploration := func(err error) {
+		if closeErr := closeTarget(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+		c.finishExecution(core.RunOutcomeFailed, err, nil)
+	}
 	if spec.Provisioner != nil {
 		provisioned, err := spec.Provisioner.Provision(c.ctx, core.ProvisionRequest{RunID: c.id, Task: spec.Task, Target: spec.Target})
 		if err != nil {
 			c.finishExecution(core.RunOutcomeFailed, err, nil)
 			return
 		}
+		target = provisioned
+		targetOwned = true
 		if provisioned.TargetID == "" {
 			provisioned.TargetID = core.TargetFingerprint(spec.Target)
 		}
@@ -562,36 +590,39 @@ func (c *runController) run(spec RunSpec) {
 		if provisioned.Isolation == "" {
 			provisioned.Isolation = spec.Target.Isolation
 		}
+		target = provisioned
 		if err := core.ValidateTargetBinding(spec.Target, provisioned); err != nil {
-			c.finishExecution(core.RunOutcomeFailed, err, nil)
+			failBeforeExploration(err)
 			return
 		}
-		target = provisioned
 	}
 	provisionedEvent, err := c.canonicalEvent("harness", core.EventRunProvisioned, core.RunProvisionedPayload{Target: target})
 	if err != nil {
-		c.finishExecution(core.RunOutcomeFailed, err, nil)
+		failBeforeExploration(err)
 		return
 	}
 	if err := c.emitEvent(provisionedEvent); err != nil {
-		c.finishExecution(core.RunOutcomeFailed, err, nil)
+		failBeforeExploration(err)
 		return
 	}
 	if err := c.updatePhase(core.RunPhaseRunning); err != nil {
-		c.finishExecution(core.RunOutcomeFailed, err, nil)
+		failBeforeExploration(err)
 		return
 	}
 	if spec.Backend != nil {
 		c.startBackendWatcher(spec.Backend, target)
 	}
 	explorationErr := newBlackboardEngine(c.runner, c, spec, target).run(c.ctx)
-	if watchErr := c.stopBackendWatcher(); watchErr != nil {
-		explorationErr = errors.Join(explorationErr, watchErr)
-	}
 	if spec.Backend != nil && c.ctx.Err() == nil && c.backendCompletion() == nil {
 		if authorityErr := c.observeAuthorityOnce(spec.Backend, target); authorityErr != nil {
 			explorationErr = errors.Join(explorationErr, authorityErr)
 		}
+		if spec.Verifier == nil && c.backendCompletion() == nil && !c.stagnated() && explorationErr == nil {
+			c.waitForBackendWatcher()
+		}
+	}
+	if watchErr := c.stopBackendWatcher(); watchErr != nil {
+		explorationErr = errors.Join(explorationErr, watchErr)
 	}
 	outcome := core.RunOutcomeFailed
 	var finalErr error
@@ -657,15 +688,11 @@ func (c *runController) run(spec RunSpec) {
 	} else {
 		finalErr = errors.New("run has no authoritative verdict")
 	}
-	if spec.Provisioner != nil {
-		closeCtx, cancel := context.WithTimeout(context.Background(), c.runner.closeTimeout)
-		if closeErr := spec.Provisioner.Close(closeCtx, target); closeErr != nil {
-			finalErr = errors.Join(finalErr, fmt.Errorf("close backend: %w", closeErr))
-			if outcome == core.RunOutcomeSucceeded {
-				outcome = core.RunOutcomeFailed
-			}
+	if closeErr := closeTarget(); closeErr != nil {
+		finalErr = errors.Join(finalErr, closeErr)
+		if outcome == core.RunOutcomeSucceeded {
+			outcome = core.RunOutcomeFailed
 		}
-		cancel()
 	}
 	c.finishExecution(outcome, finalErr, verdict)
 	c.runner.mu.Lock()
@@ -701,27 +728,41 @@ func (c *runController) stopBackendWatcher() error {
 	}
 }
 
+func (c *runController) waitForBackendWatcher() {
+	if c.watchDone == nil {
+		return
+	}
+	select {
+	case <-c.watchDone:
+	case <-c.ctx.Done():
+	}
+}
+
 func (c *runController) observeAuthorityOnce(backend CompletionSource, target core.TargetBinding) error {
 	completion, err := backend.Observe(c.ctx, target)
 	if err != nil {
 		event, eventErr := c.canonicalEvent("authority", core.EventAuthorityObserveError, core.AuthorityErrorPayload{Error: c.redactor().Redact(err.Error())})
 		if eventErr != nil {
+			c.setControlError(eventErr)
 			return eventErr
 		}
-		emitErr := c.emitEvent(event)
-		if emitErr != nil && !errors.Is(emitErr, ErrRunClosed) {
+		if emitErr := c.emitEvent(event); emitErr != nil && !errors.Is(emitErr, ErrRunClosed) {
+			c.setControlError(emitErr)
 			return emitErr
 		}
-		return nil
+		c.setControlError(fmt.Errorf("observe backend authority: %w", err))
+		return fmt.Errorf("observe backend authority: %w", err)
 	}
 	c.setProgress(completion)
 	if completion.Done && c.backendCompletion() == nil {
 		c.setBackendCompletion(completion)
 		event, eventErr := c.canonicalEvent("authority", core.EventAuthorityCompleted, core.AuthorityProgressPayload{Completion: completion})
 		if eventErr != nil {
+			c.setControlError(eventErr)
 			return eventErr
 		}
 		if err := c.emitEvent(event); err != nil && !errors.Is(err, ErrRunClosed) {
+			c.setControlError(err)
 			return err
 		}
 	}
@@ -731,6 +772,11 @@ func (c *runController) observeAuthorityOnce(backend CompletionSource, target co
 func (c *runController) watchBackend(ctx context.Context, backend CompletionSource, target core.TargetBinding) {
 	ticker := time.NewTicker(c.runner.pollInterval)
 	defer ticker.Stop()
+	failures := 0
+	maxFailures := c.maxObserveFailures
+	if maxFailures <= 0 {
+		maxFailures = 3
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -750,8 +796,14 @@ func (c *runController) watchBackend(ctx context.Context, backend CompletionSour
 				}
 				return
 			}
+			failures++
+			if failures >= maxFailures {
+				c.setControlError(fmt.Errorf("backend authority unavailable after %d consecutive observe errors: %w", failures, err))
+				return
+			}
 			continue
 		}
+		failures = 0
 		c.setProgress(completion)
 		if completion.Done {
 			if c.backendCompletion() == nil {
@@ -814,11 +866,13 @@ func (c *runController) commitBoard(ctx context.Context, commit Commit) error {
 	if claimed {
 		return ErrRunClosed
 	}
+	commit.ExpectedRevision = c.boardRevision
 	stored, err := c.runner.store.Commit(ctx, commit)
 	if err != nil {
 		c.setControlError(err)
 		return err
 	}
+	c.boardRevision = commit.Revision
 	for _, event := range stored {
 		select {
 		case c.events <- event:

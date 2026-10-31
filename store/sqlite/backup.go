@@ -106,7 +106,7 @@ func VerifyBackupManifest(path string) (BackupManifest, error) {
 }
 
 // InitializeFreshFromVerifiedBackup is the production cutover helper. It
-// verifies the pre-cutover backup first, then creates a brand-new v2 database
+// verifies the pre-cutover backup first, then creates a brand-new v4 database
 // without copying old Runs into the writable store.
 func InitializeFreshFromVerifiedBackup(manifestPath, databasePath string) (*Store, error) {
 	if _, err := VerifyBackupManifest(manifestPath); err != nil {

@@ -153,9 +153,6 @@ func RedactResult(r *Redactor, result Result) Result {
 	for i := range result.Intents {
 		result.Intents[i] = RedactIntent(r, result.Intents[i])
 	}
-	for i := range result.Hints {
-		result.Hints[i] = RedactHint(r, result.Hints[i])
-	}
 	for i := range result.IntentAttempts {
 		result.IntentAttempts[i] = RedactIntentAttempt(r, result.IntentAttempts[i])
 	}
@@ -194,14 +191,6 @@ func RedactIntent(r *Redactor, intent Intent) Intent {
 		intent.AttemptIDs[i] = r.Redact(intent.AttemptIDs[i])
 	}
 	return intent
-}
-
-func RedactHint(r *Redactor, hint Hint) Hint {
-	hint.ID = r.Redact(hint.ID)
-	hint.RunID = r.Redact(hint.RunID)
-	hint.Content = r.Redact(hint.Content)
-	hint.Creator = r.Redact(hint.Creator)
-	return hint
 }
 
 func RedactIntentAttempt(r *Redactor, attempt IntentAttempt) IntentAttempt {

@@ -1,4 +1,4 @@
-apiVersion: harness/v3
+apiVersion: harness/v4
 task:
   id: demo
   objective: Find the flag on the authorized target and write proof.txt to /workspace.
@@ -9,7 +9,7 @@ target:
   isolation: caller_managed
 reasoner:
   id: planner
-  image: harness/pi-kali:local
+  image: ghcr.io/red-copilot/harness-pi-kali:0.1.0
   env_from: [OPENCODE_API_KEY]
   runtime:
     provider: opencode-go
@@ -17,14 +17,13 @@ reasoner:
     thinking: medium
 executor:
   id: executor-1
-  image: harness/pi-kali:local
+  image: ghcr.io/red-copilot/harness-pi-kali:0.1.0
   env_from: [OPENCODE_API_KEY]
   runtime:
     provider: opencode-go
     model: deepseek-v4.1-flash
     thinking: medium
 policy:
-  max_open_intents: 1
   max_total_intents: 20
   max_attempts_per_intent: 3
   max_tool_calls_per_attempt: 30
@@ -33,7 +32,6 @@ policy:
   stagnation_rounds: 2
   max_reasoner_tool_calls: 8
   max_reasoner_wall_time: 2m
-  bootstrap_enabled: true
 budget:
   wall_time_seconds: 300
 secret_env: [OPENAI_API_KEY]

@@ -4,30 +4,61 @@ Guidance for working in Red Harness.
 
 ## What this repository is
 
-Red Harness v3 is a pure Go SDK for the execution and trust boundary of one autonomous security Run against one logical Target (`module github.com/red-copilot/harness`, Go 1.24).
+Red Harness v4 is a pure Go SDK for the execution and trust boundary of one
+autonomous security Run against one logical Target (`module
+github.com/red-copilot/harness`, Go 1.24). It is not a generic agent framework.
 
-The package boundary is part of the architecture:
+- One Run, one authorized Target, one serialized Reasoner, one Executor slot.
+- One writable exploration path: Claim/Intent.
+- Success comes only from `Verifier.Verify` or backend terminal completion.
+- SQLite schema v8 and `RunDescriptor` schema v4 are the current contract.
 
-- `core/` — pure domain contracts and validators; standard library only.
-- `engine/` — Runner, Run lifecycle, single-Executor Claim/Intent actor, authority arbitration and persistence ports; imports only `core` and the standard library.
-- root `harness` — thin façade over common engine/core entry points.
-- adapters — `pi`, `sandbox/docker`, `tsec`, `verify`, `store/sqlite`.
-- surfaces — `server`, `internal/cli`, `webui`, `web`.
+The HTTP/Web/TSec/sweep/hint/Bootstrap surfaces were removed. The repository is
+harness-only; `pi`, `sandbox/docker`, `verify` and `store/sqlite` remain as
+adapters.
 
-`import_boundary_test.go` and `core/import_boundary` tests enforce these boundaries. Breaking them is an architecture regression.
+## Layout
 
-## Non-negotiable invariants
+- `core/` — pure contracts, validators, policy, typed events; stdlib only.
+- `engine/` — Run controller, single-writer board, one slot, authority, ports.
+- root `harness` — thin façade.
+- `pi/` — Pi RPC session adapter.
+- `sandbox/docker/` — Docker target/provisioner adapter.
+- `verify/` — external command verifier.
+- `store/sqlite/` — canonical audit and board store.
+- `internal/cli/`, `cmd/harness/` — `run`, `runs`, `doctor`, `backup`.
 
-- Only `Verifier.Verify` or terminal `CompletionSource.Observe` can establish success.
-- Agent text, tool exits, Claims, Observations, Reason completion and goal candidates never establish success.
-- A Run has exactly one Executor and at most two active Intent/Attempt slots.
-- Bootstrap runs first; the Reasoner is serialized and may create only one Intent per free slot.
-- Stale board revisions, over-capacity proposals and malformed structured output fail closed.
-- Finding Claim requires a current-Attempt Observation; Observation requires archived Artifact bytes.
-- Canonical write failure, cleanup failure, cancellation and budget exhaustion terminate non-successfully.
-- SQLite is canonical. Board records and events commit atomically; Intent/Attempt history is append-only.
-- Known secrets are redacted before all persistence. Binary evidence containing a known secret is rejected. `BENCHMARK_TOKEN` may enter the agent container but never SQLite plaintext or diagnostics.
-- Containers never receive the Docker socket and remain read-only-root, `no-new-privileges`, cap-dropped and resource-limited.
+## Run flow
+
+```text
+queued -> provisioning -> running -> finalizing -> verifying -> terminal
+outcome: succeeded | failed | cancelled | timed_out | stagnated | interrupted
+```
+
+- The Reasoner reads a bounded Claim/Intent graph and proposes at most one
+  Intent when the slot is free.
+- Explore executes one Intent; a finding or negative claim requires a current
+  Attempt Observation and archived Artifact evidence.
+- Execute timeout or unusable output triggers the same-session Conclude fallback.
+- A `goal_candidate` only triggers verification.
+- `agent_settled` completes a turn; `agent_end` does not.
+- Backend completion wins over a Verifier. Final Observe errors fail closed;
+  watcher Observe errors are tolerated up to
+  `max_authority_observe_failures`.
+
+## Invariants
+
+- Model output is a proposal; code assigns IDs, states and revisions.
+- Finding and negative claims require evidence; no semantic claim bypasses the
+  Artifact -> Observation -> Claim chain.
+- Only the engine loop writes the board.
+- Canonical commits are atomic; stale revisions and malformed reports fail
+  closed.
+- Events and logs are append-only. Canonical events carry a SHA-256 hash chain.
+- Known secrets are redacted before persistence; binary evidence with a known
+  secret is rejected.
+- Target authorization identity is separate from runtime binding.
+- Cleanup, persistence and authority failures map to non-success outcomes.
 
 ## Commands
 
@@ -36,58 +67,14 @@ go test ./...
 go test -race ./...
 go vet ./...
 go build ./cmd/harness
+HARNESS_DOCKER_TESTS=1 go test ./sandbox/docker   # environment-dependent
 ```
 
-```bash
-npm --prefix web run lint
-npm --prefix web run typecheck
-npm --prefix web run test
-npm --prefix web run build
-```
+Do not report Docker checks as passing unless actually run.
 
-Environment-gated checks:
+## References
 
-```bash
-HARNESS_DOCKER_TESTS=1 go test ./sandbox/docker
-HARNESS_TSEC_LIVE=1 BENCHMARK_BASE_URL=... BENCHMARK_TOKEN=... go test ./tsec
-```
-
-Do not report Docker or live TSec/VPN checks as passing unless actually run.
-
-## Run flow
-
-1. `engine.ValidateRunSpec` requires task, logical Target, caller-managed isolation, one Reasoner runtime, exactly one Executor runtimes, artifact store and authority.
-2. Runner persists a queued Run, provisions the Target and starts the serial Claim/Intent engine.
-3. Bootstrap directly attempts the objective. Once it settles, the serialized Reasoner fills free slots from a bounded Claim/Intent/Hint snapshot.
-4. Executor workers only consume turns and return immutable attempt results. The engine loop owns all board mutations.
-5. Explore produces a Finding or Negative Fact. Execute timeouts/parse failures use same-session Conclude before retry/abandon.
-6. After board quiescence, backend terminal completion wins; otherwise Verifier runs. The terminal Run, Verdict, board snapshot and `run.finalized` commit atomically.
-
-Pi and Executor share `engine.AgentSession`. Pi framing is strict LF JSONL and only `agent_settled` completes a turn; `agent_end` is audit-only. `RunAgentTurn` enforces tool calls, assistant bytes and tool timeouts.
-
-## Package map
-
-- `core/types_*.go` — Task/Target, policy, run lifecycle, Claim/Intent/Attempt, evidence and typed event contracts.
-- `engine/ports.go` — runtime, target, authority, canonical writer and read-store ports. `Commit` is the multi-record write boundary; `Finalize` is the terminal transaction.
-- `engine/blackboard.go` — pure board reducer and single-slot admission rules.
-- `engine/blackboard_engine.go` — serialized actor loop, Reasoner/Explore workers, evidence collection and slot refill.
-- `engine/run_controller.go` — Run lifecycle, event publication, authority watcher and terminal finalization.
-- `engine/artifact.go` — evidence path checks and content-addressed archival.
-- `engine/redacting_store.go` — Run-scoped canonical write boundary.
-- `pi/` — hardened Pi RPC adapter.
-- `sandbox/docker/` — Docker process/backend and sandbox hardening.
-- `tsec/` — TSec provisioner and completion authority.
-- `verify/` — external command Verifier.
-- `store/sqlite/` — schema v7 canonical store with atomic board commits and legacy read tables.
-- `server/` — trusted-operator HTTP API and SSE replay. Board endpoint is `/v1/runs/{id}/board`.
-- `internal/cli/`, `cmd/harness/` — `harness/v3` composition root. Requires exactly one Executor.
-- `webui/` and `web/` — embedded read-only console. New Runs render the Claim/Intent graph; legacy branch data is read-only.
-- `skills/` — embedded TSec submission and security-tool selection skills.
-
-## Working conventions
-
-- Add tests first, especially malformed structured output, cancellation, process exit, stale revision, persistence failure, evidence escape/secret leakage and cleanup.
-- Never add a second writable exploration path or reintroduce Knowledge/Branch writes for new Runs.
-- Use Conventional Commits with a scope.
-- Per `AGENTS.md` ("Git Workflow"), the agent owns the branch lifecycle: work on a topic branch (never directly on `main`), commit only the files changed for the task, push once the local verification gate passes, open a PR, and squash-merge it immediately — do not wait for or block on PR CI. Then delete the branch, prune remote-tracking refs and clean up the worktree. If local verification or the push fails, stop and report the exact reason; a post-merge CI failure is fixed forward on a new branch.
-- More detail: `README.md`, `AGENTS.md`, `api/openapi.yaml`, `examples/`.
+- `README.md`
+- `AGENTS.md`
+- `examples/run.yaml`
+- The Go types in `core/` and the contract tests at the repository root

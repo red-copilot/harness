@@ -90,22 +90,6 @@ func (s *Store) ListIntents(ctx context.Context, runID string) ([]core.Intent, e
 	return out, nil
 }
 
-func (s *Store) SaveHint(ctx context.Context, hint core.Hint) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if err := saveHintTx(ctx, tx, hint); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-func (s *Store) ListHints(ctx context.Context, runID string) ([]core.Hint, error) {
-	return queryPayload[core.Hint](ctx, s.db, `SELECT payload FROM hints WHERE run_id=? ORDER BY created_at,id`, runID)
-}
-
 func (s *Store) SaveIntentAttempt(ctx context.Context, attempt core.IntentAttempt) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -143,8 +127,6 @@ var _ interface {
 	ListClaims(context.Context, string) ([]core.Claim, error)
 	SaveIntent(context.Context, core.Intent) error
 	ListIntents(context.Context, string) ([]core.Intent, error)
-	SaveHint(context.Context, core.Hint) error
-	ListHints(context.Context, string) ([]core.Hint, error)
 	SaveIntentAttempt(context.Context, core.IntentAttempt) error
 	ListIntentAttempts(context.Context, string) ([]core.IntentAttempt, error)
 	SaveBlackboardObservation(context.Context, core.Observation) error
