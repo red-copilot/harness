@@ -146,6 +146,8 @@ If a required check fails, do not commit, do not push and do not merge. Report
 the failing command and its output. Never describe a check as passing unless it
 ran in this session, and never weaken or skip a check to get a green result.
 
+This local gate — not the PR's CI run — is what authorizes the merge in step 3.
+
 ### 2. Branch, commit and push
 
 - Work on a topic branch, never directly on `main`. Branch from an
@@ -162,12 +164,22 @@ ran in this session, and never weaken or skip a check to get a green result.
 - Open a pull request with `gh pr create` once the branch is pushed: a
   Conventional-Commits title and a body covering what changed, why, and which
   checks actually ran.
-- Merge only after the PR's CI run is green. Wait for it, then
-  `gh pr merge <n> --squash --delete-branch`.
-- Never merge with a red or pending CI run, never bypass required checks, and
-  never force-push `main`. If CI fails, fix the branch and push again.
+- Merge immediately after push with `gh pr merge <n> --squash --delete-branch`.
+  Do not wait for or block on the PR's CI run.
+- The local verification gate in step 1 is the merge gate. Never merge a branch
+  whose required checks failed locally, and never force-push `main`.
+- Do not merge while `main` and the branch conflict; rebase onto the current
+  `main` locally, re-run the gate, then push and merge.
 - If a change is risky or genuinely ambiguous, leave the PR open and report it
   instead of merging.
+- Report the CI result when it arrives, but treat it as post-merge information:
+  if it fails, fix forward on a new branch rather than reverting the merge.
+
+### 3a. Do not stall waiting on CI
+
+- Never poll `gh pr checks` or `gh run list` to decide whether to merge.
+- Never present a pending or unknown CI state as a reason to wait or to defer
+  the merge.
 
 ### 4. Branch and worktree cleanup
 
@@ -191,10 +203,10 @@ ran in this session, and never weaken or skip a check to get a green result.
 
 ### 6. Tags and releases
 
-- Tag only a merged `main` commit whose CI is green, using annotated tags
-  (`vMAJOR.MINOR.PATCH`) and Conventional-Commits semantics: a breaking change
-  (`!` or `BREAKING CHANGE:`) bumps MAJOR, `feat` bumps MINOR, and fixes and
-  chores bump PATCH.
+- Tag only a merged `main` commit whose local verification gate passed, using
+  annotated tags (`vMAJOR.MINOR.PATCH`) and Conventional-Commits semantics: a
+  breaking change (`!` or `BREAKING CHANGE:`) bumps MAJOR, `feat` bumps MINOR,
+  and fixes and chores bump PATCH.
 - Push the tag (`git push origin vX.Y.Z`) only after the commit is on
   `origin/main`; the tag push is what triggers the release workflow.
 - Do not tag a pre-release, a feature branch or an unreleased schema boundary
