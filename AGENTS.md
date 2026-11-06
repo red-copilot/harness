@@ -117,7 +117,86 @@ was run.
   stale revisions, evidence escape, cancellation, process exit, persistence
   failure, verification errors and cleanup.
 - Use Conventional Commits with a scope, for example `feat(pi): ...`.
-- After a task is implemented and its required verification passes, commit
-  only the files changed for that task and push the current branch to its
-  upstream automatically, without asking for additional confirmation. If
-  verification fails or the push is blocked, stop and report the exact reason.
+
+## Git Workflow
+
+The agent owns the branch lifecycle end to end. Do not stop to ask for
+confirmation between these steps; stop only on a real failure and report the
+exact command and its output.
+
+### 1. Verification gate
+
+Run the checks this task actually exercises before every commit. A commit that
+has not passed them is not committed.
+
+```bash
+go test ./...
+go test -race ./...
+go vet ./...
+go build ./cmd/harness
+git diff --check
+```
+
+Run the `web/` matrix (`npm --prefix web run lint|typecheck|test|build`) when
+the change touches `web/` or `webui/`. Docker and live TSec checks stay opt-in
+as described above. For documentation-only changes the minimum is
+`git diff --check` plus verifying links, commit references and code symbols.
+
+If a required check fails, do not commit, do not push and do not merge. Report
+the failing command and its output. Never describe a check as passing unless it
+ran in this session, and never weaken or skip a check to get a green result.
+
+### 2. Branch, commit and push
+
+- Work on a topic branch, never directly on `main`. Branch from an
+  up-to-date `main` as `<type>/<short-topic>`, for example `fix/pi-framing`.
+- Commit only the files changed for the task; never sweep unrelated worktree
+  changes into a commit. Use `git add <path>` with explicit paths.
+- Push the branch with `git push -u origin <branch>` as soon as the task's
+  verification passes, without asking for confirmation.
+- If the push is blocked (auth, non-fast-forward, hook rejection), stop and
+  report the exact reason.
+
+### 3. Merge
+
+- Open a pull request with `gh pr create` once the branch is pushed: a
+  Conventional-Commits title and a body covering what changed, why, and which
+  checks actually ran.
+- Merge only after the PR's CI run is green. Wait for it, then
+  `gh pr merge <n> --squash --delete-branch`.
+- Never merge with a red or pending CI run, never bypass required checks, and
+  never force-push `main`. If CI fails, fix the branch and push again.
+- If a change is risky or genuinely ambiguous, leave the PR open and report it
+  instead of merging.
+
+### 4. Branch and worktree cleanup
+
+- After a successful merge, delete the local branch
+  (`git branch -d <branch>`), prune remote-tracking refs with
+  `git fetch --prune`, and remove any worktree created for the task with
+  `git worktree remove <path>`.
+- Do not delete a branch whose PR is unmerged, and do not remove a worktree
+  that holds uncommitted work; report it instead.
+
+### 5. Keeping `main` current
+
+- Keep the local `main` fast-forwarded to `origin/main`
+  (`git fetch origin && git checkout main && git pull --ff-only`) before
+  starting new work.
+- `git fetch --prune` also drops remote-tracking branches that were already
+  deleted upstream; delete the matching local branches once their work is
+  merged.
+- Never resolve a diverged `main` with a merge or rebase plus force-push;
+  report the divergence instead.
+
+### 6. Tags and releases
+
+- Tag only a merged `main` commit whose CI is green, using annotated tags
+  (`vMAJOR.MINOR.PATCH`) and Conventional-Commits semantics: a breaking change
+  (`!` or `BREAKING CHANGE:`) bumps MAJOR, `feat` bumps MINOR, and fixes and
+  chores bump PATCH.
+- Push the tag (`git push origin vX.Y.Z`) only after the commit is on
+  `origin/main`; the tag push is what triggers the release workflow.
+- Do not tag a pre-release, a feature branch or an unreleased schema boundary
+  without saying so explicitly in the tag and release notes.
+- Never rewrite or delete an already-pushed tag; publish a new patch instead.
