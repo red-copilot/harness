@@ -45,7 +45,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	case "backup":
 		err = backup(args[1:], stdout, stderr)
 	case "migrate":
-		err = errors.New("legacy configuration is unsupported; migrate to a harness/v1 descriptor as described in docs/migration-v1.md")
+		err = errors.New("legacy configuration is unsupported; migrate to a harness/v3 config (see examples/run.yaml and examples/tsec.yaml)")
 	case "version", "--version", "-v":
 		fmt.Fprintln(stdout, Version)
 	case "help", "--help", "-h":

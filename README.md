@@ -103,7 +103,7 @@ harness runs show --id <run-id>
 harness runs events --id <run-id> --after 0
 ```
 
-旧 `workflow`、`agents`、`targets`、`planner`、核心 `pi` 和 `exploration.configure` 键会 fail closed，并指向迁移文档。
+旧 `workflow`、`agents`、`targets`、`planner`、核心 `pi` 和 `exploration.configure` 键会 fail closed；请改用 `apiVersion: harness/v3`，参考 `examples/run.yaml` 与 `examples/tsec.yaml`。
 
 ## Security boundary
 

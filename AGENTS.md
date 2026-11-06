@@ -27,13 +27,10 @@ must not be reintroduced or extended.
 - `skills/tools/`: embedded security-tool selection skill with one reference
   per preinstalled command.
 - `images/pi-kali/`: pinned Kali + Pi image.
-- `docs/`: current architecture, Pi/TSec contracts, migration guidance and the
-  first-principles architecture study.
 
 ## Current Architecture
 
-The Claim/Intent v3 architecture is documented in
-`docs/first-principles-architecture.md` and `docs/architecture.md`.
+The Claim/Intent v3 architecture is defined by the code:
 
 - `core/`: pure domain contracts, policy, validators and typed events; standard
   library only.
