@@ -119,7 +119,7 @@ func LoadConfig(path string) (*FileConfig, error) {
 	}
 	for _, legacy := range []string{"workflow", "pi", "agents", "targets", "exploration"} {
 		if _, ok := raw[legacy]; ok {
-			return nil, fmt.Errorf("legacy key %q is unsupported; see docs/migration-v1.md", legacy)
+			return nil, fmt.Errorf("legacy key %q is unsupported; use apiVersion harness/v3 (see examples/run.yaml)", legacy)
 		}
 	}
 	var cfg FileConfig

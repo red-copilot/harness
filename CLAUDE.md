@@ -90,4 +90,4 @@ Pi and Executor share `engine.AgentSession`. Pi framing is strict LF JSONL and o
 - Never add a second writable exploration path or reintroduce Knowledge/Branch writes for new Runs.
 - Use Conventional Commits with a scope.
 - Per `AGENTS.md` ("Git Workflow"), the agent owns the branch lifecycle: work on a topic branch (never directly on `main`), commit only the files changed for the task, push once the local verification gate passes, open a PR, and squash-merge it immediately — do not wait for or block on PR CI. Then delete the branch, prune remote-tracking refs and clean up the worktree. If local verification or the push fails, stop and report the exact reason; a post-merge CI failure is fixed forward on a new branch.
-- More detail: `README.md`, `docs/architecture.md`, `docs/pi.md`, `docs/tsec.md`, `docs/migration-v3.md`.
+- More detail: `README.md`, `AGENTS.md`, `api/openapi.yaml`, `examples/`.
