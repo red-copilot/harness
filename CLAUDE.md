@@ -89,5 +89,5 @@ Pi and Executor share `engine.AgentSession`. Pi framing is strict LF JSONL and o
 - Add tests first, especially malformed structured output, cancellation, process exit, stale revision, persistence failure, evidence escape/secret leakage and cleanup.
 - Never add a second writable exploration path or reintroduce Knowledge/Branch writes for new Runs.
 - Use Conventional Commits with a scope.
-- Per `AGENTS.md`, commit only changed task files and push the current branch after required verification passes. If verification or push fails, stop and report the exact reason.
+- Per `AGENTS.md` ("Git Workflow"), the agent owns the branch lifecycle: work on a topic branch (never directly on `main`), commit only the files changed for the task, push once required verification passes, open a PR, and squash-merge it only after that PR's CI is green. Then delete the branch, prune remote-tracking refs and clean up the worktree. If verification, the push or CI fails, stop and report the exact reason.
 - More detail: `README.md`, `docs/architecture.md`, `docs/pi.md`, `docs/tsec.md`, `docs/migration-v3.md`.
