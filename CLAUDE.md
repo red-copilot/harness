@@ -72,6 +72,16 @@ HARNESS_DOCKER_TESTS=1 go test ./sandbox/docker   # environment-dependent
 
 Do not report Docker checks as passing unless actually run.
 
+## Git workflow
+
+After verification passes, complete the change autonomously: stage only the
+task's paths, commit with a Conventional Commit scope, push (`git push -u
+origin HEAD`), open or update the PR against `main`, then
+`gh pr merge --squash --delete-branch`. Never `git add -A`; never force-push
+`main`; never merge on unverified or skipped checks. If verification or
+authentication blocks the flow, stop and report the exact error. See the
+"Automated Git Workflow" section in `AGENTS.md` for the full gates.
+
 ## References
 
 - `README.md`
