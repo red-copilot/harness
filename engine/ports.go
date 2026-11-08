@@ -57,15 +57,15 @@ type ArtifactStore interface {
 
 // Commit is one atomic canonical board/audit transition.
 type Commit struct {
-	RunID        string
-	Revision     uint64
-	Claims       []Claim
-	Intents      []Intent
-	Hints        []Hint
-	Attempts     []IntentAttempt
-	Observations []Observation
-	Artifacts    []Artifact
-	Events       []Event
+	RunID            string
+	ExpectedRevision uint64
+	Revision         uint64
+	Claims           []Claim
+	Intents          []Intent
+	Attempts         []IntentAttempt
+	Observations     []Observation
+	Artifacts        []Artifact
+	Events           []Event
 }
 
 // FinalizationRecord is the atomic terminal audit write.
@@ -89,7 +89,6 @@ type CanonicalWriter interface {
 type BoardReader interface {
 	ListClaims(context.Context, string) ([]Claim, error)
 	ListIntents(context.Context, string) ([]Intent, error)
-	ListHints(context.Context, string) ([]Hint, error)
 	ListIntentAttempts(context.Context, string) ([]IntentAttempt, error)
 	ListBlackboardObservations(context.Context, string) ([]Observation, error)
 }

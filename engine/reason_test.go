@@ -8,11 +8,11 @@ import (
 func TestReasonPromptIncludesOnlyBoundedGraph(t *testing.T) {
 	board := testBoard(t)
 	for i := 0; i < 100; i++ {
-		if _, err := board.addClaim(Claim{Kind: ClaimNegative, Description: "negative"}); err != nil {
+		if _, err := board.addClaim(Claim{Kind: ClaimNegative, Description: "negative", ObservationIDs: []string{"obs-1"}}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	req := buildReasonContext(board.snapshot(), board.target, nil, []int{1, 2}, nil, board.policy)
+	req := buildReasonContext(board.snapshot(), board.target, board.policy, Completion{})
 	if len(req.Claims) > maxReasonClaims {
 		t.Fatalf("claims = %d, want <= %d", len(req.Claims), maxReasonClaims)
 	}
@@ -23,8 +23,8 @@ func TestReasonPromptIncludesOnlyBoundedGraph(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(prompt, "Free slots: 1, 2") && !strings.Contains(prompt, "Free slots: 1,2") {
-		t.Fatalf("prompt missing free slots:\n%s", prompt)
+	if !strings.Contains(prompt, "At most one") {
+		t.Fatalf("prompt missing intent cap:\n%s", prompt)
 	}
 	if !strings.Contains(prompt, board.task.Objective) {
 		t.Fatalf("prompt missing task objective:\n%s", prompt)
@@ -34,24 +34,21 @@ func TestReasonPromptIncludesOnlyBoundedGraph(t *testing.T) {
 	}
 }
 
-func TestReasonPromptIncludesFreeSlotCount(t *testing.T) {
+func TestReasonPromptIncludesProgress(t *testing.T) {
 	board := testBoard(t)
-	req := buildReasonContext(board.snapshot(), board.target, []Hint{{ID: "hint-1", Content: "focus web"}}, []int{2}, nil, board.policy)
+	req := buildReasonContext(board.snapshot(), board.target, board.policy, Completion{Progress: 2, Total: 5})
 	prompt, err := (defaultReasonStrategy{}).Prompt(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(prompt, "At most 1") {
-		t.Fatalf("prompt missing intent cap:\n%s", prompt)
-	}
-	if !strings.Contains(prompt, "focus web") {
-		t.Fatalf("prompt missing hint:\n%s", prompt)
+	if !strings.Contains(prompt, "Authoritative progress: 2/5") {
+		t.Fatalf("prompt missing progress:\n%s", prompt)
 	}
 }
 
 func TestReasonPromptRequiresReportFile(t *testing.T) {
 	board := testBoard(t)
-	req := buildReasonContext(board.snapshot(), board.target, nil, []int{1}, nil, board.policy)
+	req := buildReasonContext(board.snapshot(), board.target, board.policy, Completion{})
 	prompt, err := (defaultReasonStrategy{}).Prompt(req)
 	if err != nil {
 		t.Fatal(err)
@@ -64,27 +61,27 @@ func TestReasonPromptRequiresReportFile(t *testing.T) {
 }
 
 func TestParseReasonReportStrictJSON(t *testing.T) {
-	req := ReasonRequest{FrontierVersion: 7, FreeSlots: []int{1}}
+	req := ReasonRequest{BoardRevision: 7, CanCreateIntent: true}
 	turn := TurnResult{Report: []byte(`{"intents":[{"from":["origin"],"description":"probe"}]}`)}
 	report, err := (defaultReasonStrategy{}).Parse(req, turn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.FrontierVersion != 7 || len(report.Intents) != 1 {
+	if report.BoardRevision != 7 || len(report.Intents) != 1 {
 		t.Fatalf("report = %+v", report)
 	}
 }
 
 func TestReasonStrategyRejectsExtraIntents(t *testing.T) {
-	req := ReasonRequest{FrontierVersion: 7, FreeSlots: []int{1}}
-	turn := TurnResult{Report: []byte(`{"intents":[{"from":["origin"],"description":"a"},{"from":["origin"],"description":"b"},{"from":["origin"],"description":"c"}]}`)}
+	req := ReasonRequest{BoardRevision: 7, CanCreateIntent: true}
+	turn := TurnResult{Report: []byte(`{"intents":[{"from":["origin"],"description":"a"},{"from":["origin"],"description":"b"}]}`)}
 	if _, err := (defaultReasonStrategy{}).Parse(req, turn); err == nil {
-		t.Fatal("three intents accepted for two free slots")
+		t.Fatal("two intents accepted for one slot")
 	}
 }
 
 func TestReasonParserRejectsNarrativeJSON(t *testing.T) {
-	req := ReasonRequest{FrontierVersion: 7, FreeSlots: []int{1}}
+	req := ReasonRequest{BoardRevision: 7, CanCreateIntent: true}
 	turn := TurnResult{Report: []byte("I will propose one direction.\n{\"intents\":[{\"from\":[\"origin\"],\"description\":\"probe\"}]}\nDone.")}
 	if _, err := (defaultReasonStrategy{}).Parse(req, turn); err == nil {
 		t.Fatal("narrative report accepted")
@@ -97,12 +94,12 @@ func TestReasonContextHonorsPolicyByteAndItemBounds(t *testing.T) {
 	board.policy.Context.MaxBoardBytes = 256
 	board.policy.Context.MaxClaimBytes = 40
 	for i := 0; i < 10; i++ {
-		if _, err := board.addClaim(Claim{Kind: ClaimNegative, Description: "this-description-is-long-but-valid"}); err != nil {
+		if _, err := board.addClaim(Claim{Kind: ClaimNegative, Description: "this-description-is-long-but-valid", ObservationIDs: []string{"obs-1"}}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	board.policy.Context.MaxClaimBytes = 12
-	req := buildReasonContext(board.snapshot(), board.target, []Hint{{ID: "hint", Content: "this hint is longer than the configured limit"}}, []int{1, 2}, nil, board.policy)
+	req := buildReasonContext(board.snapshot(), board.target, board.policy, Completion{})
 	if len(req.Claims) > board.policy.Context.MaxBoardItems {
 		t.Fatalf("claims = %d, want <= %d", len(req.Claims), board.policy.Context.MaxBoardItems)
 	}

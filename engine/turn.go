@@ -61,6 +61,10 @@ func runAgentTurn(ctx context.Context, session AgentSession, prompt string, limi
 			if !ok {
 				return TurnResult{}, fmt.Errorf("%w: agent event stream closed before settlement", ErrAgentUnavailable)
 			}
+			if limits.MaxAssistantBytes > 0 && len(event.Data) > limits.MaxAssistantBytes {
+				abortIfNeeded()
+				return TurnResult{}, fmt.Errorf("agent event limit exceeded: %d > %d", len(event.Data), limits.MaxAssistantBytes)
+			}
 			if sink != nil {
 				canonical, eventErr := NewEvent("", EventAgent, AgentEventPayload{NativeType: event.Type, Data: event.Data})
 				if eventErr != nil {
@@ -77,6 +81,10 @@ func runAgentTurn(ctx context.Context, session AgentSession, prompt string, limi
 			switch event.Kind {
 			case AgentEventToolStart:
 				if !event.WritesFile || !isReportPath(event.ToolPath) {
+					if limits.ReportOnly {
+						abortIfNeeded()
+						return TurnResult{}, fmt.Errorf("report-only turn attempted tool %q on %q", event.Tool, event.ToolPath)
+					}
 					toolCalls++
 					if limits.MaxToolCalls > 0 && toolCalls > limits.MaxToolCalls {
 						abortIfNeeded()

@@ -35,13 +35,10 @@ type (
 	ClaimKind                  = core.ClaimKind
 	ClaimProposal              = core.ClaimProposal
 	GoalCandidate              = core.GoalCandidate
-	Hint                       = core.Hint
-	HintCreatedPayload         = core.HintCreatedPayload
 	Intent                     = core.Intent
 	IntentAttempt              = core.IntentAttempt
 	IntentAttemptPayload       = core.IntentAttemptPayload
 	IntentAttemptPhase         = core.IntentAttemptPhase
-	IntentKind                 = core.IntentKind
 	IntentPayload              = core.IntentPayload
 	IntentProposal             = core.IntentProposal
 	IntentRejectedPayload      = core.IntentRejectedPayload
@@ -63,7 +60,6 @@ type (
 	Redactor                   = core.Redactor
 	ResourceSpec               = core.ResourceSpec
 	Result                     = core.Result
-	SweepRecord                = core.SweepRecord
 	RunCreatedPayload          = core.RunCreatedPayload
 	RunDescriptor              = core.RunDescriptor
 	RunFinalizedPayload        = core.RunFinalizedPayload
@@ -74,7 +70,7 @@ type (
 	RunProvisionedPayload      = core.RunProvisionedPayload
 	RunRecord                  = core.RunRecord
 	SessionResult              = core.SessionResult
-	Status                     = core.Status
+	SessionStatus              = core.SessionStatus
 	TargetBinding              = core.TargetBinding
 	TargetRuntime              = core.TargetRuntime
 	TargetSpec                 = core.TargetSpec
@@ -83,6 +79,7 @@ type (
 	TurnResult                 = core.TurnResult
 	Usage                      = core.Usage
 	Verdict                    = core.Verdict
+	VerdictAuthority           = core.VerdictAuthority
 	VerdictRecord              = core.VerdictRecord
 	VerifyRequest              = core.VerifyRequest
 )
@@ -90,17 +87,10 @@ type (
 const (
 	CurrentSchemaVersion = core.CurrentSchemaVersion
 
-	StatusQueued       = core.StatusQueued
-	StatusProvisioning = core.StatusProvisioning
-	StatusRunning      = core.StatusRunning
-	StatusFinalizing   = core.StatusFinalizing
-	StatusVerifying    = core.StatusVerifying
-	StatusSucceeded    = core.StatusSucceeded
-	StatusFailed       = core.StatusFailed
-	StatusCancelled    = core.StatusCancelled
-	StatusTimedOut     = core.StatusTimedOut
-	StatusInterrupted  = core.StatusInterrupted
-	StatusStagnated    = core.StatusStagnated
+	SessionRunning   = core.SessionRunning
+	SessionSucceeded = core.SessionSucceeded
+	SessionFailed    = core.SessionFailed
+	SessionCancelled = core.SessionCancelled
 
 	RunPhaseQueued       = core.RunPhaseQueued
 	RunPhaseProvisioning = core.RunPhaseProvisioning
@@ -109,12 +99,14 @@ const (
 	RunPhaseVerifying    = core.RunPhaseVerifying
 	RunPhaseTerminal     = core.RunPhaseTerminal
 
-	RunOutcomeSucceeded   = core.RunOutcomeSucceeded
-	RunOutcomeFailed      = core.RunOutcomeFailed
-	RunOutcomeCancelled   = core.RunOutcomeCancelled
-	RunOutcomeTimedOut    = core.RunOutcomeTimedOut
-	RunOutcomeInterrupted = core.RunOutcomeInterrupted
-	RunOutcomeStagnated   = core.RunOutcomeStagnated
+	RunOutcomeSucceeded      = core.RunOutcomeSucceeded
+	RunOutcomeFailed         = core.RunOutcomeFailed
+	RunOutcomeCancelled      = core.RunOutcomeCancelled
+	RunOutcomeTimedOut       = core.RunOutcomeTimedOut
+	RunOutcomeInterrupted    = core.RunOutcomeInterrupted
+	RunOutcomeStagnated      = core.RunOutcomeStagnated
+	VerdictAuthorityVerifier = core.VerdictAuthorityVerifier
+	VerdictAuthorityBackend  = core.VerdictAuthorityBackend
 
 	IsolationCallerManaged = core.IsolationCallerManaged
 	AgentRoleReasoner      = core.AgentRoleReasoner
@@ -132,8 +124,6 @@ const (
 	ClaimFinding  = core.ClaimFinding
 	ClaimNegative = core.ClaimNegative
 
-	IntentBootstrap = core.IntentBootstrap
-	IntentExplore   = core.IntentExplore
 	IntentOpen      = core.IntentOpen
 	IntentClaimed   = core.IntentClaimed
 	IntentConcluded = core.IntentConcluded
@@ -158,7 +148,6 @@ const (
 	EventAuthorityCompleted    = core.EventAuthorityCompleted
 	EventAuthorityObserveError = core.EventAuthorityObserveError
 	EventClaimCreated          = core.EventClaimCreated
-	EventHintCreated           = core.EventHintCreated
 	EventReasonStarted         = core.EventReasonStarted
 	EventReasonCompleted       = core.EventReasonCompleted
 	EventReasonRejected        = core.EventReasonRejected
@@ -180,9 +169,6 @@ var (
 	NewEvent                 = core.NewEvent
 	NewRedactor              = core.NewRedactor
 	NormalizeRunPolicy       = core.NormalizeRunPolicy
-	NormalizeRunState        = core.NormalizeRunState
-	RunStateFromStatus       = core.RunStateFromStatus
-	StatusForRunState        = core.StatusForRunState
 	TargetFingerprint        = core.TargetFingerprint
 	ValidateDescriptor       = core.ValidateDescriptor
 	ValidateAttemptReport    = core.ValidateAttemptReport

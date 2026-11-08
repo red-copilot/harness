@@ -39,10 +39,6 @@ type TargetRuntime struct {
 	// ComposeOverride is the generated file that adds harness labels to the
 	// project's services; Close removes it.
 	ComposeOverride string `json:"compose_override,omitempty" yaml:"compose_override,omitempty"`
-	ChallengeCode   string `json:"challenge_code,omitempty" yaml:"challenge_code,omitempty"`
-	BenchmarkURL    string `json:"benchmark_base_url,omitempty" yaml:"benchmark_base_url,omitempty"`
-	Hint            string `json:"hint,omitempty" yaml:"hint,omitempty"`
-	HintUsed        bool   `json:"hint_used,omitempty" yaml:"hint_used,omitempty"`
 }
 
 // TargetSpec is the caller-owned, stable authorization identity of one logical

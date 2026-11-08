@@ -6,23 +6,6 @@ import (
 	"time"
 )
 
-// Status is the lifecycle state of a run.
-type Status string
-
-const (
-	StatusQueued       Status = "queued"
-	StatusProvisioning Status = "provisioning"
-	StatusRunning      Status = "running"
-	StatusFinalizing   Status = "finalizing"
-	StatusVerifying    Status = "verifying"
-	StatusSucceeded    Status = "succeeded"
-	StatusFailed       Status = "failed"
-	StatusCancelled    Status = "cancelled"
-	StatusTimedOut     Status = "timed_out"
-	StatusInterrupted  Status = "interrupted"
-	StatusStagnated    Status = "stagnated"
-)
-
 // RunPhase is the non-terminal lifecycle stage.
 type RunPhase string
 
@@ -46,59 +29,6 @@ const (
 	RunOutcomeInterrupted RunOutcome = "interrupted"
 	RunOutcomeStagnated   RunOutcome = "stagnated"
 )
-
-// StatusForRunState projects the canonical phase/outcome pair to the legacy status field.
-func StatusForRunState(phase RunPhase, outcome RunOutcome) Status {
-	if phase == RunPhaseTerminal {
-		return Status(outcome)
-	}
-	return Status(phase)
-}
-
-// RunStateFromStatus maps a legacy status to the canonical state pair.
-func RunStateFromStatus(status Status) (RunPhase, RunOutcome) {
-	switch status {
-	case StatusQueued:
-		return RunPhaseQueued, ""
-	case StatusProvisioning:
-		return RunPhaseProvisioning, ""
-	case StatusRunning:
-		return RunPhaseRunning, ""
-	case StatusFinalizing:
-		return RunPhaseFinalizing, ""
-	case StatusVerifying:
-		return RunPhaseVerifying, ""
-	case StatusSucceeded:
-		return RunPhaseTerminal, RunOutcomeSucceeded
-	case StatusFailed:
-		return RunPhaseTerminal, RunOutcomeFailed
-	case StatusCancelled:
-		return RunPhaseTerminal, RunOutcomeCancelled
-	case StatusTimedOut:
-		return RunPhaseTerminal, RunOutcomeTimedOut
-	case StatusInterrupted:
-		return RunPhaseTerminal, RunOutcomeInterrupted
-	case StatusStagnated:
-		return RunPhaseTerminal, RunOutcomeStagnated
-	default:
-		return "", ""
-	}
-}
-
-// NormalizeRunState validates and derives the compatibility status projection.
-func NormalizeRunState(phase RunPhase, outcome RunOutcome, status Status) (RunPhase, RunOutcome, Status, error) {
-	if phase == "" && outcome == "" && status != "" {
-		phase, outcome = RunStateFromStatus(status)
-	}
-	if err := ValidateRunState(phase, outcome); err != nil {
-		return "", "", "", err
-	}
-	derived := StatusForRunState(phase, outcome)
-	if status != "" && status != derived {
-		return "", "", "", fmt.Errorf("run status %q conflicts with phase=%q outcome=%q", status, phase, outcome)
-	}
-	return phase, outcome, derived, nil
-}
 
 // ValidateRunState enforces the phase/outcome invariant.
 func ValidateRunState(phase RunPhase, outcome RunOutcome) error {
@@ -185,7 +115,6 @@ type Result struct {
 	Verdict        *Verdict        `json:"verdict,omitempty"`
 	Claims         []Claim         `json:"claims,omitempty"`
 	Intents        []Intent        `json:"intents,omitempty"`
-	Hints          []Hint          `json:"hints,omitempty"`
 	IntentAttempts []IntentAttempt `json:"intent_attempts,omitempty"`
 	Observations   []Observation   `json:"observations,omitempty"`
 	Artifacts      []Artifact      `json:"artifacts,omitempty"`
@@ -197,7 +126,7 @@ type Result struct {
 }
 
 // CurrentSchemaVersion is the only descriptor schema this build accepts.
-const CurrentSchemaVersion = 3
+const CurrentSchemaVersion = 4
 
 // ValidateDescriptor rejects descriptors from unknown schema generations.
 func ValidateDescriptor(descriptor RunDescriptor) error {
@@ -210,10 +139,13 @@ func ValidateDescriptor(descriptor RunDescriptor) error {
 	if descriptor.Target.ID == "" {
 		return fmt.Errorf("descriptor target id is required")
 	}
+	if descriptor.Reasoner.ID == "" {
+		return fmt.Errorf("descriptor reasoner id is required")
+	}
 	if descriptor.Executor.ID == "" {
 		return fmt.Errorf("descriptor executor id is required")
 	}
-	return nil
+	return ValidateRunPolicy(NormalizeRunPolicy(descriptor.Policy))
 }
 
 // RunDescriptor is the serializable portion of a Run.
@@ -224,17 +156,6 @@ type RunDescriptor struct {
 	Reasoner      AgentDescriptor `json:"reasoner" yaml:"reasoner"`
 	Executor      AgentDescriptor `json:"executor" yaml:"executor"`
 	Policy        RunPolicy       `json:"policy" yaml:"policy"`
-}
-
-// SweepRecord is a persisted batch summary. Sweeps orchestrate ordinary Runs
-// and do not own a second control state machine.
-type SweepRecord struct {
-	ID         string          `json:"id"`
-	Status     Status          `json:"status"`
-	Result     json.RawMessage `json:"result,omitempty"`
-	Error      string          `json:"error,omitempty"`
-	CreatedAt  time.Time       `json:"created_at"`
-	FinishedAt *time.Time      `json:"finished_at,omitempty"`
 }
 
 // Event and LogRecord are canonical append-only audit records.
@@ -273,12 +194,13 @@ type RunRecord struct {
 }
 
 type VerdictRecord struct {
-	RunID     string          `json:"run_id"`
-	Success   bool            `json:"success"`
-	Score     float64         `json:"score,omitempty"`
-	Message   string          `json:"message,omitempty"`
-	Evidence  json.RawMessage `json:"evidence,omitempty"`
-	CreatedAt time.Time       `json:"created_at"`
+	RunID     string           `json:"run_id"`
+	Authority VerdictAuthority `json:"authority"`
+	Success   bool             `json:"success"`
+	Score     float64          `json:"score,omitempty"`
+	Message   string           `json:"message,omitempty"`
+	Evidence  json.RawMessage  `json:"evidence,omitempty"`
+	CreatedAt time.Time        `json:"created_at"`
 }
 
 type LogEvent struct {

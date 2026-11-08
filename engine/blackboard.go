@@ -3,23 +3,20 @@ package engine
 import (
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 )
 
-// ErrFrontierCapacity marks a proposal rejected by the two-slot frontier.
-var ErrFrontierCapacity = errors.New("frontier capacity exceeded")
+// ErrIntentCapacity marks a proposal rejected by the single Executor slot.
+var ErrIntentCapacity = errors.New("intent capacity exceeded")
 
 type boardSnapshot struct {
-	Task            Task
-	Claims          []Claim
-	Intents         []Intent
-	Hints           []Hint
-	Attempts        []IntentAttempt
-	Observations    []Observation
-	Artifacts       []Artifact
-	FreeSlots       []int
-	FrontierVersion uint64
+	Task          Task
+	Claims        []Claim
+	Intents       []Intent
+	Attempts      []IntentAttempt
+	Observations  []Observation
+	Artifacts     []Artifact
+	BoardRevision uint64
 }
 
 // boardState is the controller-owned, single-writer Claim/Intent blackboard.
@@ -30,7 +27,6 @@ type boardState struct {
 	policy    RunPolicy
 	claims    []Claim
 	intents   []Intent
-	hints     []Hint
 	attempts  []IntentAttempt
 	obs       []Observation
 	artifacts []Artifact
@@ -48,24 +44,12 @@ func newBoardState(runID string, spec RunSpec, target TargetBinding) *boardState
 		Claim{ID: goalID, RunID: runID, TaskID: spec.Task.ID, Kind: ClaimGoal, Description: spec.Task.Objective, CreatedAt: time.Now().UTC()},
 	)
 	board.version = 1
-	if target.Runtime != nil && target.Runtime.Hint != "" {
-		board.seq++
-		content := target.Runtime.Hint
-		if limit := board.policy.Context.MaxHintBytes; limit > 0 && len(content) > limit {
-			content = content[:limit]
-		}
-		board.hints = append(board.hints, Hint{ID: fmt.Sprintf("%s:hint:%d", runID, board.seq), RunID: runID, Content: content, Creator: "tsec", CreatedAt: time.Now().UTC()})
-	}
 	return board
 }
 
 func (b *boardState) nextID(kind string) string {
 	b.seq++
 	return fmt.Sprintf("%s:%s:%d", b.runID, kind, b.seq)
-}
-
-func (b *boardState) maxOpen() int {
-	return 1
 }
 
 func (b *boardState) maxTotal() int {
@@ -76,42 +60,15 @@ func (b *boardState) maxTotal() int {
 }
 
 func (b *boardState) snapshot() boardSnapshot {
-	out := boardSnapshot{
-		Task:            b.task,
-		Claims:          cloneClaims(b.claims),
-		Intents:         cloneIntents(b.intents),
-		Hints:           append([]Hint(nil), b.hints...),
-		Attempts:        append([]IntentAttempt(nil), b.attempts...),
-		Observations:    cloneObservations(b.obs),
-		Artifacts:       append([]Artifact(nil), b.artifacts...),
-		FreeSlots:       b.freeSlots(),
-		FrontierVersion: b.version,
+	return boardSnapshot{
+		Task:          b.task,
+		Claims:        cloneClaims(b.claims),
+		Intents:       cloneIntents(b.intents),
+		Attempts:      append([]IntentAttempt(nil), b.attempts...),
+		Observations:  cloneObservations(b.obs),
+		Artifacts:     append([]Artifact(nil), b.artifacts...),
+		BoardRevision: b.version,
 	}
-	return out
-}
-
-func (b *boardState) addHint(hint Hint, maxBytes int) (Hint, error) {
-	content := strings.TrimSpace(hint.Content)
-	if content == "" {
-		return Hint{}, errors.New("hint content is required")
-	}
-	if maxBytes > 0 && len(content) > maxBytes {
-		return Hint{}, fmt.Errorf("hint exceeds %d bytes", maxBytes)
-	}
-	if hint.ID == "" {
-		hint.ID = b.nextID("hint")
-	}
-	hint.RunID = b.runID
-	hint.Content = content
-	if hint.Creator == "" {
-		hint.Creator = "operator"
-	}
-	if hint.CreatedAt.IsZero() {
-		hint.CreatedAt = time.Now().UTC()
-	}
-	b.hints = append(b.hints, hint)
-	b.version++
-	return hint, nil
 }
 
 func (b *boardState) addClaim(claim Claim) (Claim, error) {
@@ -157,8 +114,8 @@ func (b *boardState) createIntent(intent Intent) (Intent, error) {
 	if intent.State != IntentOpen {
 		return Intent{}, fmt.Errorf("new intent must be open")
 	}
-	if b.openCount()+b.claimedCount() >= b.maxOpen() {
-		return Intent{}, fmt.Errorf("%w: %d open/claimed intents", ErrFrontierCapacity, b.openCount()+b.claimedCount())
+	if b.openCount()+b.claimedCount() >= 1 {
+		return Intent{}, fmt.Errorf("%w: %d open/claimed intents", ErrIntentCapacity, b.openCount()+b.claimedCount())
 	}
 	if len(b.intents) >= b.maxTotal() {
 		return Intent{}, fmt.Errorf("max total intents reached")
@@ -190,7 +147,7 @@ func (b *boardState) validateIntentClaims(intent Intent) error {
 	return nil
 }
 
-func (b *boardState) claimIntent(intentID string, slot int, executorID string, at time.Time) (Intent, error) {
+func (b *boardState) claimIntent(intentID, executorID string, at time.Time) (Intent, error) {
 	intent := b.findIntent(intentID)
 	if intent == nil {
 		return Intent{}, fmt.Errorf("intent %q not found", intentID)
@@ -198,17 +155,13 @@ func (b *boardState) claimIntent(intentID string, slot int, executorID string, a
 	if err := ValidateIntentTransition(intent.State, IntentClaimed); err != nil {
 		return Intent{}, err
 	}
-	if slot != 1 {
-		return Intent{}, fmt.Errorf("slot must be 1")
-	}
-	if containsInt(b.freeSlots(), slot) == false {
-		return Intent{}, fmt.Errorf("slot %d is occupied", slot)
+	if b.claimedCount() > 0 {
+		return Intent{}, fmt.Errorf("%w: executor slot is occupied", ErrIntentCapacity)
 	}
 	if executorID == "" {
 		return Intent{}, fmt.Errorf("executor id is required")
 	}
 	intent.State = IntentClaimed
-	intent.Slot = slot
 	intent.ExecutorID = executorID
 	intent.ClaimedAt = timePtr(at)
 	b.version++
@@ -224,7 +177,6 @@ func (b *boardState) returnIntentToOpen(intentID string, at time.Time) (Intent, 
 		return Intent{}, err
 	}
 	intent.State = IntentOpen
-	intent.Slot = 0
 	intent.ExecutorID = ""
 	intent.ClaimedAt = nil
 	b.version++
@@ -285,21 +237,7 @@ func (b *boardState) claimedCount() int {
 	return count
 }
 
-func (b *boardState) frontierVersion() uint64 { return b.version }
-
-func (b *boardState) freeSlots() []int {
-	occupied := map[int]bool{}
-	for _, intent := range b.intents {
-		if intent.State == IntentClaimed {
-			occupied[intent.Slot] = true
-		}
-	}
-	out := make([]int, 0, 1)
-	if !occupied[1] {
-		out = append(out, 1)
-	}
-	return out
-}
+func (b *boardState) boardRevision() uint64 { return b.version }
 
 func (b *boardState) findIntent(id string) *Intent {
 	for i := range b.intents {
@@ -321,41 +259,27 @@ func (b *boardState) findClaim(id string) *Claim {
 
 // admitReasonIntents validates a complete Reason proposal before mutating the
 // board, so stale or oversized proposals cannot leave partial work behind.
-func admitReasonIntents(board *boardState, report ReasonReport, freeSlots []int) ([]Intent, error) {
-	if report.FrontierVersion != board.frontierVersion() {
-		return nil, fmt.Errorf("%w: stale frontier version %d, want %d", ErrFrontierCapacity, report.FrontierVersion, board.frontierVersion())
-	}
-	if len(freeSlots) > board.maxOpen() {
-		return nil, fmt.Errorf("%w: too many free slots", ErrFrontierCapacity)
-	}
-	seen := map[int]bool{}
-	for _, slot := range freeSlots {
-		if slot != 1 && slot != 2 {
-			return nil, fmt.Errorf("invalid slot %d", slot)
-		}
-		if seen[slot] {
-			return nil, fmt.Errorf("duplicate slot %d", slot)
-		}
-		seen[slot] = true
+func admitReasonIntents(board *boardState, report ReasonReport, canCreateIntent bool) ([]Intent, error) {
+	if report.BoardRevision != board.boardRevision() {
+		return nil, fmt.Errorf("%w: stale board revision %d, want %d", ErrIntentCapacity, report.BoardRevision, board.boardRevision())
 	}
 	if board.openCount() > 0 {
-		return nil, fmt.Errorf("%w: reason cannot create while open intents exist", ErrFrontierCapacity)
+		return nil, fmt.Errorf("%w: reason cannot create while an open intent exists", ErrIntentCapacity)
 	}
-	if err := ValidateReasonReport(report, len(freeSlots)); err != nil {
+	if err := ValidateReasonReport(report, canCreateIntent); err != nil {
 		return nil, err
 	}
 	if report.GoalCandidate != nil {
 		return nil, nil
 	}
-	if len(freeSlots) > 0 && len(report.Intents) == 0 {
-		return nil, fmt.Errorf("reason produced no intents for free slots")
+	if canCreateIntent && len(report.Intents) == 0 {
+		return nil, fmt.Errorf("reason produced no intents for the free slot")
 	}
 	planned := make([]Intent, 0, len(report.Intents))
-	for i, proposal := range report.Intents {
+	for _, proposal := range report.Intents {
 		intent := Intent{
 			ID:           board.nextID("intent"),
 			RunID:        board.runID,
-			Kind:         IntentExplore,
 			FromClaimIDs: append([]string(nil), proposal.From...),
 			Description:  proposal.Description,
 			State:        IntentOpen,
@@ -368,28 +292,16 @@ func admitReasonIntents(board *boardState, report ReasonReport, freeSlots []int)
 			return nil, err
 		}
 		planned = append(planned, intent)
-		if i+1 > len(freeSlots) {
-			return nil, fmt.Errorf("%w: proposal exceeds free slots", ErrFrontierCapacity)
-		}
 	}
 	if len(board.intents)+len(planned) > board.maxTotal() {
 		return nil, fmt.Errorf("max total intents reached")
 	}
-	if board.openCount()+board.claimedCount()+len(planned) > board.maxOpen() {
-		return nil, fmt.Errorf("%w: proposal exceeds open capacity", ErrFrontierCapacity)
+	if board.openCount()+board.claimedCount()+len(planned) > 1 {
+		return nil, fmt.Errorf("%w: proposal exceeds open capacity", ErrIntentCapacity)
 	}
 	board.intents = append(board.intents, planned...)
 	board.version++
 	return planned, nil
-}
-
-func containsInt(values []int, target int) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
 }
 
 func timePtr(value time.Time) *time.Time {

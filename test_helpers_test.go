@@ -25,13 +25,11 @@ type memoryStore struct {
 	verdicts             map[string]harness.VerdictRecord
 	claims               []harness.Claim
 	intents              []harness.Intent
-	hints                []harness.Hint
 	intentAttempts       []harness.IntentAttempt
 	boardObservations    []harness.Observation
 	artifacts            []harness.Artifact
 	artifactData         map[string][]byte
 	markInterruptedCalls int
-	statusLog            []harness.Status
 	boardRevision        uint64
 }
 
@@ -43,21 +41,18 @@ func (s *memoryStore) CreateRun(_ context.Context, record harness.RunRecord) err
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.runs[record.ID] = record
-	s.statusLog = append(s.statusLog, harness.StatusForRunState(record.Phase, record.Outcome))
 	return nil
 }
 func (s *memoryStore) UpdateRun(_ context.Context, record harness.RunRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.runs[record.ID] = record
-	s.statusLog = append(s.statusLog, harness.StatusForRunState(record.Phase, record.Outcome))
 	return nil
 }
 func (s *memoryStore) Finalize(_ context.Context, record harness.FinalizationRecord) (harness.Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.runs[record.Run.ID] = record.Run
-	s.statusLog = append(s.statusLog, harness.StatusForRunState(record.Run.Phase, record.Run.Outcome))
 	if record.Verdict != nil {
 		s.verdicts[record.Verdict.RunID] = *record.Verdict
 	}
@@ -147,7 +142,6 @@ func (s *memoryStore) Commit(_ context.Context, commit harness.Commit) ([]harnes
 			s.intents = append(s.intents, intent)
 		}
 	}
-	s.hints = append(s.hints, commit.Hints...)
 	for _, attempt := range commit.Attempts {
 		replaced := false
 		for i := range s.intentAttempts {
@@ -209,23 +203,6 @@ func (s *memoryStore) ListIntents(_ context.Context, runID string) ([]harness.In
 	}
 	return out, nil
 }
-func (s *memoryStore) SaveHint(_ context.Context, hint harness.Hint) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.hints = append(s.hints, hint)
-	return nil
-}
-func (s *memoryStore) ListHints(_ context.Context, runID string) ([]harness.Hint, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var out []harness.Hint
-	for _, hint := range s.hints {
-		if hint.RunID == runID {
-			out = append(out, hint)
-		}
-	}
-	return out, nil
-}
 func (s *memoryStore) SaveIntentAttempt(_ context.Context, attempt harness.IntentAttempt) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -272,8 +249,8 @@ func (s *memoryStore) SaveArtifact(_ context.Context, artifact harness.Artifact)
 	s.artifacts = append(s.artifacts, artifact)
 	return nil
 }
-func (s *memoryStore) OpenArtifact(context.Context, string) (io.ReadCloser, error) {
-	return io.NopCloser(bytes.NewReader(nil)), nil
+func (s *memoryStore) OpenArtifact(ctx context.Context, id string) (io.ReadCloser, error) {
+	return s.Open(ctx, id)
 }
 
 func (s *memoryStore) ListArtifacts(_ context.Context, runID string) ([]harness.Artifact, error) {
@@ -390,13 +367,43 @@ func promptReportSession(workspace, report string) *fakeSession {
 	return s
 }
 
+func promptReportSessionWithEvidence(workspace, report string, files map[string]string) *fakeSession {
+	s := promptSession("")
+	s.prompt = func(ctx context.Context, _ string) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if err := os.MkdirAll(workspace, 0o700); err != nil {
+			return err
+		}
+		for name, content := range files {
+			if err := os.WriteFile(filepath.Join(workspace, name), []byte(content), 0o600); err != nil {
+				return err
+			}
+		}
+		if err := os.WriteFile(filepath.Join(workspace, "report.json"), []byte(report), 0o600); err != nil {
+			return err
+		}
+		s.events <- harness.AgentEvent{Kind: harness.AgentEventMessage, Text: "report written"}
+		s.events <- harness.AgentEvent{Kind: harness.AgentEventSettled}
+		return nil
+	}
+	return s
+}
+
+func evidenceBackedReport(kind, description string) string {
+	return `{"phase":"concluded","claim":{"kind":"` + kind + `","description":"` + description + `","observation_refs":["obs-1"]},"observations":[{"local_id":"obs-1","kind":"test","summary":"` + description + `","target":"target-1","evidence_files":["evidence.txt"]}]}`
+}
+
 func integrationSpec(t *testing.T, store harness.Store) harness.RunSpec {
 	t.Helper()
 	reasonerRuntime := &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
 		return promptReportSession(req.WorkspaceDir, `{"frontier_version":1,"intents":[{"from":["origin"],"description":"probe"}]}`)
 	}}
 	executorRuntime := &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
-		return promptReportSession(req.WorkspaceDir, `{"phase":"concluded","claim":{"kind":"negative","description":"no signal"}}`)
+		return promptReportSessionWithEvidence(req.WorkspaceDir, evidenceBackedReport("negative", "no signal"), map[string]string{"evidence.txt": "no signal"})
 	}}
 	policy := harness.DefaultRunPolicy()
 	policy.Exploration.MaxAttemptsPerIntent = 1
@@ -496,7 +503,7 @@ type noIntentReasonStrategy struct{}
 
 func (noIntentReasonStrategy) Prompt(harness.ReasonRequest) (string, error) { return "reason", nil }
 func (noIntentReasonStrategy) Parse(req harness.ReasonRequest, _ harness.TurnResult) (harness.ReasonReport, error) {
-	return harness.ReasonReport{FrontierVersion: req.FrontierVersion}, nil
+	return harness.ReasonReport{BoardRevision: req.BoardRevision}, nil
 }
 
 func (s *memoryStore) GetBoardRevision(_ context.Context, _ string) (uint64, error) {

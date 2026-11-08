@@ -29,14 +29,6 @@ type Claim struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 
-// IntentKind distinguishes the initial direct solve from graph exploration.
-type IntentKind string
-
-const (
-	IntentBootstrap IntentKind = "bootstrap"
-	IntentExplore   IntentKind = "explore"
-)
-
 // IntentState is the lifecycle of one declared exploration direction.
 type IntentState string
 
@@ -52,11 +44,9 @@ const (
 type Intent struct {
 	ID            string      `json:"id"`
 	RunID         string      `json:"run_id"`
-	Kind          IntentKind  `json:"kind"`
 	FromClaimIDs  []string    `json:"from_claim_ids"`
 	Description   string      `json:"description"`
 	State         IntentState `json:"state"`
-	Slot          int         `json:"slot,omitempty"`
 	ExecutorID    string      `json:"executor_id,omitempty"`
 	AttemptIDs    []string    `json:"attempt_ids,omitempty"`
 	ResultClaimID string      `json:"result_claim_id,omitempty"`
@@ -64,15 +54,6 @@ type Intent struct {
 	ClaimedAt     *time.Time  `json:"claimed_at,omitempty"`
 	ConcludedAt   *time.Time  `json:"concluded_at,omitempty"`
 	Error         string      `json:"error,omitempty"`
-}
-
-// Hint is read-only human or platform guidance.
-type Hint struct {
-	ID        string    `json:"id"`
-	RunID     string    `json:"run_id"`
-	Content   string    `json:"content"`
-	Creator   string    `json:"creator"`
-	CreatedAt time.Time `json:"created_at"`
 }
 
 // IntentAttemptPhase describes execution of one Intent attempt.
@@ -92,7 +73,6 @@ type IntentAttempt struct {
 	ID         string             `json:"id"`
 	RunID      string             `json:"run_id"`
 	IntentID   string             `json:"intent_id"`
-	Slot       int                `json:"slot"`
 	SessionID  string             `json:"session_id"`
 	Phase      IntentAttemptPhase `json:"phase"`
 	Conclusion string             `json:"conclusion,omitempty"`
@@ -132,9 +112,9 @@ type GoalCandidate struct {
 
 // ReasonReport is the strict Reason task output.
 type ReasonReport struct {
-	FrontierVersion uint64           `json:"frontier_version"`
-	Intents         []IntentProposal `json:"intents,omitempty"`
-	GoalCandidate   *GoalCandidate   `json:"goal_candidate,omitempty"`
+	BoardRevision uint64           `json:"board_revision"`
+	Intents       []IntentProposal `json:"intents,omitempty"`
+	GoalCandidate *GoalCandidate   `json:"goal_candidate,omitempty"`
 }
 
 // ReasonRequest is the bounded Reason context.
@@ -143,25 +123,22 @@ type ReasonRequest struct {
 	Target          TargetBinding `json:"target"`
 	Claims          []Claim       `json:"claims"`
 	Intents         []Intent      `json:"intents"`
-	Hints           []Hint        `json:"hints"`
-	FreeSlots       []int         `json:"free_slots"`
-	FrontierVersion uint64        `json:"frontier_version"`
-	RecentClaims    []Claim       `json:"recent_claims,omitempty"`
+	CanCreateIntent bool          `json:"can_create_intent"`
+	BoardRevision   uint64        `json:"board_revision"`
 	Progress        Completion    `json:"progress"`
 	Policy          RunPolicy     `json:"-"`
 }
 
 // ExploreRequest is the bounded Explore context.
 type ExploreRequest struct {
-	Task            Task          `json:"task"`
-	Target          TargetBinding `json:"target"`
-	Intent          Intent        `json:"intent"`
-	Claims          []Claim       `json:"claims"`
-	Hints           []Hint        `json:"hints"`
-	Budget          AttemptBudget `json:"budget"`
-	WorkspaceDir    string        `json:"workspace_dir"`
-	MaxReportBytes  int64         `json:"max_report_bytes"`
-	FrontierVersion uint64        `json:"frontier_version"`
+	Task           Task          `json:"task"`
+	Target         TargetBinding `json:"target"`
+	Intent         Intent        `json:"intent"`
+	Claims         []Claim       `json:"claims"`
+	Budget         AttemptBudget `json:"budget"`
+	WorkspaceDir   string        `json:"workspace_dir"`
+	MaxReportBytes int64         `json:"max_report_bytes"`
+	BoardRevision  uint64        `json:"board_revision"`
 }
 
 // ReasonStrategy produces and parses one Reason turn.
@@ -194,12 +171,10 @@ func ValidateClaim(claim Claim) error {
 	switch claim.Kind {
 	case ClaimOrigin, ClaimGoal:
 		return nil
-	case ClaimFinding:
+	case ClaimFinding, ClaimNegative:
 		if len(claim.ObservationIDs) == 0 {
-			return fmt.Errorf("finding claim requires observations")
+			return fmt.Errorf("%s claim requires observations", claim.Kind)
 		}
-	case ClaimNegative:
-		return nil
 	default:
 		return fmt.Errorf("unknown claim kind %q", claim.Kind)
 	}
@@ -234,17 +209,11 @@ func ValidateIntent(intent Intent) error {
 	if strings.TrimSpace(intent.ID) == "" || strings.TrimSpace(intent.RunID) == "" {
 		return fmt.Errorf("intent id and run_id are required")
 	}
-	if intent.Kind != IntentBootstrap && intent.Kind != IntentExplore {
-		return fmt.Errorf("unknown intent kind %q", intent.Kind)
-	}
 	if len(intent.FromClaimIDs) == 0 || strings.TrimSpace(intent.Description) == "" {
 		return fmt.Errorf("intent requires source claims and description")
 	}
 	if intent.State != IntentOpen && intent.State != IntentClaimed && intent.State != IntentConcluded && intent.State != IntentAbandoned {
 		return fmt.Errorf("unknown intent state %q", intent.State)
-	}
-	if intent.State == IntentClaimed && (intent.Slot != 1 && intent.Slot != 2) {
-		return fmt.Errorf("claimed intent requires slot 1")
 	}
 	if intent.State == IntentConcluded && strings.TrimSpace(intent.ResultClaimID) == "" {
 		return fmt.Errorf("concluded intent requires result claim")
@@ -253,13 +222,13 @@ func ValidateIntent(intent Intent) error {
 }
 
 // ValidateReasonReport rejects reports that could create more work than the
-// controller can admit.
-func ValidateReasonReport(report ReasonReport, freeSlots int) error {
-	if freeSlots < 0 || freeSlots > 2 {
-		return fmt.Errorf("free slots must be between 0 and 2")
+// single Executor slot can admit.
+func ValidateReasonReport(report ReasonReport, canCreateIntent bool) error {
+	if !canCreateIntent && len(report.Intents) > 0 {
+		return fmt.Errorf("reason proposed an intent while the slot is occupied")
 	}
-	if len(report.Intents) > freeSlots {
-		return fmt.Errorf("reason proposed %d intents for %d free slots", len(report.Intents), freeSlots)
+	if len(report.Intents) > 1 {
+		return fmt.Errorf("reason proposed %d intents for one slot", len(report.Intents))
 	}
 	if len(report.Intents) > 0 && report.GoalCandidate != nil {
 		return fmt.Errorf("reason cannot propose intents and a goal candidate together")
@@ -290,12 +259,32 @@ func ValidateAttemptReport(report AttemptReport) error {
 		}
 		return fmt.Errorf("concluded explore report requires a claim")
 	}
-	switch report.Claim.Kind {
-	case ClaimFinding:
-		if len(report.Claim.ObservationRefs) == 0 {
-			return fmt.Errorf("finding claim requires observation refs")
+	localIDs := make(map[string]struct{}, len(report.Observations))
+	for i, observation := range report.Observations {
+		localID := strings.TrimSpace(observation.LocalID)
+		if localID == "" {
+			return fmt.Errorf("observation %d local_id is required", i)
 		}
-	case ClaimNegative:
+		if _, exists := localIDs[localID]; exists {
+			return fmt.Errorf("observation local_id %q is duplicated", localID)
+		}
+		localIDs[localID] = struct{}{}
+	}
+	switch report.Claim.Kind {
+	case ClaimFinding, ClaimNegative:
+		if len(report.Claim.ObservationRefs) == 0 {
+			return fmt.Errorf("%s claim requires observation refs", report.Claim.Kind)
+		}
+		seenRefs := make(map[string]struct{}, len(report.Claim.ObservationRefs))
+		for _, ref := range report.Claim.ObservationRefs {
+			if _, exists := localIDs[ref]; !exists {
+				return fmt.Errorf("%s claim references unknown observation %q", report.Claim.Kind, ref)
+			}
+			if _, exists := seenRefs[ref]; exists {
+				return fmt.Errorf("%s claim observation ref %q is duplicated", report.Claim.Kind, ref)
+			}
+			seenRefs[ref] = struct{}{}
+		}
 	default:
 		return fmt.Errorf("explore claim kind %q is not allowed", report.Claim.Kind)
 	}

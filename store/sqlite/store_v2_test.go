@@ -104,7 +104,7 @@ func TestCommitRoundTripsAndAppendsIntentVersions(t *testing.T) {
 	if err := store.CreateRun(ctx, harness.RunRecord{ID: "run-1", Phase: harness.RunPhaseRunning, CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	intent := harness.Intent{ID: "intent-1", RunID: "run-1", Kind: harness.IntentExplore, FromClaimIDs: []string{"origin"}, Description: "probe", State: harness.IntentOpen, CreatedAt: now}
+	intent := harness.Intent{ID: "intent-1", RunID: "run-1", FromClaimIDs: []string{"origin"}, Description: "probe", State: harness.IntentOpen, CreatedAt: now}
 	event, err := harness.NewEvent("run-1", harness.EventIntentCreated, harness.IntentPayload{Intent: intent})
 	if err != nil {
 		t.Fatal(err)
@@ -113,9 +113,8 @@ func TestCommitRoundTripsAndAppendsIntentVersions(t *testing.T) {
 		t.Fatal(err)
 	}
 	intent.State = harness.IntentClaimed
-	intent.Slot = 1
 	intent.ExecutorID = "executor-1"
-	if _, err := store.Commit(ctx, harness.Commit{RunID: "run-1", Revision: 2, Intents: []harness.Intent{intent}}); err != nil {
+	if _, err := store.Commit(ctx, harness.Commit{RunID: "run-1", ExpectedRevision: 1, Revision: 2, Intents: []harness.Intent{intent}}); err != nil {
 		t.Fatal(err)
 	}
 	items, err := store.ListIntents(ctx, "run-1")
@@ -135,6 +134,28 @@ func TestCommitRoundTripsAndAppendsIntentVersions(t *testing.T) {
 	}
 	if commits != 2 {
 		t.Fatalf("commits = %d, want 2", commits)
+	}
+}
+
+func TestCommitRejectsStaleBoardRevision(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "harness.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if err := store.CreateRun(ctx, harness.RunRecord{ID: "run-1", Phase: harness.RunPhaseRunning, CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Commit(ctx, harness.Commit{RunID: "run-1", ExpectedRevision: 0, Revision: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Commit(ctx, harness.Commit{RunID: "run-1", ExpectedRevision: 0, Revision: 2}); err == nil {
+		t.Fatal("stale expected revision accepted")
+	}
+	revision, err := store.GetBoardRevision(ctx, "run-1")
+	if err != nil || revision != 1 {
+		t.Fatalf("revision = %d err=%v, want 1", revision, err)
 	}
 }
 
@@ -194,13 +215,13 @@ func TestFinalizeIsAtomicAndTerminalWritesAreRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	verdict := &harness.VerdictRecord{RunID: "run-1", Success: true, Message: "ok", CreatedAt: now}
+	verdict := &harness.VerdictRecord{RunID: "run-1", Authority: harness.VerdictAuthorityVerifier, Success: true, Message: "ok", CreatedAt: now}
 	record := harness.RunRecord{ID: "run-1", Phase: harness.RunPhaseTerminal, Outcome: harness.RunOutcomeSucceeded, Result: json.RawMessage(`{"status":"succeeded"}`), CreatedAt: now, FinishedAt: &now}
 	if _, err := store.Finalize(ctx, harness.FinalizationRecord{Run: record, Verdict: verdict, Event: event}); err != nil {
 		t.Fatal(err)
 	}
 	stored, err := store.GetVerdict(ctx, "run-1")
-	if err != nil || !stored.Success {
+	if err != nil || !stored.Success || stored.Authority != harness.VerdictAuthorityVerifier {
 		t.Fatalf("verdict = %+v err=%v", stored, err)
 	}
 	late, _ := harness.NewEvent("run-1", harness.EventAgent, harness.AgentEventPayload{NativeType: "late"})

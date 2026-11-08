@@ -199,17 +199,21 @@ func ArchiveAttemptEvidence(ctx context.Context, store ArtifactStore, redactor R
 			if err != nil {
 				return nil, &ArtifactStoreError{Err: fmt.Errorf("store artifact %q: %w", file.name, err)}
 			}
-			if artifact.ID == "" || artifact.SHA256 == "" {
-				expectedID := ArtifactContentID(file.content)
-				if artifact.ID == "" {
-					artifact.ID = expectedID
-				}
-				if artifact.SHA256 == "" {
-					artifact.SHA256 = expectedID
-				}
+			expectedID := ArtifactContentID(file.content)
+			if artifact.ID == "" {
+				artifact.ID = expectedID
+			} else if artifact.ID != expectedID {
+				return nil, &ArtifactStoreError{Err: fmt.Errorf("artifact %q identity %q does not match content %q", file.name, artifact.ID, expectedID)}
+			}
+			if artifact.SHA256 == "" {
+				artifact.SHA256 = expectedID
+			} else if artifact.SHA256 != expectedID {
+				return nil, &ArtifactStoreError{Err: fmt.Errorf("artifact %q sha256 %q does not match content %q", file.name, artifact.SHA256, expectedID)}
 			}
 			if artifact.Size == 0 {
 				artifact.Size = int64(len(file.content))
+			} else if artifact.Size != int64(len(file.content)) {
+				return nil, &ArtifactStoreError{Err: fmt.Errorf("artifact %q size %d does not match content %d", file.name, artifact.Size, len(file.content))}
 			}
 			if artifact.RunID == "" {
 				artifact.RunID = req.RunID

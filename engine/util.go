@@ -13,14 +13,6 @@ import (
 
 var ErrRunNotFound = errors.New("run not found")
 
-func isTerminal(status core.Status) bool {
-	switch status {
-	case core.StatusSucceeded, core.StatusFailed, core.StatusCancelled, core.StatusTimedOut, core.StatusInterrupted, core.StatusStagnated:
-		return true
-	}
-	return false
-}
-
 func randomID() (string, error) {
 	var data [16]byte
 	if _, err := rand.Read(data[:]); err != nil {
