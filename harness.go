@@ -25,6 +25,7 @@ type (
 	ArtifactStore       = engine.ArtifactStore
 	Store               = engine.Store
 	ReadStore           = engine.ReadStore
+	RunRecovery         = engine.RunRecovery
 	CanonicalWriter     = engine.CanonicalWriter
 	Commit              = engine.Commit
 	FinalizationRecord  = engine.FinalizationRecord
