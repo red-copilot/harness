@@ -29,6 +29,9 @@ type PolicyFile struct {
 	MaxReasonerWallTime         time.Duration `json:"max_reasoner_wall_time,omitempty" yaml:"max_reasoner_wall_time,omitempty"`
 	MaxReasonerFailures         int           `json:"max_reasoner_failures,omitempty" yaml:"max_reasoner_failures,omitempty"`
 	MaxAuthorityObserveFailures int           `json:"max_authority_observe_failures,omitempty" yaml:"max_authority_observe_failures,omitempty"`
+	EnginePollInterval          time.Duration `json:"engine_poll_interval,omitempty" yaml:"engine_poll_interval,omitempty"`
+	DrainTimeout                time.Duration `json:"drain_timeout,omitempty" yaml:"drain_timeout,omitempty"`
+	AbortTimeout                time.Duration `json:"abort_timeout,omitempty" yaml:"abort_timeout,omitempty"`
 }
 
 func (p PolicyFile) toRunPolicy() harness.RunPolicy {
@@ -40,6 +43,7 @@ func (p PolicyFile) toRunPolicy() harness.RunPolicy {
 		StagnationRounds: p.StagnationRounds, MaxReasonerToolCalls: p.MaxReasonerToolCalls,
 		MaxReasonerWallTime: p.MaxReasonerWallTime, MaxReasonerFailures: p.MaxReasonerFailures,
 		MaxAuthorityObserveFailures: p.MaxAuthorityObserveFailures,
+		EnginePollInterval:          p.EnginePollInterval, DrainTimeout: p.DrainTimeout, AbortTimeout: p.AbortTimeout,
 	}
 	return harness.NormalizeRunPolicy(policy)
 }

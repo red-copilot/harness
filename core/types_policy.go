@@ -19,6 +19,15 @@ type ExplorationPolicy struct {
 	// MaxAuthorityObserveFailures bounds tolerated transient backend Observe
 	// errors. The final authority observation is always strict.
 	MaxAuthorityObserveFailures int `json:"max_authority_observe_failures" yaml:"max_authority_observe_failures"`
+	// EnginePollInterval is the blackboard loop tick. Zero falls back to the
+	// default.
+	EnginePollInterval time.Duration `json:"engine_poll_interval,omitempty" yaml:"engine_poll_interval,omitempty"`
+	// DrainTimeout bounds how long cancellation waits for in-flight attempt
+	// results before giving up. Zero falls back to the default.
+	DrainTimeout time.Duration `json:"drain_timeout,omitempty" yaml:"drain_timeout,omitempty"`
+	// AbortTimeout bounds the hard abort of an agent session after a failed
+	// turn. Zero falls back to the default.
+	AbortTimeout time.Duration `json:"abort_timeout,omitempty" yaml:"abort_timeout,omitempty"`
 }
 
 // ContextPolicy owns deterministic model-context bounds.
@@ -61,6 +70,7 @@ func DefaultRunPolicy() RunPolicy {
 			ConcludeTimeout: 90 * time.Second, StagnationRounds: 3,
 			MaxReasonerToolCalls: 4, MaxReasonerWallTime: 2 * time.Minute,
 			MaxReasonerFailures: 3, MaxAuthorityObserveFailures: 3,
+			EnginePollInterval: 20 * time.Millisecond, DrainTimeout: 3 * time.Second, AbortTimeout: 5 * time.Second,
 		},
 		Context: ContextPolicy{
 			MaxBoardItems: 64, MaxBoardBytes: 64 << 10, MaxClaimBytes: 2 << 10,
@@ -107,6 +117,15 @@ func NormalizeRunPolicy(policy RunPolicy) RunPolicy {
 	}
 	if e.MaxAuthorityObserveFailures == 0 {
 		e.MaxAuthorityObserveFailures = d.MaxAuthorityObserveFailures
+	}
+	if e.EnginePollInterval == 0 {
+		e.EnginePollInterval = d.EnginePollInterval
+	}
+	if e.DrainTimeout == 0 {
+		e.DrainTimeout = d.DrainTimeout
+	}
+	if e.AbortTimeout == 0 {
+		e.AbortTimeout = d.AbortTimeout
 	}
 	c, dc := &policy.Context, defaults.Context
 	if c.MaxBoardItems == 0 {
@@ -172,6 +191,9 @@ func ValidateRunPolicy(policy RunPolicy) error {
 		}
 	}
 	if policy.Exploration.MaxWallTimePerAttempt < 0 || policy.Exploration.MaxReasonerWallTime < 0 || policy.Exploration.ConcludeTimeout < 0 || policy.Budget.WallTime < 0 {
+		return fmt.Errorf("durations must not be negative")
+	}
+	if policy.Exploration.EnginePollInterval < 0 || policy.Exploration.DrainTimeout < 0 || policy.Exploration.AbortTimeout < 0 {
 		return fmt.Errorf("durations must not be negative")
 	}
 	if policy.Budget.MaxCostUSD < 0 {

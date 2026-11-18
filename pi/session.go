@@ -301,11 +301,6 @@ func (s *session) Prompt(ctx context.Context, message string) error {
 	return nil
 }
 
-func (s *session) Steer(ctx context.Context, message string) error {
-	_, err := s.sendAndWait(ctx, map[string]any{"type": "steer", "message": message})
-	return err
-}
-
 // Reset discards Pi's conversation history while keeping the process and
 // transport available for the next frontier.
 func (s *session) Reset(ctx context.Context) error {

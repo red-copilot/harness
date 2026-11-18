@@ -53,7 +53,7 @@ Import rules are enforced by `import_boundary_test.go`:
 
 - `core/` imports the standard library only.
 - `engine/` imports only `core` and the standard library; never adapters or CLI.
-- Adapters never import `internal/cli`, `server` or `webui`.
+- Adapters never import `internal/cli` or other adapters.
 - Root `harness.go` must stay a façade; no state machine or I/O belongs there.
 
 `engine/ports.go` defines the entire integration boundary:
