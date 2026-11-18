@@ -62,6 +62,7 @@ type (
 	Result                     = core.Result
 	RunCreatedPayload          = core.RunCreatedPayload
 	RunDescriptor              = core.RunDescriptor
+	RunResumedPayload          = core.RunResumedPayload
 	RunFinalizedPayload        = core.RunFinalizedPayload
 	RunOutcome                 = core.RunOutcome
 	RunPhase                   = core.RunPhase
@@ -138,6 +139,7 @@ const (
 	EventRunCreated            = core.EventRunCreated
 	EventRunPhase              = core.EventRunPhase
 	EventRunProvisioned        = core.EventRunProvisioned
+	EventRunResumed            = core.EventRunResumed
 	EventRunFinalized          = core.EventRunFinalized
 	EventAgentSessionStarted   = core.EventAgentSessionStarted
 	EventAgent                 = core.EventAgent

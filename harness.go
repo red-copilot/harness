@@ -155,6 +155,7 @@ const (
 	EventRunCreated            = core.EventRunCreated
 	EventRunPhase              = core.EventRunPhase
 	EventRunProvisioned        = core.EventRunProvisioned
+	EventRunResumed            = core.EventRunResumed
 	EventRunFinalized          = core.EventRunFinalized
 	EventAgentSessionStarted   = core.EventAgentSessionStarted
 	EventAgent                 = core.EventAgent

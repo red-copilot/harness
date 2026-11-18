@@ -270,6 +270,9 @@ func (s *memoryStore) MarkInterrupted(context.Context) error {
 	s.markInterruptedCalls++
 	return nil
 }
+func (s *memoryStore) RestoreBoardState(context.Context, string) (harness.Commit, error) {
+	return harness.Commit{}, errors.New("memory store does not support board restore")
+}
 func (s *memoryStore) Close() error { return nil }
 
 type fakeSession struct {

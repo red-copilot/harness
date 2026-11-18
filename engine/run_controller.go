@@ -103,6 +103,9 @@ type runController struct {
 	eventMu       sync.Mutex
 	eventsClosed  bool
 	boardRevision uint64
+	// resumeCommit, when set, replays this board revision instead of starting
+	// from a fresh origin/goal board.
+	resumeCommit *Commit
 
 	mu            sync.RWMutex
 	state         runControlState

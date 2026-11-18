@@ -61,6 +61,11 @@ func NewRunner(cfg Config) (*Runner, error) {
 		runs: map[string]*Run{}, sessionSlots: make(chan struct{}, cfg.MaxSessions), closed: make(chan struct{}),
 	}
 	if !cfg.SkipRecovery {
+		if cfg.RecoveryGuard != nil {
+			if err := cfg.RecoveryGuard(); err != nil {
+				return nil, fmt.Errorf("refuse recovery: %w", err)
+			}
+		}
 		if err := cfg.Store.MarkInterrupted(context.Background()); err != nil {
 			return nil, fmt.Errorf("mark interrupted runs: %w", err)
 		}
@@ -165,6 +170,92 @@ func (r *Runner) Run(ctx context.Context, spec RunSpec) (Result, error) {
 		return Result{}, err
 	}
 	return run.Wait(ctx)
+}
+
+// Resume continues an interrupted Run from its newest committed board
+// revision. The replayed board is re-validated before any session starts; a
+// damaged or inconsistent snapshot fails closed. Sessions, workspace and
+// provisioned targets are re-created, never assumed.
+func (r *Runner) Resume(ctx context.Context, runID string, spec RunSpec) (*Run, error) {
+	if err := ValidateRunSpec(spec); err != nil {
+		return nil, err
+	}
+	spec.Policy = NormalizeRunPolicy(spec.Policy)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	record, err := r.store.GetRun(ctx, runID)
+	if err != nil {
+		return nil, fmt.Errorf("load run %s: %w", runID, err)
+	}
+	if record.Phase == RunPhaseTerminal {
+		return nil, fmt.Errorf("run %s is already terminal", runID)
+	}
+	commit, err := r.store.RestoreBoardState(ctx, runID)
+	if err != nil {
+		return nil, fmt.Errorf("restore board for run %s: %w", runID, err)
+	}
+	releaseSessions, err := r.acquireSessions(ctx, 2)
+	if err != nil {
+		return nil, err
+	}
+	started := false
+	defer func() {
+		if !started {
+			releaseSessions()
+		}
+	}()
+	now := time.Now().UTC()
+	baseCtx := ctx
+	var timeoutCancel context.CancelFunc
+	if spec.Policy.Budget.WallTime > 0 {
+		baseCtx, timeoutCancel = context.WithTimeout(baseCtx, spec.Policy.Budget.WallTime)
+	}
+	runCtx, cancel := context.WithCancel(baseCtx)
+	if timeoutCancel != nil {
+		inner := cancel
+		cancel = func() { inner(); timeoutCancel() }
+	}
+	redactor := redactorForSpec(spec)
+	r.redacting.register(runID, redactor)
+	workspaceRoot := spec.WorkspaceRoot
+	if workspaceRoot == "" {
+		workspaceRoot = r.workspaceRoot
+	}
+	controller := newRunController(r, runID, runCtx, cancel, filepath.Join(workspaceRoot, runID), spec.Policy.Budget, redactor, spec.MaterializeSkills)
+	controller.maxObserveFailures = spec.Policy.Exploration.MaxAuthorityObserveFailures
+	controller.resumeCommit = &commit
+	controller.boardRevision = commit.Revision
+	controller.apply(runTransition{kind: runTransitionStarted, at: now})
+	run := newRun(controller)
+	r.mu.Lock()
+	r.runs[runID] = run
+	r.mu.Unlock()
+	resumedEvent, eventErr := controller.canonicalEvent("harness", EventRunResumed, RunResumedPayload{BoardRevision: commit.Revision})
+	if eventErr != nil {
+		cancel()
+		r.mu.Lock()
+		delete(r.runs, runID)
+		r.mu.Unlock()
+		r.redacting.unregister(runID)
+		return nil, eventErr
+	}
+	resumedEvent.Time = now
+	if err := controller.emitEvent(resumedEvent); err != nil {
+		cancel()
+		r.mu.Lock()
+		delete(r.runs, runID)
+		r.mu.Unlock()
+		r.redacting.unregister(runID)
+		return nil, err
+	}
+	started = true
+	go func() {
+		defer releaseSessions()
+		defer r.redacting.unregister(runID)
+		controller.run(spec)
+	}()
+	return run, nil
 }
 
 // Close cancels live Runs and waits for them to finish persisting before the

@@ -3,6 +3,8 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -241,6 +243,98 @@ func (b *boardState) claimedCount() int {
 }
 
 func (b *boardState) boardRevision() uint64 { return b.version }
+
+// restoreBoardState rebuilds one Run's in-memory board from the newest
+// canonical commit. Every replayed record is re-validated; a claimed intent is
+// returned to open because a resumed process has no executor attempt in
+// flight. The restored revision continues after the replayed one so the next
+// canonical commit stays strictly monotonic.
+func restoreBoardState(runID string, spec RunSpec, target TargetBinding, commit Commit) (*boardState, error) {
+	board := &boardState{runID: runID, task: spec.Task, target: target, policy: NormalizeRunPolicy(spec.Policy)}
+	for _, claim := range commit.Claims {
+		if _, err := board.addClaim(claim); err != nil {
+			return nil, fmt.Errorf("restore claim %s: %w", claim.ID, err)
+		}
+	}
+	for _, intent := range commit.Intents {
+		if err := board.validateIntentClaims(intent); err != nil {
+			return nil, fmt.Errorf("restore intent %s: %w", intent.ID, err)
+		}
+		if err := ValidateIntent(intent); err != nil {
+			return nil, fmt.Errorf("restore intent %s: %w", intent.ID, err)
+		}
+		b := &board.intents
+		*b = append(*b, intent)
+	}
+	for _, attempt := range commit.Attempts {
+		if attempt.RunID != runID {
+			return nil, fmt.Errorf("restore attempt %s belongs to run %q", attempt.ID, attempt.RunID)
+		}
+		board.attempts = append(board.attempts, attempt)
+	}
+	for _, observation := range commit.Observations {
+		if observation.RunID != runID {
+			return nil, fmt.Errorf("restore observation %s belongs to run %q", observation.ID, observation.RunID)
+		}
+		board.obs = append(board.obs, observation)
+	}
+	for _, artifact := range commit.Artifacts {
+		if artifact.RunID != runID {
+			return nil, fmt.Errorf("restore artifact %s belongs to run %q", artifact.ID, artifact.RunID)
+		}
+		board.artifacts = append(board.artifacts, artifact)
+	}
+	// A crash can leave an intent claimed with no attempt in flight; the
+	// resumed executor slot is free, so return it to open.
+	for i := range board.intents {
+		if board.intents[i].State == IntentClaimed {
+			if err := ValidateIntentTransition(IntentClaimed, IntentOpen); err != nil {
+				return nil, fmt.Errorf("restore intent %s: %w", board.intents[i].ID, err)
+			}
+			board.intents[i].State = IntentOpen
+			board.intents[i].ExecutorID = ""
+			board.intents[i].ClaimedAt = nil
+		}
+	}
+	if commit.Revision == 0 {
+		return nil, errors.New("restored board commit has no revision")
+	}
+	board.version = commit.Revision
+	// Continue the ID sequence past every replayed record so restored runs
+	// cannot collide with historical identifiers.
+	for _, claim := range board.claims {
+		board.seq = maxInt(board.seq, seqOf(claim.ID))
+	}
+	for _, intent := range board.intents {
+		board.seq = maxInt(board.seq, seqOf(intent.ID))
+	}
+	for _, attempt := range board.attempts {
+		board.seq = maxInt(board.seq, seqOf(attempt.ID))
+	}
+	for _, observation := range board.obs {
+		board.seq = maxInt(board.seq, seqOf(observation.ID))
+	}
+	return board, nil
+}
+
+func seqOf(id string) int {
+	_, tail, found := strings.Cut(id, ":")
+	if !found {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.Clone(tail))
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
 
 // nextOpenIntent returns the first open Intent without cloning the board.
 func (b *boardState) nextOpenIntent() (Intent, bool) {

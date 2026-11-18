@@ -106,10 +106,19 @@ type ReadStore interface {
 	GetBoardRevision(context.Context, string) (uint64, error)
 }
 
-// Store composes the canonical writer, board reads and process lifecycle.
+// BoardRestorer replays the newest canonical board commit for one Run. The
+// restore path is read-only; the resumed engine re-enters through the
+// canonical Commit boundary.
+type BoardRestorer interface {
+	RestoreBoardState(context.Context, string) (Commit, error)
+}
+
+// Store composes the canonical writer, board reads, restore and process
+// lifecycle.
 type Store interface {
 	CanonicalWriter
 	ReadStore
+	BoardRestorer
 	MarkInterrupted(context.Context) error
 	Close() error
 }
