@@ -67,6 +67,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	filePath := fs.String("file", "", "run config alias")
 	dbPath := fs.String("db", ".harness/harness.db", "SQLite database path")
 	asJSON := fs.Bool("json", false, "print JSON result")
+	resumeID := fs.String("resume", "", "resume an interrupted run id from its committed board")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -85,6 +86,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	defer store.Close()
+	release, err := recoveryGuard(*dbPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = release() }()
 	spec, err := cfg.ToRunSpec(store)
 	if err != nil {
 		return err
@@ -94,7 +100,17 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	result, runErr := runner.Run(context.Background(), spec)
+	var result harness.Result
+	var runErr error
+	if *resumeID != "" {
+		resumed, resumeErr := runner.Resume(context.Background(), *resumeID, spec)
+		if resumeErr != nil {
+			return resumeErr
+		}
+		result, runErr = resumed.Wait(context.Background())
+	} else {
+		result, runErr = runner.Run(context.Background(), spec)
+	}
 	if *asJSON {
 		_ = printJSON(stdout, result)
 	} else {

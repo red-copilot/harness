@@ -19,6 +19,10 @@ type Config struct {
 	CloseTimeout  time.Duration
 	Cleaner       ResourceCleaner
 	SkipRecovery  bool
+	// RecoveryGuard is consulted before unfinished historical runs are marked
+	// interrupted. A non-nil error means another live process owns the
+	// database, so recovery is refused instead of clobbering its runs.
+	RecoveryGuard func() error
 }
 
 // RunSpec binds a serializable descriptor to runtime adapter instances.

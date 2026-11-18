@@ -65,6 +65,12 @@ func (b *completionRaceBackend) complete() {
 	b.mu.Unlock()
 }
 
+func (b *completionRaceBackend) completed() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.done
+}
+
 func (b *completionRaceBackend) callCount() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -127,11 +133,32 @@ func TestBackendOnlyRunWaitsForDelayedCompletion(t *testing.T) {
 		return promptReportSession(req.WorkspaceDir, `{"phase":"failed","error":"submitted"}`)
 	}}
 	runner := newTestRunnerWithPoll(t, store, 5*time.Millisecond)
-	go func() {
-		time.Sleep(30 * time.Millisecond)
+	run, err := runner.Start(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Complete the backend only after the reason turn recorded its goal
+	// candidate; a fixed sleep races the reason loop under -race.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		events, listErr := store.ListEvents(context.Background(), run.ID, 0)
+		if listErr == nil {
+			for _, event := range events {
+				if event.Type == harness.EventReasonCompleted {
+					backend.complete()
+					break
+				}
+			}
+		}
+		if backend.completed() {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if !backend.completed() {
 		backend.complete()
-	}()
-	result, err := runner.Run(context.Background(), spec)
+	}
+	result, err := run.Wait(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

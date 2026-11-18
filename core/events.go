@@ -15,6 +15,7 @@ const (
 	EventRunCreated            EventType = "run.created"
 	EventRunPhase              EventType = "run.phase"
 	EventRunProvisioned        EventType = "run.provisioned"
+	EventRunResumed            EventType = "run.resumed"
 	EventRunFinalized          EventType = "run.finalized"
 	EventAgentSessionStarted   EventType = "agent.session.started"
 	EventAgent                 EventType = "agent.event"
@@ -50,6 +51,10 @@ type RunPhasePayload struct {
 
 type RunProvisionedPayload struct {
 	Target TargetBinding `json:"target"`
+}
+
+type RunResumedPayload struct {
+	BoardRevision uint64 `json:"board_revision"`
 }
 
 type AgentSessionStartedPayload struct {
@@ -127,6 +132,7 @@ var eventContracts = map[EventType]eventContract{
 	EventRunCreated:            {version: 1, payload: RunCreatedPayload{}},
 	EventRunPhase:              {version: 1, payload: RunPhasePayload{}},
 	EventRunProvisioned:        {version: 2, payload: RunProvisionedPayload{}},
+	EventRunResumed:            {version: 1, payload: RunResumedPayload{}},
 	EventRunFinalized:          {version: 1, payload: RunFinalizedPayload{}},
 	EventAgentSessionStarted:   {version: 1, payload: AgentSessionStartedPayload{}},
 	EventAgent:                 {version: 2, payload: AgentEventPayload{}},

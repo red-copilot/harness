@@ -48,6 +48,9 @@ type blackboardEngine struct {
 	goalCandidate  bool
 	stopped        bool
 	stagnant       int
+	// resumed marks an engine that replayed a committed board; its initial
+	// revision is already persisted, so persistInitial is skipped.
+	resumed bool
 
 	wg         sync.WaitGroup
 	sessions   []AgentSession
@@ -63,9 +66,23 @@ func newBlackboardEngine(runner *Runner, controller *runController, spec RunSpec
 	if explore == nil {
 		explore = defaultExploreStrategy{}
 	}
+	board := newBoardState(controller.id, spec, target)
+	stopped := false
+	resumed := false
+	if controller.resumeCommit != nil {
+		restored, err := restoreBoardState(controller.id, spec, target, *controller.resumeCommit)
+		if err != nil {
+			// A damaged replay fails closed before any session starts.
+			controller.setControlError(err)
+			stopped = true
+		} else {
+			board = restored
+			resumed = true
+		}
+	}
 	return &blackboardEngine{
 		runner: runner, controller: controller, spec: spec, target: target,
-		board: newBoardState(controller.id, spec, target), reason: reason, explore: explore,
+		board: board, reason: reason, explore: explore, stopped: stopped, resumed: resumed,
 		results: make(chan boardAttemptResult, 2), reasons: make(chan boardReasonResult, 1),
 	}
 }
@@ -99,8 +116,10 @@ func (e *blackboardEngine) run(ctx context.Context) (runErr error) {
 	if err := e.startSessions(ctx); err != nil {
 		return err
 	}
-	if err := e.persistInitial(); err != nil {
-		return err
+	if !e.resumed {
+		if err := e.persistInitial(); err != nil {
+			return err
+		}
 	}
 
 	ticker := time.NewTicker(e.board.policy.Exploration.EnginePollInterval)

@@ -153,6 +153,9 @@ func (s *redactingStore) OpenArtifact(ctx context.Context, artifactID string) (i
 func (s *redactingStore) MarkInterrupted(ctx context.Context) error {
 	return s.inner.MarkInterrupted(ctx)
 }
+func (s *redactingStore) RestoreBoardState(ctx context.Context, runID string) (Commit, error) {
+	return s.inner.RestoreBoardState(ctx, runID)
+}
 func (s *redactingStore) Close() error { return s.inner.Close() }
 
 var _ Store = (*redactingStore)(nil)
