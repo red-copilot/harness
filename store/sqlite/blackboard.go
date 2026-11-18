@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 
@@ -140,8 +141,15 @@ func describeBlackboardError(op string, err error) error {
 	return fmt.Errorf("blackboard store %s: %w", op, err)
 }
 
-func (s *Store) GetBoardRevision(ctx context.Context, runID string) (uint64, error) {
+// boardRevision reads the highest committed board revision for one Run.
+func boardRevision(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, runID string) (uint64, error) {
 	var revision uint64
-	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(revision),0) FROM board_commits WHERE run_id=?`, runID).Scan(&revision)
+	err := q.QueryRowContext(ctx, `SELECT COALESCE(MAX(revision),0) FROM board_commits WHERE run_id=?`, runID).Scan(&revision)
 	return revision, err
+}
+
+func (s *Store) GetBoardRevision(ctx context.Context, runID string) (uint64, error) {
+	return boardRevision(ctx, s.db, runID)
 }

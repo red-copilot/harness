@@ -9,6 +9,9 @@ import (
 // ErrIntentCapacity marks a proposal rejected by the single Executor slot.
 var ErrIntentCapacity = errors.New("intent capacity exceeded")
 
+// executorSlots is the fixed number of concurrent Executor slots.
+const executorSlots = 1
+
 type boardSnapshot struct {
 	Task          Task
 	Claims        []Claim
@@ -114,8 +117,8 @@ func (b *boardState) createIntent(intent Intent) (Intent, error) {
 	if intent.State != IntentOpen {
 		return Intent{}, fmt.Errorf("new intent must be open")
 	}
-	if b.openCount()+b.claimedCount() >= 1 {
-		return Intent{}, fmt.Errorf("%w: %d open/claimed intents", ErrIntentCapacity, b.openCount()+b.claimedCount())
+	if occupied := b.openCount() + b.claimedCount(); occupied >= executorSlots {
+		return Intent{}, fmt.Errorf("%w: %d open/claimed intents", ErrIntentCapacity, occupied)
 	}
 	if len(b.intents) >= b.maxTotal() {
 		return Intent{}, fmt.Errorf("max total intents reached")
@@ -155,7 +158,7 @@ func (b *boardState) claimIntent(intentID, executorID string, at time.Time) (Int
 	if err := ValidateIntentTransition(intent.State, IntentClaimed); err != nil {
 		return Intent{}, err
 	}
-	if b.claimedCount() > 0 {
+	if b.claimedCount() >= executorSlots {
 		return Intent{}, fmt.Errorf("%w: executor slot is occupied", ErrIntentCapacity)
 	}
 	if executorID == "" {
@@ -239,6 +242,16 @@ func (b *boardState) claimedCount() int {
 
 func (b *boardState) boardRevision() uint64 { return b.version }
 
+// nextOpenIntent returns the first open Intent without cloning the board.
+func (b *boardState) nextOpenIntent() (Intent, bool) {
+	for _, intent := range b.intents {
+		if intent.State == IntentOpen {
+			return intent, true
+		}
+	}
+	return Intent{}, false
+}
+
 func (b *boardState) findIntent(id string) *Intent {
 	for i := range b.intents {
 		if b.intents[i].ID == id {
@@ -296,7 +309,7 @@ func admitReasonIntents(board *boardState, report ReasonReport, canCreateIntent 
 	if len(board.intents)+len(planned) > board.maxTotal() {
 		return nil, fmt.Errorf("max total intents reached")
 	}
-	if board.openCount()+board.claimedCount()+len(planned) > 1 {
+	if board.openCount()+board.claimedCount()+len(planned) > executorSlots {
 		return nil, fmt.Errorf("%w: proposal exceeds open capacity", ErrIntentCapacity)
 	}
 	board.intents = append(board.intents, planned...)

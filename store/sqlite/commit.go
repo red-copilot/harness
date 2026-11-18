@@ -29,8 +29,8 @@ func (s *Store) Commit(ctx context.Context, commit engine.Commit) ([]core.Event,
 	if phase == string(core.RunPhaseTerminal) {
 		return nil, fmt.Errorf("run %s is finalized", commit.RunID)
 	}
-	var currentRevision uint64
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(revision),0) FROM board_commits WHERE run_id=?`, commit.RunID).Scan(&currentRevision); err != nil {
+	currentRevision, err := boardRevision(ctx, tx, commit.RunID)
+	if err != nil {
 		return nil, fmt.Errorf("load board revision: %w", err)
 	}
 	if commit.ExpectedRevision != currentRevision {
@@ -85,40 +85,34 @@ func (s *Store) Commit(ctx context.Context, commit engine.Commit) ([]core.Event,
 	return storedEvents, nil
 }
 
+// validateRunScope reports the first record whose RunID differs from runID.
+func validateRunScope[T any](kind, runID string, values []T, fields func(T) (id, recordRunID string)) error {
+	for _, value := range values {
+		id, recordRunID := fields(value)
+		if recordRunID != runID {
+			return fmt.Errorf("%s %q belongs to run %q, not %q", kind, id, recordRunID, runID)
+		}
+	}
+	return nil
+}
+
 // validateCommitScope prevents a caller from mixing another Run's records or
 // events into a canonical board commit.
 func validateCommitScope(commit engine.Commit) error {
 	if commit.RunID == "" {
 		return fmt.Errorf("commit run_id is required")
 	}
-	for _, claim := range commit.Claims {
-		if claim.RunID != commit.RunID {
-			return fmt.Errorf("claim %q belongs to run %q, not %q", claim.ID, claim.RunID, commit.RunID)
-		}
-	}
-	for _, intent := range commit.Intents {
-		if intent.RunID != commit.RunID {
-			return fmt.Errorf("intent %q belongs to run %q, not %q", intent.ID, intent.RunID, commit.RunID)
-		}
-	}
-	for _, attempt := range commit.Attempts {
-		if attempt.RunID != commit.RunID {
-			return fmt.Errorf("attempt %q belongs to run %q, not %q", attempt.ID, attempt.RunID, commit.RunID)
-		}
-	}
-	for _, observation := range commit.Observations {
-		if observation.RunID != commit.RunID {
-			return fmt.Errorf("observation %q belongs to run %q, not %q", observation.ID, observation.RunID, commit.RunID)
-		}
-	}
-	for _, artifact := range commit.Artifacts {
-		if artifact.RunID != commit.RunID {
-			return fmt.Errorf("artifact %q belongs to run %q, not %q", artifact.ID, artifact.RunID, commit.RunID)
-		}
-	}
-	for _, event := range commit.Events {
-		if event.RunID != commit.RunID {
-			return fmt.Errorf("event %q belongs to run %q, not %q", event.Type, event.RunID, commit.RunID)
+	runID := commit.RunID
+	for _, err := range []error{
+		validateRunScope("claim", runID, commit.Claims, func(v core.Claim) (string, string) { return v.ID, v.RunID }),
+		validateRunScope("intent", runID, commit.Intents, func(v core.Intent) (string, string) { return v.ID, v.RunID }),
+		validateRunScope("attempt", runID, commit.Attempts, func(v core.IntentAttempt) (string, string) { return v.ID, v.RunID }),
+		validateRunScope("observation", runID, commit.Observations, func(v core.Observation) (string, string) { return v.ID, v.RunID }),
+		validateRunScope("artifact", runID, commit.Artifacts, func(v core.Artifact) (string, string) { return v.ID, v.RunID }),
+		validateRunScope("event", runID, commit.Events, func(v core.Event) (string, string) { return string(v.Type), v.RunID }),
+	} {
+		if err != nil {
+			return err
 		}
 	}
 	return nil

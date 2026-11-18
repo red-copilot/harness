@@ -40,11 +40,10 @@ type RunSpec struct {
 	MaterializeSkills func(string) error
 }
 
-// ValidateRunSpec validates adapter-bound Run inputs before persistence.
+// ValidateRunSpec validates adapter-bound Run inputs before persistence. The
+// descriptor check also validates the normalized policy, so it is not
+// re-validated here.
 func ValidateRunSpec(spec RunSpec) error {
-	if err := core.ValidateRunPolicy(core.NormalizeRunPolicy(spec.Policy)); err != nil {
-		return fmt.Errorf("policy: %w", err)
-	}
 	if err := core.ValidateDescriptor(spec.Descriptor()); err != nil {
 		return fmt.Errorf("descriptor: %w", err)
 	}

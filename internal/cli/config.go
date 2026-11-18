@@ -125,27 +125,6 @@ func LoadConfig(path string) (*FileConfig, error) {
 	return &cfg, nil
 }
 
-// Descriptor projects the serializable v3 Run contract. Adapter instances are
-// deliberately absent and are composed only by ToRunSpec at the deployment edge.
-func (c *FileConfig) Descriptor() (harness.RunDescriptor, error) {
-	reasoner, err := c.Reasoner.descriptor()
-	if err != nil {
-		return harness.RunDescriptor{}, fmt.Errorf("reasoner: %w", err)
-	}
-	executor, err := c.Executor.descriptor()
-	if err != nil {
-		return harness.RunDescriptor{}, fmt.Errorf("executor: %w", err)
-	}
-	return harness.RunDescriptor{
-		SchemaVersion: harness.CurrentSchemaVersion,
-		Task:          c.Task,
-		Target:        harness.TargetSpec{ID: c.Target.ID, Addresses: append([]string(nil), c.Target.Addresses...), Isolation: harness.IsolationMode(c.Target.Isolation)},
-		Reasoner:      reasoner,
-		Executor:      executor,
-		Policy:        c.Policy.toRunPolicy(),
-	}, nil
-}
-
 // ToRunSpec composes serializable configuration with deployment adapters.
 func (c *FileConfig) ToRunSpec(artifacts harness.ArtifactStore) (harness.RunSpec, error) {
 	if artifacts == nil {
@@ -188,14 +167,6 @@ func (c *FileConfig) ToRunSpec(artifacts harness.ArtifactStore) (harness.RunSpec
 	return spec, nil
 }
 
-func (a AgentFileSpec) descriptor() (harness.AgentDescriptor, error) {
-	spec, err := a.toHarness()
-	if err != nil {
-		return harness.AgentDescriptor{}, err
-	}
-	return spec.Descriptor(), nil
-}
-
 func (a AgentFileSpec) toHarness() (harness.AgentSpec, error) {
 	var runtimeConfig json.RawMessage
 	if a.RuntimeConfig != nil {
@@ -206,22 +177,6 @@ func (a AgentFileSpec) toHarness() (harness.AgentSpec, error) {
 		runtimeConfig = encoded
 	}
 	return harness.AgentSpec{ID: a.ID, Image: a.Image, Command: a.Command, Env: a.Env, EnvFrom: a.EnvFrom, Mounts: a.Mounts, Network: a.Network, CapAdd: a.CapAdd, Resources: a.Resources, RuntimeConfig: runtimeConfig}, nil
-}
-
-func appendUniqueString(values []string, additions ...string) []string {
-	seen := map[string]struct{}{}
-	out := make([]string, 0, len(values)+len(additions))
-	for _, value := range append(append([]string(nil), values...), additions...) {
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	return out
 }
 
 func composeAgent(agent harness.AgentSpec) (harness.AgentSpec, error) {

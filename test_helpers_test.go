@@ -397,10 +397,16 @@ func evidenceBackedReport(kind, description string) string {
 	return `{"phase":"concluded","claim":{"kind":"` + kind + `","description":"` + description + `","observation_refs":["obs-1"]},"observations":[{"local_id":"obs-1","kind":"test","summary":"` + description + `","target":"target-1","evidence_files":["evidence.txt"]}]}`
 }
 
+// reasonIntentReport is the Reason turn output that proposes one Intent for
+// the free Executor slot.
+func reasonIntentReport() string {
+	return `{"board_revision":1,"intents":[{"from":["origin"],"description":"probe"}]}`
+}
+
 func integrationSpec(t *testing.T, store harness.Store) harness.RunSpec {
 	t.Helper()
 	reasonerRuntime := &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
-		return promptReportSession(req.WorkspaceDir, `{"frontier_version":1,"intents":[{"from":["origin"],"description":"probe"}]}`)
+		return promptReportSession(req.WorkspaceDir, reasonIntentReport())
 	}}
 	executorRuntime := &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
 		return promptReportSessionWithEvidence(req.WorkspaceDir, evidenceBackedReport("negative", "no signal"), map[string]string{"evidence.txt": "no signal"})

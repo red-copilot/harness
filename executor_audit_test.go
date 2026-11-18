@@ -42,7 +42,7 @@ func TestExecutorTurnEventsAreCanonical(t *testing.T) {
 	spec.Verifier = fakeVerifier{verdict: harness.Verdict{Success: false}}
 	spec.ReasonStrategy = oneIntentReasonStrategy{}
 	spec.Reasoner.Runtime = &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
-		return promptReportSession(req.WorkspaceDir, `{"board_revision":1,"intents":[{"from":["origin"],"description":"probe"}]}`)
+		return promptReportSession(req.WorkspaceDir, reasonIntentReport())
 	}}
 	spec.Executor.Runtime = &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
 		return toolEventSession(req.WorkspaceDir, evidenceBackedReport("negative", "no signal"))
