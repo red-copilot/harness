@@ -579,7 +579,6 @@ func (c *runController) run(spec RunSpec) {
 			c.finishExecution(core.RunOutcomeFailed, err, nil)
 			return
 		}
-		target = provisioned
 		targetOwned = true
 		if provisioned.TargetID == "" {
 			provisioned.TargetID = core.TargetFingerprint(spec.Target)
@@ -738,15 +737,28 @@ func (c *runController) waitForBackendWatcher() {
 	}
 }
 
+// emitAuthorityObserveError records one failed authority observation. The
+// caller decides whether the error is tolerated or fatal.
+func (c *runController) emitAuthorityObserveError(err error) error {
+	event, eventErr := c.canonicalEvent("authority", core.EventAuthorityObserveError, core.AuthorityErrorPayload{Error: c.redactor().Redact(err.Error())})
+	if eventErr != nil {
+		return eventErr
+	}
+	return c.emitEvent(event)
+}
+
+func (c *runController) emitAuthorityCompleted(completion core.Completion) error {
+	event, eventErr := c.canonicalEvent("authority", core.EventAuthorityCompleted, core.AuthorityProgressPayload{Completion: completion})
+	if eventErr != nil {
+		return eventErr
+	}
+	return c.emitEvent(event)
+}
+
 func (c *runController) observeAuthorityOnce(backend CompletionSource, target core.TargetBinding) error {
 	completion, err := backend.Observe(c.ctx, target)
 	if err != nil {
-		event, eventErr := c.canonicalEvent("authority", core.EventAuthorityObserveError, core.AuthorityErrorPayload{Error: c.redactor().Redact(err.Error())})
-		if eventErr != nil {
-			c.setControlError(eventErr)
-			return eventErr
-		}
-		if emitErr := c.emitEvent(event); emitErr != nil && !errors.Is(emitErr, ErrRunClosed) {
+		if emitErr := c.emitAuthorityObserveError(err); emitErr != nil && !errors.Is(emitErr, ErrRunClosed) {
 			c.setControlError(emitErr)
 			return emitErr
 		}
@@ -756,12 +768,7 @@ func (c *runController) observeAuthorityOnce(backend CompletionSource, target co
 	c.setProgress(completion)
 	if completion.Done && c.backendCompletion() == nil {
 		c.setBackendCompletion(completion)
-		event, eventErr := c.canonicalEvent("authority", core.EventAuthorityCompleted, core.AuthorityProgressPayload{Completion: completion})
-		if eventErr != nil {
-			c.setControlError(eventErr)
-			return eventErr
-		}
-		if err := c.emitEvent(event); err != nil && !errors.Is(err, ErrRunClosed) {
+		if err := c.emitAuthorityCompleted(completion); err != nil && !errors.Is(err, ErrRunClosed) {
 			c.setControlError(err)
 			return err
 		}
@@ -775,7 +782,7 @@ func (c *runController) watchBackend(ctx context.Context, backend CompletionSour
 	failures := 0
 	maxFailures := c.maxObserveFailures
 	if maxFailures <= 0 {
-		maxFailures = 3
+		maxFailures = core.DefaultRunPolicy().Exploration.MaxAuthorityObserveFailures
 	}
 	for {
 		select {
@@ -785,12 +792,7 @@ func (c *runController) watchBackend(ctx context.Context, backend CompletionSour
 		}
 		completion, err := backend.Observe(ctx, target)
 		if err != nil {
-			event, eventErr := c.canonicalEvent("authority", core.EventAuthorityObserveError, core.AuthorityErrorPayload{Error: c.redactor().Redact(err.Error())})
-			if eventErr != nil {
-				c.setControlError(eventErr)
-				return
-			}
-			if emitErr := c.emitEvent(event); emitErr != nil {
+			if emitErr := c.emitAuthorityObserveError(err); emitErr != nil {
 				if !errors.Is(emitErr, ErrRunClosed) {
 					c.setControlError(emitErr)
 				}
@@ -808,9 +810,7 @@ func (c *runController) watchBackend(ctx context.Context, backend CompletionSour
 		if completion.Done {
 			if c.backendCompletion() == nil {
 				c.setBackendCompletion(completion)
-				if event, eventErr := c.canonicalEvent("authority", core.EventAuthorityCompleted, core.AuthorityProgressPayload{Completion: completion}); eventErr == nil {
-					_ = c.emitEvent(event)
-				}
+				_ = c.emitAuthorityCompleted(completion)
 			}
 			c.cancel()
 			return

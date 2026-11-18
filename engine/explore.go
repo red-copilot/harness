@@ -112,13 +112,8 @@ func runExploreAttempt(ctx context.Context, session AgentSession, req ExploreReq
 		_ = abortSession(session)
 		return AttemptReport{}, "conclude", err
 	}
-	toolTimeout := limits.ToolTimeout
-	if toolTimeout <= 0 {
-		toolTimeout = DefaultToolCallTimeout
-	}
 	concludeTurn, concludeErr := runAgentTurn(concludeCtx, session, concludePrompt, TurnLimits{
 		MaxAssistantBytes: limits.MaxAssistantBytes,
-		ToolTimeout:       toolTimeout,
 		ReportOnly:        true,
 	}, sink, true)
 	if concludeErr == nil && req.WorkspaceDir != "" {

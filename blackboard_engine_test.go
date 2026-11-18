@@ -55,7 +55,7 @@ func TestBlackboardEngineRunsReasonAndOneAttempt(t *testing.T) {
 	spec.Policy.Exploration.MaxWallTimePerAttempt = time.Second
 	spec.Policy.Exploration.ConcludeTimeout = 100 * time.Millisecond
 	spec.Reasoner.Runtime = &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
-		return promptReportSession(req.WorkspaceDir, `{"board_revision":1,"intents":[{"from":["origin"],"description":"probe"}]}`)
+		return promptReportSession(req.WorkspaceDir, reasonIntentReport())
 	}}
 	spec.Executor.Runtime = &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
 		return promptReportSessionWithEvidence(req.WorkspaceDir, evidenceBackedReport("negative", "test"), map[string]string{"evidence.txt": "test"})
@@ -84,7 +84,7 @@ func TestBlackboardEngineStartsReasonWithoutBootstrap(t *testing.T) {
 	spec.Policy.Exploration.MaxAttemptsPerIntent = 1
 	spec.Policy.Exploration.StagnationRounds = 1
 	spec.Reasoner.Runtime = &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
-		return promptReportSession(req.WorkspaceDir, `{"board_revision":1,"intents":[{"from":["origin"],"description":"probe"}]}`)
+		return promptReportSession(req.WorkspaceDir, reasonIntentReport())
 	}}
 	spec.Executor.Runtime = &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
 		return promptReportSessionWithEvidence(req.WorkspaceDir, evidenceBackedReport("negative", "explored"), map[string]string{"evidence.txt": "explored"})
@@ -111,7 +111,7 @@ func TestBlackboardEngineStopsAtMaxAttemptsPerIntent(t *testing.T) {
 	spec.Policy.Exploration.MaxWallTimePerAttempt = time.Second
 	spec.Policy.Exploration.ConcludeTimeout = 100 * time.Millisecond
 	spec.Reasoner.Runtime = &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
-		return promptReportSession(req.WorkspaceDir, `{"board_revision":1,"intents":[{"from":["origin"],"description":"probe"}]}`)
+		return promptReportSession(req.WorkspaceDir, reasonIntentReport())
 	}}
 	executor := &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
 		return promptReportSession(req.WorkspaceDir, "not json")
@@ -141,7 +141,7 @@ func TestBlackboardEngineStopsOnEvidenceValidationFailure(t *testing.T) {
 	spec.Policy.Exploration.MaxWallTimePerAttempt = time.Second
 	spec.Policy.Exploration.ConcludeTimeout = 100 * time.Millisecond
 	spec.Reasoner.Runtime = &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
-		return promptReportSession(req.WorkspaceDir, `{"board_revision":1,"intents":[{"from":["origin"],"description":"probe"}]}`)
+		return promptReportSession(req.WorkspaceDir, reasonIntentReport())
 	}}
 	bad := `{"phase":"concluded","claim":{"kind":"finding","description":"found","observation_refs":["obs-1"]},"observations":[{"local_id":"obs-1","kind":"test","summary":"result","target":"target-1","evidence_files":["proof.txt"]}]}`
 	executor := &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
@@ -169,7 +169,7 @@ func TestArtifactStoreFailureTerminatesRunWithoutVerification(t *testing.T) {
 	spec.Verifier = verifier
 	spec.ReasonStrategy = oneIntentReasonStrategy{}
 	spec.Reasoner.Runtime = &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
-		return promptReportSession(req.WorkspaceDir, `{"board_revision":1,"intents":[{"from":["origin"],"description":"probe"}]}`)
+		return promptReportSession(req.WorkspaceDir, reasonIntentReport())
 	}}
 	finding := `{"phase":"concluded","claim":{"kind":"finding","description":"confirmed","observation_refs":["obs-1"]},"observations":[{"local_id":"obs-1","kind":"test","summary":"result","target":"target-1","evidence_files":["proof.txt"]}]}`
 	executor := &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {

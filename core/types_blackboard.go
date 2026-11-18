@@ -154,6 +154,13 @@ type ExploreStrategy interface {
 	Parse(ExploreRequest, TurnResult) (AttemptReport, error)
 }
 
+// RequiresEvidence reports whether a Claim kind must cite archived evidence.
+// Findings and negatives are the only kinds a model may produce, and both are
+// bound to the Artifact -> Observation -> Claim chain.
+func (kind ClaimKind) RequiresEvidence() bool {
+	return kind == ClaimFinding || kind == ClaimNegative
+}
+
 // ValidateClaim enforces immutable Claim shape and evidence requirements.
 func ValidateClaim(claim Claim) error {
 	if strings.TrimSpace(claim.ID) == "" {
@@ -168,10 +175,10 @@ func ValidateClaim(claim Claim) error {
 	if strings.TrimSpace(claim.Description) == "" {
 		return fmt.Errorf("claim description is required")
 	}
-	switch claim.Kind {
-	case ClaimOrigin, ClaimGoal:
+	switch {
+	case claim.Kind == ClaimOrigin || claim.Kind == ClaimGoal:
 		return nil
-	case ClaimFinding, ClaimNegative:
+	case claim.Kind.RequiresEvidence():
 		if len(claim.ObservationIDs) == 0 {
 			return fmt.Errorf("%s claim requires observations", claim.Kind)
 		}
@@ -270,8 +277,8 @@ func ValidateAttemptReport(report AttemptReport) error {
 		}
 		localIDs[localID] = struct{}{}
 	}
-	switch report.Claim.Kind {
-	case ClaimFinding, ClaimNegative:
+	switch {
+	case report.Claim.Kind.RequiresEvidence():
 		if len(report.Claim.ObservationRefs) == 0 {
 			return fmt.Errorf("%s claim requires observation refs", report.Claim.Kind)
 		}

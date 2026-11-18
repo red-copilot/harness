@@ -23,6 +23,9 @@ func runAgentTurn(ctx context.Context, session AgentSession, prompt string, limi
 	if session == nil {
 		return TurnResult{}, errors.New("agent session is required")
 	}
+	if limits.ToolTimeout <= 0 {
+		limits.ToolTimeout = DefaultToolCallTimeout
+	}
 	if err := session.Prompt(ctx, prompt); err != nil {
 		return TurnResult{}, err
 	}

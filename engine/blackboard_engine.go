@@ -9,9 +9,7 @@ import (
 )
 
 type activeSlot struct {
-	intentID  string
-	attemptID string
-	cancel    context.CancelFunc
+	cancel context.CancelFunc
 }
 
 type boardAttemptResult struct {
@@ -267,15 +265,13 @@ func (e *blackboardEngine) startOpenIntents(ctx context.Context) {
 	if e.hasActiveSlot() {
 		return
 	}
-	for _, intent := range e.board.snapshot().Intents {
-		if intent.State != IntentOpen {
-			continue
-		}
-		if err := e.startIntent(ctx, intent); err != nil {
-			e.controller.setControlError(err)
-			e.stopped = true
-		}
+	intent, ok := e.board.nextOpenIntent()
+	if !ok {
 		return
+	}
+	if err := e.startIntent(ctx, intent); err != nil {
+		e.controller.setControlError(err)
+		e.stopped = true
 	}
 }
 
@@ -318,7 +314,7 @@ func (e *blackboardEngine) startIntent(ctx context.Context, intent Intent) error
 	if wall := e.board.policy.Exploration.MaxWallTimePerAttempt; wall > 0 {
 		attemptCtx, cancel = context.WithTimeout(ctx, wall)
 	}
-	e.active = &activeSlot{intentID: intent.ID, attemptID: attemptID, cancel: cancel}
+	e.active = &activeSlot{cancel: cancel}
 	requests := e.exploreRequest(claimed)
 	e.wg.Add(1)
 	go func() {
@@ -331,7 +327,6 @@ func (e *blackboardEngine) startIntent(ctx context.Context, intent Intent) error
 		report, conclusion, err := runExploreAttempt(attemptCtx, e.executor, requests, TurnLimits{
 			MaxToolCalls:      e.board.policy.Exploration.MaxToolCallsPerAttempt,
 			MaxAssistantBytes: e.board.policy.Context.MaxAssistantBytes,
-			ToolTimeout:       DefaultToolCallTimeout,
 		}, e.board.policy.Exploration.ConcludeTimeout, e.eventSink(claimed.ExecutorID), e.explore)
 		usageAfter := e.executor.Usage()
 		e.results <- boardAttemptResult{
@@ -393,7 +388,6 @@ func (e *blackboardEngine) startReason(ctx context.Context) {
 			turn, err = runAgentTurn(reasonCtx, e.planner, prompt, TurnLimits{
 				MaxToolCalls:      e.board.policy.Exploration.MaxReasonerToolCalls,
 				MaxAssistantBytes: e.board.policy.Context.MaxAssistantBytes,
-				ToolTimeout:       DefaultToolCallTimeout,
 			}, e.eventSink("planner"), true)
 			if err == nil {
 				turn.Report, err = readReport(e.controller.sessionWorkspace("planner"), e.board.policy.Evidence.MaxReportBytes)
@@ -492,10 +486,7 @@ func (e *blackboardEngine) retryOrAbandon(intent Intent, reason string) (Intent,
 }
 
 func (e *blackboardEngine) handleAttempt(ctx context.Context, result boardAttemptResult) error {
-	if e.active != nil {
-		e.active.cancel()
-		e.active = nil
-	}
+	e.releaseActive()
 	if err := e.controller.addUsage(result.usage); err != nil {
 		return err
 	}
@@ -523,7 +514,7 @@ func (e *blackboardEngine) handleAttempt(ctx context.Context, result boardAttemp
 	var artifacts []Artifact
 	haveClaim := false
 	if result.report.Claim != nil {
-		if result.report.Claim.Kind == ClaimFinding || result.report.Claim.Kind == ClaimNegative {
+		if result.report.Claim.Kind.RequiresEvidence() {
 			selected := referencedObservations(result.report)
 			collected, collectedArtifacts, err := e.collectEvidence(ctx, result, selected)
 			if err != nil {
@@ -698,10 +689,19 @@ func (e *blackboardEngine) collectEvidence(ctx context.Context, result boardAtte
 
 func (e *blackboardEngine) hasActiveSlot() bool { return e.active != nil }
 
+// cancelActive stops the in-flight attempt but keeps the slot occupied so the
+// drain loop still sees the result as authoritative.
 func (e *blackboardEngine) cancelActive() {
 	if e.active != nil && e.active.cancel != nil {
 		e.active.cancel()
 	}
+}
+
+// releaseActive cancels the in-flight attempt and frees the slot once its
+// result has been handled.
+func (e *blackboardEngine) releaseActive() {
+	e.cancelActive()
+	e.active = nil
 }
 
 func (e *blackboardEngine) drainCanceledAttempts() {
@@ -750,10 +750,7 @@ reasons:
 }
 
 func (e *blackboardEngine) recordCanceledAttempt(result boardAttemptResult) {
-	if e.active != nil {
-		e.active.cancel()
-		e.active = nil
-	}
+	e.releaseActive()
 	_ = e.controller.addUsage(result.usage)
 	result.attempt.FinishedAt = time.Now().UTC()
 	result.attempt.Phase = IntentAttemptCancelled

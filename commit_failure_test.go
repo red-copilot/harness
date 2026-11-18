@@ -31,7 +31,7 @@ func TestCommitFailureDoesNotLeakUncommittedBoardIntoResult(t *testing.T) {
 	spec.Policy.Exploration.MaxAttemptsPerIntent = 1
 	spec.Policy.Exploration.StagnationRounds = 1
 	spec.Reasoner.Runtime = &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
-		return promptReportSession(req.WorkspaceDir, `{"board_revision":1,"intents":[{"from":["origin"],"description":"probe"}]}`)
+		return promptReportSession(req.WorkspaceDir, reasonIntentReport())
 	}}
 	spec.Executor.Runtime = &fakeRuntime{new: func(req harness.RuntimeRequest) harness.AgentSession {
 		return promptReportSession(req.WorkspaceDir, `{"phase":"failed","error":"not attempted"}`)
