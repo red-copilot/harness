@@ -141,8 +141,11 @@ the gate, and CI must not be edited just to turn the web job green.
 CLI smoke checks (the CLI auto-loads `.env` from the working directory):
 
 ```bash
-go run ./cmd/harness run --config examples/run.yaml [--db path] [--json]
-go run ./cmd/harness runs show|events [--db path] --id run-id
+go run ./cmd/harness run --config examples/run.yaml [--db path] [--json] [--resume run-id]
+go run ./cmd/harness runs list [--db path] [--limit n] [--json]
+go run ./cmd/harness runs show|events|board|artifacts [--db path] --id run-id
+go run ./cmd/harness runs logs [--db path] --id run-id [--tail n]
+go run ./cmd/harness runs cancel [--db path] --id run-id
 go run ./cmd/harness doctor [--db path]
 go run ./cmd/harness backup --db path --out path [--manifest path]
 go run ./cmd/harness version

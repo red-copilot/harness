@@ -54,8 +54,11 @@ packages.
 ## CLI and Configuration
 
 ```bash
-go run ./cmd/harness run --config examples/run.yaml [--db path] [--json]
-go run ./cmd/harness runs show|events --db path --id run-id
+go run ./cmd/harness run --config examples/run.yaml [--db path] [--json] [--resume run-id]
+go run ./cmd/harness runs list [--db path] [--limit n] [--json]
+go run ./cmd/harness runs show|events|board|artifacts --db path --id run-id
+go run ./cmd/harness runs logs --db path --id run-id [--tail n]
+go run ./cmd/harness runs cancel --db path --id run-id
 go run ./cmd/harness doctor [--db path]
 go run ./cmd/harness backup --db path --out path [--manifest path]
 go run ./cmd/harness version
@@ -122,6 +125,17 @@ outcome: succeeded | failed | cancelled | timed_out | stagnated | interrupted
 - Backend terminal completion outranks a Verifier. Final `Observe` errors fail
   closed; watcher `Observe` errors are tolerated up to
   `max_authority_observe_failures`.
+- Crash recovery is explicit: `NewRunner` marks non-terminal Runs interrupted
+  after consulting `Config.RecoveryGuard`; `Runner.Resume` replays the newest
+  `board_commits` snapshot via `Store.RestoreBoardState`, returns claimed
+  intents to open and re-provisions sessions. A damaged or revision-mismatched
+  snapshot fails closed. `harness run --resume run-id` is the operator entry.
+- Process isolation is a `flock` on `<db>.lock` held for the run lifetime
+  (`internal/cli/recovery_guard.go`); a second process refuses rather than
+  clobbers. `runs cancel` only finalizes a Run it can prove has no live owner.
+- Target backends and agent runtimes are registries
+  (`internal/cli/registry.go`); unknown kinds fail closed. Add a backend by
+  registering it, not by editing the switch.
 
 ## Coding Conventions
 
