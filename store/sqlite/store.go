@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -453,6 +454,44 @@ func (s *Store) MarkInterrupted(ctx context.Context) error {
 }
 
 func (s *Store) Close() error { return s.db.Close() }
+
+// MarkRunInterrupted finalizes one non-terminal Run as interrupted. It is the
+// operator escape hatch for a Run whose owning process is gone; callers must
+// hold the recovery lock so a live runner's Run is never clobbered. It reports
+// false when the Run is unknown or already terminal.
+func (s *Store) MarkRunInterrupted(ctx context.Context, runID string) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	var phase string
+	if err := tx.QueryRowContext(ctx, `SELECT phase FROM runs WHERE id=?`, runID).Scan(&phase); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	if phase == string(core.RunPhaseTerminal) {
+		return false, nil
+	}
+	now := time.Now().UTC()
+	event, err := core.NewEvent(runID, core.EventRunFinalized, core.RunFinalizedPayload{Outcome: core.RunOutcomeInterrupted})
+	if err != nil {
+		return false, err
+	}
+	event.Time, event.Source = now, "operator"
+	if _, err := appendEventTx(ctx, tx, event); err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE runs SET phase=?, outcome=?, finished_at=? WHERE id=?`, core.RunPhaseTerminal, core.RunOutcomeInterrupted, formatTime(now), runID); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
 
 func queryPayload[T any](ctx context.Context, db *sql.DB, query string, args ...any) ([]T, error) {
 	rows, err := db.QueryContext(ctx, query, args...)
