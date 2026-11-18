@@ -103,7 +103,7 @@ func (e *blackboardEngine) run(ctx context.Context) (runErr error) {
 		return err
 	}
 
-	ticker := time.NewTicker(20 * time.Millisecond)
+	ticker := time.NewTicker(e.board.policy.Exploration.EnginePollInterval)
 	defer ticker.Stop()
 	for {
 		if e.controller.backendCompletion() != nil {
@@ -307,7 +307,7 @@ func (e *blackboardEngine) startIntent(ctx context.Context, intent Intent) error
 		return err
 	}
 	events = append(events, claimedEvent, startedEvent)
-	if err := e.commit(ctx, Commit{Revision: e.board.boardRevision(), Intents: []Intent{claimed}, Attempts: []IntentAttempt{attempt}, Events: events}); err != nil {
+	if err := e.commit(ctx, e.attemptCommit(attempt, &claimed, events)); err != nil {
 		return err
 	}
 	attemptCtx, cancel := context.WithCancel(ctx)
@@ -494,19 +494,7 @@ func (e *blackboardEngine) handleAttempt(ctx context.Context, result boardAttemp
 	result.attempt.Conclusion = result.conclusion
 
 	if result.err != nil {
-		result.attempt.Phase = IntentAttemptFailed
-		result.attempt.Error = e.controller.redactor().Redact(result.err.Error())
-		e.board.updateAttempt(result.attempt)
-		updated, intentEventType := e.retryOrAbandon(result.intent, result.attempt.Error)
-		e.stagnant++
-		events, err := e.attemptEvents(result.attempt, updated, EventAttemptFailed, intentEventType)
-		if err != nil {
-			return err
-		}
-		if err := e.commit(ctx, Commit{Revision: e.board.boardRevision(), Intents: []Intent{updated}, Attempts: []IntentAttempt{result.attempt}, Events: events}); err != nil {
-			return err
-		}
-		return e.finishAttemptBookkeeping()
+		return e.failAttempt(ctx, result, e.controller.redactor().Redact(result.err.Error()), false, nil)
 	}
 
 	var claim Claim
@@ -518,33 +506,14 @@ func (e *blackboardEngine) handleAttempt(ctx context.Context, result boardAttemp
 			selected := referencedObservations(result.report)
 			collected, collectedArtifacts, err := e.collectEvidence(ctx, result, selected)
 			if err != nil {
-				result.attempt.Phase = IntentAttemptFailed
-				result.attempt.Error = e.controller.redactor().Redact(err.Error())
-				e.board.updateAttempt(result.attempt)
+				// An artifact store failure abandons the intent outright and
+				// propagates; other collection failures are recorded on the
+				// attempt and resolved by retry or abandonment.
 				var artifactStoreErr *ArtifactStoreError
 				if errors.As(err, &artifactStoreErr) {
-					abandoned, abandonErr := e.board.abandonIntent(result.intent.ID, "artifact store failure: "+result.attempt.Error, time.Now().UTC())
-					if abandonErr != nil {
-						return errors.Join(err, abandonErr)
-					}
-					events, eventErr := e.attemptEvents(result.attempt, abandoned, EventAttemptFailed, EventIntentAbandoned)
-					if eventErr != nil {
-						return errors.Join(err, eventErr)
-					}
-					if commitErr := e.commit(ctx, Commit{Revision: e.board.boardRevision(), Intents: []Intent{abandoned}, Attempts: []IntentAttempt{result.attempt}, Events: events}); commitErr != nil {
-						return errors.Join(err, commitErr)
-					}
-					return err
+					return e.failAttempt(ctx, result, e.controller.redactor().Redact(err.Error()), true, err)
 				}
-				updated, intentEventType := e.retryOrAbandon(result.intent, result.attempt.Error)
-				events, eventErr := e.attemptEvents(result.attempt, updated, EventAttemptFailed, intentEventType)
-				if eventErr != nil {
-					return eventErr
-				}
-				if commitErr := e.commit(ctx, Commit{Revision: e.board.boardRevision(), Intents: []Intent{updated}, Attempts: []IntentAttempt{result.attempt}, Events: events}); commitErr != nil {
-					return commitErr
-				}
-				return e.finishAttemptBookkeeping()
+				return e.failAttempt(ctx, result, e.controller.redactor().Redact(err.Error()), false, nil)
 			}
 			observations = collected
 			artifacts = collectedArtifacts
@@ -623,8 +592,51 @@ func (e *blackboardEngine) handleAttempt(ctx context.Context, result boardAttemp
 		}
 		events = append(events, event)
 	}
-	if err := e.commit(ctx, Commit{Revision: e.board.boardRevision(), Claims: claims, Intents: []Intent{*updated}, Attempts: []IntentAttempt{result.attempt}, Observations: observations, Artifacts: artifacts, Events: events}); err != nil {
+	commit := e.attemptCommit(result.attempt, updated, events)
+	commit.Claims = claims
+	commit.Observations = observations
+	commit.Artifacts = artifacts
+	if err := e.commit(ctx, commit); err != nil {
 		return err
+	}
+	return e.finishAttemptBookkeeping()
+}
+
+// attemptCommit builds the canonical Commit for one attempt resolution.
+func (e *blackboardEngine) attemptCommit(attempt IntentAttempt, intent *Intent, events []Event) Commit {
+	commit := Commit{Revision: e.board.boardRevision(), Attempts: []IntentAttempt{attempt}, Events: events}
+	if intent != nil {
+		commit.Intents = []Intent{*intent}
+	}
+	return commit
+}
+
+// failAttempt records a failed attempt, resolves its intent, and commits the
+// canonical transition. forcedAbandon marks an artifact store failure, which
+// abandons the intent outright. withErr, when set, is joined into the returned
+// failure after the commit succeeds.
+func (e *blackboardEngine) failAttempt(ctx context.Context, result boardAttemptResult, redactedErr string, forcedAbandon bool, withErr error) error {
+	result.attempt.Phase = IntentAttemptFailed
+	result.attempt.Error = redactedErr
+	e.board.updateAttempt(result.attempt)
+	updated, intentEventType := e.retryOrAbandon(result.intent, result.attempt.Error)
+	if forcedAbandon {
+		abandoned, abandonErr := e.board.abandonIntent(result.intent.ID, "artifact store failure: "+result.attempt.Error, time.Now().UTC())
+		if abandonErr != nil {
+			return errors.Join(withErr, abandonErr)
+		}
+		updated, intentEventType = abandoned, EventIntentAbandoned
+	}
+	e.stagnant++
+	events, eventErr := e.attemptEvents(result.attempt, updated, EventAttemptFailed, intentEventType)
+	if eventErr != nil {
+		return errors.Join(withErr, eventErr)
+	}
+	if commitErr := e.commit(ctx, e.attemptCommit(result.attempt, &updated, events)); commitErr != nil {
+		return errors.Join(withErr, commitErr)
+	}
+	if withErr != nil {
+		return withErr
 	}
 	return e.finishAttemptBookkeeping()
 }
@@ -706,7 +718,7 @@ func (e *blackboardEngine) releaseActive() {
 
 func (e *blackboardEngine) drainCanceledAttempts() {
 	e.cancelActive()
-	deadline := time.After(3 * time.Second)
+	deadline := time.After(e.board.policy.Exploration.DrainTimeout)
 	for e.hasActiveSlot() {
 		select {
 		case result := <-e.results:
@@ -759,20 +771,20 @@ func (e *blackboardEngine) recordCanceledAttempt(result boardAttemptResult) {
 		result.attempt.Error = e.controller.redactor().Redact(result.err.Error())
 	}
 	e.board.updateAttempt(result.attempt)
-	var intents []Intent
-	var intentEventType EventType
+	var abandoned *Intent
+	intentEventType := EventType("")
 	if intent := e.board.findIntent(result.intent.ID); intent != nil && intent.State == IntentClaimed {
-		abandoned, _ := e.board.abandonIntent(intent.ID, "run canceled before conclusion", time.Now().UTC())
-		intents = append(intents, abandoned)
+		updated, _ := e.board.abandonIntent(intent.ID, "run canceled before conclusion", time.Now().UTC())
+		abandoned = &updated
 		intentEventType = EventIntentAbandoned
 	}
 	var intent Intent
-	if len(intents) > 0 {
-		intent = intents[0]
+	if abandoned != nil {
+		intent = *abandoned
 	}
 	events, err := e.attemptEvents(result.attempt, intent, EventAttemptFailed, intentEventType)
 	if err == nil {
-		_ = e.commit(context.Background(), Commit{Revision: e.board.boardRevision(), Intents: intents, Attempts: []IntentAttempt{result.attempt}, Events: events})
+		_ = e.commit(context.Background(), e.attemptCommit(result.attempt, abandoned, events))
 	}
 }
 

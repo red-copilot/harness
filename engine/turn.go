@@ -8,9 +8,11 @@ import (
 	"time"
 )
 
-// ErrAgentUnavailable marks a session that cannot receive another turn.
+// ReportFileName is the one file the executor protocol requires the agent to
+// write; it is part of the contract, not a discretionary tool call.
 const ReportFileName = "report.json"
 
+// ErrAgentUnavailable marks a session that cannot receive another turn.
 var ErrAgentUnavailable = errors.New("agent session unavailable")
 
 // RunAgentTurn sends one prompt and consumes normalized events until the
@@ -131,7 +133,7 @@ func runAgentTurn(ctx context.Context, session AgentSession, prompt string, limi
 }
 
 func abortSession(session AgentSession) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultRunPolicy().Exploration.AbortTimeout)
 	defer cancel()
 	return session.Abort(ctx)
 }

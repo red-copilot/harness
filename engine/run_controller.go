@@ -342,6 +342,24 @@ func (c *runController) canonicalEvent(source string, typ core.EventType, payloa
 	return event, nil
 }
 
+// lockCanonicalWrite takes the canonical-write lock and enforces the closed
+// and terminal-claimed guards shared by every board/audit write path.
+func (c *runController) lockCanonicalWrite() error {
+	c.eventMu.Lock()
+	if c.eventsClosed {
+		c.eventMu.Unlock()
+		return ErrRunClosed
+	}
+	c.mu.RLock()
+	claimed := c.state.terminalClaim
+	c.mu.RUnlock()
+	if claimed {
+		c.eventMu.Unlock()
+		return ErrRunClosed
+	}
+	return nil
+}
+
 func (c *runController) emitEvent(event core.Event) error {
 	version, known := core.EventSchemaVersion(event.Type)
 	if !known {
@@ -359,17 +377,10 @@ func (c *runController) emitEvent(event core.Event) error {
 	if event.Time.IsZero() {
 		event.Time = time.Now().UTC()
 	}
-	c.eventMu.Lock()
+	if err := c.lockCanonicalWrite(); err != nil {
+		return err
+	}
 	defer c.eventMu.Unlock()
-	if c.eventsClosed {
-		return ErrRunClosed
-	}
-	c.mu.RLock()
-	claimed := c.state.terminalClaim
-	c.mu.RUnlock()
-	if claimed {
-		return ErrRunClosed
-	}
 	stored, err := c.runner.store.AppendEvent(context.Background(), event)
 	if err != nil {
 		c.setControlError(err)
@@ -386,17 +397,10 @@ func (c *runController) appendLog(record core.LogRecord) error {
 	if record.Time.IsZero() {
 		record.Time = time.Now().UTC()
 	}
-	c.eventMu.Lock()
+	if err := c.lockCanonicalWrite(); err != nil {
+		return err
+	}
 	defer c.eventMu.Unlock()
-	if c.eventsClosed {
-		return ErrRunClosed
-	}
-	c.mu.RLock()
-	claimed := c.state.terminalClaim
-	c.mu.RUnlock()
-	if claimed {
-		return ErrRunClosed
-	}
 	if _, err := c.runner.store.AppendLog(context.Background(), record); err != nil {
 		c.setControlError(err)
 		return fmt.Errorf("persist log: %w", err)
@@ -623,80 +627,113 @@ func (c *runController) run(spec RunSpec) {
 	if watchErr := c.stopBackendWatcher(); watchErr != nil {
 		explorationErr = errors.Join(explorationErr, watchErr)
 	}
-	outcome := core.RunOutcomeFailed
-	var finalErr error
-	var verdict *core.Verdict
-	if breach := c.budgetExceeded(); breach != nil {
-		finalErr = breach
-	} else if completion := c.backendCompletion(); completion != nil {
-		verdict = completionVerdict(*completion)
-		if completion.Success && (explorationErr == nil || errors.Is(explorationErr, context.Canceled)) {
-			outcome = core.RunOutcomeSucceeded
-		} else if explorationErr != nil && !errors.Is(explorationErr, context.Canceled) {
-			finalErr = explorationErr
-		}
-	} else if c.ctx.Err() != nil {
-		finalErr = c.ctx.Err()
-		if c.stagnated() {
-			outcome = core.RunOutcomeStagnated
-		} else if errors.Is(c.ctx.Err(), context.DeadlineExceeded) {
-			outcome = core.RunOutcomeTimedOut
-		} else {
-			outcome = core.RunOutcomeCancelled
-		}
-	} else if explorationErr != nil {
-		finalErr = explorationErr
-	} else if spec.Verifier != nil {
-		if err := c.updatePhase(core.RunPhaseFinalizing); err != nil {
-			finalErr = err
-		} else if err := c.updatePhase(core.RunPhaseVerifying); err != nil {
-			finalErr = err
-		} else {
-			evidenceDir, bundleErr := buildEvidenceBundle(c.ctx, c.runner.store, c.id, c.root)
-			verifyVerdict, verifyErr := core.Verdict{}, bundleErr
-			if bundleErr == nil {
-				verifyVerdict, verifyErr = spec.Verifier.Verify(c.ctx, core.VerifyRequest{RunID: c.id, Task: spec.Task, Target: target, EvidenceDir: evidenceDir})
-				_ = os.RemoveAll(evidenceDir)
-			}
-			if verifyErr == nil {
-				verifyVerdict.Authority = core.VerdictAuthorityVerifier
-			}
-			if spec.Backend != nil && c.ctx.Err() == nil {
-				if authorityErr := c.observeAuthorityOnce(spec.Backend, target); authorityErr != nil {
-					verifyErr = errors.Join(verifyErr, authorityErr)
-				}
-			}
-			if completion := c.backendCompletion(); completion != nil {
-				verdict = completionVerdict(*completion)
-				if completion.Success {
-					outcome = core.RunOutcomeSucceeded
-				} else {
-					outcome = core.RunOutcomeFailed
-				}
-			} else if verifyErr != nil {
-				finalErr = verifyErr
-			} else {
-				verdict = &verifyVerdict
-				if verifyVerdict.Success {
-					outcome = core.RunOutcomeSucceeded
-				}
-			}
-		}
-	} else if c.stagnated() {
-		outcome = core.RunOutcomeStagnated
-	} else {
-		finalErr = errors.New("run has no authoritative verdict")
-	}
+	decision := c.arbitrate(spec, target, explorationErr)
 	if closeErr := closeTarget(); closeErr != nil {
-		finalErr = errors.Join(finalErr, closeErr)
-		if outcome == core.RunOutcomeSucceeded {
-			outcome = core.RunOutcomeFailed
+		decision.finalErr = errors.Join(decision.finalErr, closeErr)
+		if decision.outcome == core.RunOutcomeSucceeded {
+			decision.outcome = core.RunOutcomeFailed
 		}
 	}
-	c.finishExecution(outcome, finalErr, verdict)
+	c.finishExecution(decision.outcome, decision.finalErr, decision.verdict)
 	c.runner.mu.Lock()
 	delete(c.runner.runs, c.id)
 	c.runner.mu.Unlock()
+}
+
+// outcomeDecision is the result of the terminal arbitration cascade.
+type outcomeDecision struct {
+	outcome  core.RunOutcome
+	verdict  *core.Verdict
+	finalErr error
+}
+
+// arbitrate resolves the terminal outcome from the accumulated authority
+// signals. The cascade is exhaustive and fail-closed: an unset outcome stays
+// failed, and only a Verifier or backend terminal completion may produce
+// success.
+func (c *runController) arbitrate(spec RunSpec, target core.TargetBinding, explorationErr error) outcomeDecision {
+	decision := outcomeDecision{outcome: core.RunOutcomeFailed}
+	if breach := c.budgetExceeded(); breach != nil {
+		decision.finalErr = breach
+		return decision
+	}
+	if completion := c.backendCompletion(); completion != nil {
+		decision.verdict = completionVerdict(*completion)
+		if completion.Success && (explorationErr == nil || errors.Is(explorationErr, context.Canceled)) {
+			decision.outcome = core.RunOutcomeSucceeded
+		} else if explorationErr != nil && !errors.Is(explorationErr, context.Canceled) {
+			decision.finalErr = explorationErr
+		}
+		return decision
+	}
+	if c.ctx.Err() != nil {
+		decision.finalErr = c.ctx.Err()
+		if c.stagnated() {
+			decision.outcome = core.RunOutcomeStagnated
+		} else if errors.Is(c.ctx.Err(), context.DeadlineExceeded) {
+			decision.outcome = core.RunOutcomeTimedOut
+		} else {
+			decision.outcome = core.RunOutcomeCancelled
+		}
+		return decision
+	}
+	if explorationErr != nil {
+		decision.finalErr = explorationErr
+		return decision
+	}
+	if spec.Verifier != nil {
+		return c.arbitrateVerified(spec, target)
+	}
+	if c.stagnated() {
+		decision.outcome = core.RunOutcomeStagnated
+		return decision
+	}
+	decision.finalErr = errors.New("run has no authoritative verdict")
+	return decision
+}
+
+// arbitrateVerified runs the final verification flow and resolves its outcome.
+func (c *runController) arbitrateVerified(spec RunSpec, target core.TargetBinding) outcomeDecision {
+	decision := outcomeDecision{outcome: core.RunOutcomeFailed}
+	if err := c.updatePhase(core.RunPhaseFinalizing); err != nil {
+		decision.finalErr = err
+		return decision
+	}
+	if err := c.updatePhase(core.RunPhaseVerifying); err != nil {
+		decision.finalErr = err
+		return decision
+	}
+	evidenceDir, bundleErr := buildEvidenceBundle(c.ctx, c.runner.store, c.id, c.root)
+	verifyVerdict, verifyErr := core.Verdict{}, bundleErr
+	if bundleErr == nil {
+		verifyVerdict, verifyErr = spec.Verifier.Verify(c.ctx, core.VerifyRequest{RunID: c.id, Task: spec.Task, Target: target, EvidenceDir: evidenceDir})
+		_ = os.RemoveAll(evidenceDir)
+	}
+	if verifyErr == nil {
+		verifyVerdict.Authority = core.VerdictAuthorityVerifier
+	}
+	if spec.Backend != nil && c.ctx.Err() == nil {
+		if authorityErr := c.observeAuthorityOnce(spec.Backend, target); authorityErr != nil {
+			verifyErr = errors.Join(verifyErr, authorityErr)
+		}
+	}
+	// A backend terminal completion outranks the Verifier.
+	if completion := c.backendCompletion(); completion != nil {
+		decision.verdict = completionVerdict(*completion)
+		if completion.Success {
+			decision.outcome = core.RunOutcomeSucceeded
+		}
+		return decision
+	}
+	if verifyErr != nil {
+		decision.finalErr = verifyErr
+		return decision
+	}
+	decision.verdict = &verifyVerdict
+	if verifyVerdict.Success {
+		decision.outcome = core.RunOutcomeSucceeded
+	}
+	return decision
 }
 
 func completionVerdict(completion core.Completion) *core.Verdict {
@@ -855,17 +892,10 @@ var ErrRunClosed = errors.New("run event stream closed")
 // events to the live audit stream.
 func (c *runController) commitBoard(ctx context.Context, commit Commit) error {
 	commit.RunID = c.id
-	c.eventMu.Lock()
+	if err := c.lockCanonicalWrite(); err != nil {
+		return err
+	}
 	defer c.eventMu.Unlock()
-	if c.eventsClosed {
-		return ErrRunClosed
-	}
-	c.mu.RLock()
-	claimed := c.state.terminalClaim
-	c.mu.RUnlock()
-	if claimed {
-		return ErrRunClosed
-	}
 	commit.ExpectedRevision = c.boardRevision
 	stored, err := c.runner.store.Commit(ctx, commit)
 	if err != nil {

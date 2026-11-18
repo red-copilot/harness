@@ -131,4 +131,16 @@ func TestBlackboardPolicyDefaults(t *testing.T) {
 	if policy.ConcludeTimeout <= 0 {
 		t.Fatalf("ConcludeTimeout = %s, want positive", policy.ConcludeTimeout)
 	}
+	if policy.EnginePollInterval <= 0 || policy.DrainTimeout <= 0 || policy.AbortTimeout <= 0 {
+		t.Fatalf("invalid engine cadence defaults: %+v", policy)
+	}
+	if err := ValidateRunPolicy(RunPolicy{Exploration: ExplorationPolicy{EnginePollInterval: -time.Second}}); err == nil {
+		t.Fatal("negative EnginePollInterval accepted")
+	}
+	if err := ValidateRunPolicy(RunPolicy{Exploration: ExplorationPolicy{DrainTimeout: -time.Second}}); err == nil {
+		t.Fatal("negative DrainTimeout accepted")
+	}
+	if err := ValidateRunPolicy(RunPolicy{Exploration: ExplorationPolicy{AbortTimeout: -time.Second}}); err == nil {
+		t.Fatal("negative AbortTimeout accepted")
+	}
 }
