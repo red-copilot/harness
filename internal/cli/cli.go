@@ -52,8 +52,14 @@ func Main(args []string, stdout, stderr io.Writer) int {
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, `Red Harness Go SDK
 Usage:
-  harness run --config run.yaml [--db path] [--json]
-  harness runs show|events [--db path] --id run-id
+  harness run --config run.yaml [--db path] [--json] [--resume run-id]
+  harness runs list [--db path] [--limit n] [--json]
+  harness runs show [--db path] --id run-id [--json]
+  harness runs events [--db path] --id run-id [--after seq]
+  harness runs logs [--db path] --id run-id [--tail n] [--after seq]
+  harness runs board [--db path] --id run-id
+  harness runs artifacts [--db path] --id run-id
+  harness runs cancel [--db path] --id run-id
   harness doctor [--db path]
   harness backup --db path --out path [--manifest path]
   harness version
@@ -121,57 +127,23 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 func runsCommand(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("runs requires show or events")
+		return errors.New("runs requires one of: list, show, events, logs, board, artifacts, cancel")
 	}
 	switch args[0] {
+	case "list":
+		return runsList(args[1:], stdout, stderr)
 	case "show":
-		fs := flag.NewFlagSet("runs show", flag.ContinueOnError)
-		fs.SetOutput(stderr)
-		dbPath := fs.String("db", ".harness/harness.db", "database")
-		id := fs.String("id", "", "run id")
-		if err := fs.Parse(args[1:]); err != nil {
-			return err
-		}
-		if *id == "" {
-			return errors.New("run id is required")
-		}
-		store, err := sqlite.Open(*dbPath)
-		if err != nil {
-			return err
-		}
-		defer store.Close()
-		record, err := store.GetRun(context.Background(), *id)
-		if err != nil {
-			return err
-		}
-		return printJSON(stdout, record)
+		return runsShow(args[1:], stdout, stderr)
 	case "events":
-		fs := flag.NewFlagSet("runs events", flag.ContinueOnError)
-		fs.SetOutput(stderr)
-		dbPath := fs.String("db", ".harness/harness.db", "database")
-		id := fs.String("id", "", "run id")
-		after := fs.Int64("after", 0, "after sequence")
-		if err := fs.Parse(args[1:]); err != nil {
-			return err
-		}
-		if *id == "" {
-			return errors.New("run id is required")
-		}
-		store, err := sqlite.Open(*dbPath)
-		if err != nil {
-			return err
-		}
-		defer store.Close()
-		events, err := store.ListEvents(context.Background(), *id, *after)
-		if err != nil {
-			return err
-		}
-		for _, event := range events {
-			if err := printJSONLine(stdout, event); err != nil {
-				return err
-			}
-		}
-		return nil
+		return runsEvents(args[1:], stdout, stderr)
+	case "logs":
+		return runsLogs(args[1:], stdout, stderr)
+	case "board":
+		return runsBoard(args[1:], stdout, stderr)
+	case "artifacts":
+		return runsArtifacts(args[1:], stdout, stderr)
+	case "cancel":
+		return runsCancel(args[1:], stdout, stderr)
 	default:
 		return fmt.Errorf("unknown runs command %q", args[0])
 	}

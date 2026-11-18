@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/red-copilot/harness/core"
@@ -103,6 +104,10 @@ type runController struct {
 	eventMu       sync.Mutex
 	eventsClosed  bool
 	boardRevision uint64
+	// droppedEvents counts live-stream events discarded because a slow consumer
+	// left the channel full. They remain in the canonical store; the counter is
+	// surfaced as a run event so operators can see the live stream was lossy.
+	droppedEvents uint64
 	// resumeCommit, when set, replays this board revision instead of starting
 	// from a fresh origin/goal board.
 	resumeCommit *Commit
@@ -389,10 +394,7 @@ func (c *runController) emitEvent(event core.Event) error {
 		c.setControlError(err)
 		return fmt.Errorf("persist event %q: %w", event.Type, err)
 	}
-	select {
-	case c.events <- stored:
-	default:
-	}
+	c.publishEvent(stored)
 	return nil
 }
 
@@ -502,6 +504,11 @@ func (c *runController) finishExecution(outcome core.RunOutcome, finalErr error,
 	record.Result = mustJSON(result)
 	record.Error = result.Error
 	record.FinishedAt = &now
+	if dropped := atomic.LoadUint64(&c.droppedEvents); dropped > 0 {
+		// Record live-stream loss so operators see the canonical audit is
+		// complete even when the stream they watched was not.
+		record.Metadata = mustJSON(map[string]uint64{"dropped_live_events": dropped})
+	}
 	var verdictRecord *core.VerdictRecord
 	if verdict != nil {
 		verdictRecord = &core.VerdictRecord{RunID: c.id, Authority: verdict.Authority, Success: verdict.Success, Score: verdict.Score, Message: redactor.Redact(verdict.Message), Evidence: redactor.RedactJSON(verdict.Evidence), CreatedAt: now}
@@ -522,10 +529,7 @@ func (c *runController) finishExecution(outcome core.RunOutcome, finalErr error,
 	}
 	if !c.eventsClosed {
 		if finalizeErr == nil {
-			select {
-			case c.events <- stored:
-			default:
-			}
+			c.publishEvent(stored)
 		}
 		c.eventsClosed = true
 		close(c.events)
@@ -907,10 +911,19 @@ func (c *runController) commitBoard(ctx context.Context, commit Commit) error {
 	}
 	c.boardRevision = commit.Revision
 	for _, event := range stored {
-		select {
-		case c.events <- event:
-		default:
-		}
+		c.publishEvent(event)
 	}
 	return nil
+}
+
+// publishEvent sends one stored event to the live stream without blocking. A
+// full buffer drops the event from the stream (it is already persisted) and
+// increments the loss counter so operators can detect a lagging consumer.
+// Callers hold eventMu.
+func (c *runController) publishEvent(event core.Event) {
+	select {
+	case c.events <- event:
+	default:
+		c.droppedEvents++
+	}
 }
