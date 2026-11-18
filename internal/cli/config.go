@@ -11,8 +11,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/red-copilot/harness"
-	"github.com/red-copilot/harness/pi"
-	"github.com/red-copilot/harness/sandbox/docker"
 	"github.com/red-copilot/harness/verify"
 )
 
@@ -156,14 +154,9 @@ func (c *FileConfig) ToRunSpec(artifacts harness.ArtifactStore) (harness.RunSpec
 		return harness.RunSpec{}, fmt.Errorf("executor: %w", err)
 	}
 	spec.Executor = executor
-	switch c.Target.Kind {
-	case "", "external":
-	case "image":
-		spec.Provisioner = docker.ImageBackend{Image: c.Target.Image, Command: c.Target.Command, Ports: c.Target.Ports, Network: c.Target.Network, Addresses: c.Target.Addresses}
-	case "compose":
-		spec.Provisioner = docker.ComposeBackend{File: c.Target.ComposeFile, ProjectName: c.Target.ProjectName, Service: c.Target.Service, Port: c.Target.Port, Addresses: c.Target.Addresses}
-	default:
-		return harness.RunSpec{}, fmt.Errorf("unsupported target kind %q", c.Target.Kind)
+	spec.Provisioner, err = buildTarget(c.Target)
+	if err != nil {
+		return harness.RunSpec{}, err
 	}
 	if c.Verifier != nil {
 		spec.Verifier = *c.Verifier
@@ -183,13 +176,13 @@ func (a AgentFileSpec) toHarness() (harness.AgentSpec, error) {
 	return harness.AgentSpec{ID: a.ID, Image: a.Image, Command: a.Command, Env: a.Env, EnvFrom: a.EnvFrom, Mounts: a.Mounts, Network: a.Network, CapAdd: a.CapAdd, Resources: a.Resources, RuntimeConfig: runtimeConfig}, nil
 }
 
+// composeAgent resolves the agent's declared runtime through the runtime
+// registry. An empty runtime type keeps the Pi default.
 func composeAgent(agent harness.AgentSpec) (harness.AgentSpec, error) {
-	config := pi.Config{}
-	if len(agent.RuntimeConfig) > 0 {
-		if err := json.Unmarshal(agent.RuntimeConfig, &config); err != nil {
-			return agent, fmt.Errorf("invalid pi runtime config: %w", err)
-		}
+	runtime, err := buildRuntime(agent.RuntimeConfig)
+	if err != nil {
+		return agent, err
 	}
-	agent.Runtime = pi.NewFactory(config)
+	agent.Runtime = runtime
 	return agent, nil
 }

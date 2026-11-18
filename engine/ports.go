@@ -113,13 +113,20 @@ type BoardRestorer interface {
 	RestoreBoardState(context.Context, string) (Commit, error)
 }
 
-// Store composes the canonical writer, board reads, restore and process
-// lifecycle.
+// RunRecovery is the process-lifecycle and replay surface: it finalizes
+// orphaned Runs and replays committed board revisions on resume.
+type RunRecovery interface {
+	BoardRestorer
+	MarkInterrupted(context.Context) error
+}
+
+// Store composes the canonical writer, board/read queries, recovery and
+// process lifecycle. Consumers that only read should depend on ReadStore, and
+// components that only write Run lifecycle should depend on CanonicalWriter.
 type Store interface {
 	CanonicalWriter
 	ReadStore
-	BoardRestorer
-	MarkInterrupted(context.Context) error
+	RunRecovery
 	Close() error
 }
 
