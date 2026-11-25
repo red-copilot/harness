@@ -39,6 +39,7 @@ func Run(t *testing.T, newStore Factory) {
 	t.Run("StaleHeadAndAtomicity", func(t *testing.T) { testStaleHead(t, newStore(t)) })
 	t.Run("TerminalGuards", func(t *testing.T) { testTerminalGuards(t, newStore(t)) })
 	t.Run("ResumeNormalization", func(t *testing.T) { testResume(t, newStore(t)) })
+	t.Run("RetryReopensIntent", func(t *testing.T) { testRetryReopensIntent(t, newStore(t)) })
 	t.Run("ArtifactAndLogs", func(t *testing.T) { testArtifactAndLogs(t, newStore(t)) })
 }
 
@@ -284,7 +285,7 @@ func testResume(t *testing.T, store engine.V5Store) {
 	attempt := core.IntentAttempt{ID: "attempt-1", RunID: f.runID, IntentID: intent.ID, SessionID: "executor", Phase: core.IntentAttemptRunning, StartedAt: at}
 	f.append(t, core.PhaseProvisioning, 1, at, nil, f.originClaim(at))
 	f.append(t, core.PhaseRunning, 2, at, nil, item{core.RecordIntentProposed, core.IntentProposedRecord{Intent: intent}})
-	f.append(t, core.PhaseRunning, 3, at, nil, item{core.RecordIntentClaimed, core.IntentClaimedRecord{IntentID: intent.ID, ExecutorID: "executor", At: at}})
+	f.append(t, core.PhaseRunning, 4, at, nil, item{core.RecordIntentClaimed, core.IntentClaimedRecord{IntentID: intent.ID, ExecutorID: "executor", At: at}})
 	f.append(t, core.PhaseRunning, 4, at, nil, item{core.RecordAttemptStarted, core.AttemptStartedRecord{Attempt: attempt}})
 	f.append(t, core.PhaseRunning, 5, at, nil, item{core.RecordRunResumed, core.RunResumedRecord{HeadSeq: f.state.HeadSeq - 1, Normalizations: core.ResumeNormalizations}})
 
@@ -361,5 +362,33 @@ func testArtifactAndLogs(t *testing.T, store engine.V5Store) {
 	logs, err := store.Logs(ctx, f.runID, 0)
 	if err != nil || len(logs) != 1 || strings.Contains(logs[0].Text, secret) {
 		t.Fatalf("logs = %+v, err = %v", logs, err)
+	}
+}
+
+func testRetryReopensIntent(t *testing.T, store engine.V5Store) {
+	ctx := context.Background()
+	f := newFixture(t, store)
+	at := time.Unix(1_700_000_035, 0).UTC()
+	intent := core.Intent{ID: "intent-1", RunID: f.runID, FromClaimIDs: []string{"origin"}, Description: "probe", State: core.IntentOpen, CreatedAt: at}
+	f.append(t, core.PhaseProvisioning, 1, at, nil, f.originClaim(at))
+	f.append(t, core.PhaseRunning, 3, at, nil, f.goalClaim(at), item{core.RecordIntentProposed, core.IntentProposedRecord{Intent: intent}})
+	f.append(t, core.PhaseRunning, 4, at, nil, item{core.RecordIntentClaimed, core.IntentClaimedRecord{IntentID: intent.ID, ExecutorID: "executor", At: at}})
+	f.append(t, core.PhaseRunning, 5, at, nil, item{core.RecordIntentReopened, core.IntentReopenedRecord{IntentID: intent.ID, At: at}})
+	board, err := store.Board(ctx, f.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(board.Intents) != 1 || board.Intents[0].State != core.IntentOpen || board.Intents[0].ExecutorID != "" {
+		t.Fatalf("reopened intents = %+v", board.Intents)
+	}
+	if board.Revision != 5 {
+		t.Fatalf("revision = %d, want 5", board.Revision)
+	}
+	restored, err := store.Replay(ctx, f.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.Board.Intents[0].State != core.IntentOpen {
+		t.Fatalf("replayed intent = %+v", restored.Board.Intents[0])
 	}
 }

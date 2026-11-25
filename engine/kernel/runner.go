@@ -168,6 +168,12 @@ func (r *Runner) Resume(ctx context.Context, runID string, spec Spec) (*Run, err
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	r.mu.Lock()
+	live := r.runs[runID] != nil
+	r.mu.Unlock()
+	if live {
+		return nil, fmt.Errorf("run %s is already active", runID)
+	}
 	restored, err := r.store.Replay(ctx, runID)
 	if err != nil {
 		return nil, fmt.Errorf("replay run %s: %w", runID, err)

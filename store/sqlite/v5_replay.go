@@ -13,18 +13,25 @@ import (
 // Replay reconstructs a Run from the newest valid checkpoint plus journal tail,
 // or from genesis when no checkpoint is usable. Any inconsistency fails closed.
 func (s *V5Store) Replay(ctx context.Context, runID string) (core.Restored, error) {
-	manifest, digest, err := s.manifestDigest(ctx, runID)
+	// One read transaction gives replay a consistent state/journal snapshot
+	// even while another connection appends.
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return core.Restored{}, err
 	}
-	state, err := s.State(ctx, runID)
+	defer func() { _ = tx.Rollback() }()
+	manifest, digest, err := loadManifestTx(ctx, tx, runID)
+	if err != nil {
+		return core.Restored{}, err
+	}
+	state, err := loadStateQ(ctx, tx, runID)
 	if err != nil {
 		return core.Restored{}, err
 	}
 	board := *core.NewBoard(runID)
 	prev := digest
 	var from uint64 = 1
-	if checkpoint, cpSeq, ok, err := s.loadCheckpoint(ctx, runID, state.HeadSeq); err != nil {
+	if checkpoint, cpSeq, ok, err := loadCheckpointQ(ctx, tx, runID, state.HeadSeq); err != nil {
 		return core.Restored{}, err
 	} else if ok {
 		board = checkpoint.Board
@@ -34,7 +41,7 @@ func (s *V5Store) Replay(ctx context.Context, runID string) (core.Restored, erro
 
 	var records []core.Record
 	if from <= state.HeadSeq {
-		records, err = s.Events(ctx, runID, from-1)
+		records, err = eventsQ(ctx, tx, runID, from-1)
 		if err != nil {
 			return core.Restored{}, err
 		}
@@ -76,11 +83,11 @@ func (s *V5Store) Replay(ctx context.Context, runID string) (core.Restored, erro
 	return core.Restored{Manifest: manifest, State: state, Board: board, HeadSeq: state.HeadSeq, HeadHash: state.HeadHash}, nil
 }
 
-func (s *V5Store) loadCheckpoint(ctx context.Context, runID string, headSeq uint64) (core.Checkpoint, uint64, bool, error) {
+func loadCheckpointQ(ctx context.Context, q v5Queryer, runID string, headSeq uint64) (core.Checkpoint, uint64, bool, error) {
 	var seq uint64
 	var data []byte
 	var stateSHA, headHash string
-	err := s.db.QueryRowContext(ctx, `SELECT seq,state,state_sha256,head_hash FROM run_checkpoints WHERE run_id=? AND seq<=? ORDER BY seq DESC LIMIT 1`, runID, headSeq).
+	err := q.QueryRowContext(ctx, `SELECT seq,state,state_sha256,head_hash FROM run_checkpoints WHERE run_id=? AND seq<=? ORDER BY seq DESC LIMIT 1`, runID, headSeq).
 		Scan(&seq, &data, &stateSHA, &headHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return core.Checkpoint{}, 0, false, nil
@@ -103,7 +110,7 @@ func (s *V5Store) loadCheckpoint(ctx context.Context, runID string, headSeq uint
 		return core.Checkpoint{}, 0, false, nil
 	}
 	var journalHash string
-	if err := s.db.QueryRowContext(ctx, `SELECT hash FROM run_journal WHERE run_id=? AND seq=?`, runID, seq).Scan(&journalHash); err != nil {
+	if err := q.QueryRowContext(ctx, `SELECT hash FROM run_journal WHERE run_id=? AND seq=?`, runID, seq).Scan(&journalHash); err != nil {
 		return core.Checkpoint{}, 0, false, nil
 	}
 	if journalHash != checkpoint.State.HeadHash {

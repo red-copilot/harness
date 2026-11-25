@@ -210,7 +210,7 @@ func testPolicy() core.RunPolicy {
 	policy.Exploration.EnginePollInterval = 5 * time.Millisecond
 	policy.Exploration.MaxReasonerWallTime = 2 * time.Second
 	policy.Exploration.MaxWallTimePerAttempt = 2 * time.Second
-	policy.Exploration.ConcludeTimeout = 200 * time.Millisecond
+	policy.Exploration.ConcludeTimeout = time.Second
 	policy.Exploration.DrainTimeout = 500 * time.Millisecond
 	policy.Exploration.MaxReasonerFailures = 2
 	return policy
@@ -350,7 +350,7 @@ func TestKernelVerifierPanicFailsClosed(t *testing.T) {
 		panic("verifier exploded")
 	}}
 	result, err := runner.Run(context.Background(), testSpec(&scriptedReason{}, verifier))
-	if err == nil || !strings.Contains(err.Error(), "verifier panic") {
+	if err == nil || !strings.Contains(err.Error(), "panic: verifier exploded") {
 		t.Fatalf("err = %v, want verifier panic", err)
 	}
 	if result.Outcome != core.OutcomeFailed {
@@ -568,4 +568,200 @@ func TestKernelResumeNormalizesAndContinues(t *testing.T) {
 			_ = runner.Close(context.Background())
 		})
 	}
+}
+
+type failingStore struct {
+	engine.V5Store
+	mu     sync.Mutex
+	count  int
+	failAt int
+	err    error
+}
+
+func (s *failingStore) Append(ctx context.Context, batch core.SealedBatch) (core.AppendResult, error) {
+	s.mu.Lock()
+	s.count++
+	fail := s.count == s.failAt
+	s.mu.Unlock()
+	if fail {
+		return core.AppendResult{}, s.err
+	}
+	return s.V5Store.Append(ctx, batch)
+}
+
+func TestKernelSessionPanicFailsClosed(t *testing.T) {
+	runner := newRunner(t, storeFactories()[0].open(t))
+	spec := testSpec(&scriptedReason{}, &testVerifier{})
+	panicRuntime := &fakeRuntime{new: func(engine.RuntimeRequest) engine.AgentSession {
+		return &fakeSession{events: make(chan engine.AgentEvent, 4), prompt: func(context.Context, string, int) error {
+			panic("executor exploded")
+		}}
+	}}
+	spec.Executor.Runtime = panicRuntime
+	result, err := runner.Run(context.Background(), spec)
+	if err == nil || !strings.Contains(err.Error(), "panic: executor exploded") {
+		t.Fatalf("err = %v, want executor panic", err)
+	}
+	if result.Outcome != core.OutcomeFailed {
+		t.Fatalf("outcome = %q, want failed", result.Outcome)
+	}
+	_ = runner.Close(context.Background())
+}
+
+func TestKernelRunDeadlineTimesOut(t *testing.T) {
+	runner := newRunner(t, storeFactories()[0].open(t))
+	spec := testSpec(&scriptedReason{delay: time.Second}, &testVerifier{})
+	spec.Policy.Budget.WallTime = 100 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	result, err := runner.Run(ctx, spec)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want run deadline", err)
+	}
+	if result.Outcome != core.OutcomeTimedOut {
+		t.Fatalf("outcome = %q, want timed_out", result.Outcome)
+	}
+	_ = runner.Close(context.Background())
+}
+
+func TestKernelAppendFailureFailsClosed(t *testing.T) {
+	inner := storeFactories()[0].open(t)
+	injected := errors.New("injected append failure")
+	store := &failingStore{V5Store: inner, failAt: 3, err: injected}
+	runner := newRunner(t, store)
+	result, err := runner.Run(context.Background(), testSpec(&scriptedReason{}, &testVerifier{}))
+	if err == nil || !strings.Contains(err.Error(), "injected append failure") {
+		t.Fatalf("err = %v, want injected failure", err)
+	}
+	if result.Outcome != core.OutcomeFailed {
+		t.Fatalf("outcome = %q, want failed", result.Outcome)
+	}
+	state, stateErr := inner.State(context.Background(), result.RunID)
+	if stateErr != nil || state.Phase != core.PhaseTerminal || state.Outcome != core.OutcomeFailed {
+		t.Fatalf("state = %+v, err = %v", state, stateErr)
+	}
+	if err := inner.VerifyChain(context.Background(), result.RunID); err != nil {
+		t.Fatal(err)
+	}
+	_ = runner.Close(context.Background())
+}
+
+func TestKernelResumeRejectsMismatchedBindings(t *testing.T) {
+	store := storeFactories()[0].open(t)
+	runner := newRunner(t, store)
+	spec := testSpec(&scriptedReason{goalFirst: true}, &testVerifier{})
+	seedRunningRun(t, store, spec.Manifest("run-1", time.Unix(1_700_000_500, 0).UTC()))
+	bad := spec
+	bad.Reasoner.ID = "someone-else"
+	if _, err := runner.Resume(context.Background(), "run-1", bad); err == nil || !strings.Contains(err.Error(), "reasoner") {
+		t.Fatalf("err = %v, want binding mismatch", err)
+	}
+	_ = runner.Close(context.Background())
+}
+
+func TestKernelResumeUsesPersistedManifest(t *testing.T) {
+	store := storeFactories()[0].open(t)
+	runner := newRunner(t, store)
+	var gotTask string
+	var gotTarget string
+	verifier := &testVerifier{fn: func(_ context.Context, req core.VerifyRequest) (core.Verdict, error) {
+		gotTask = req.Task.ID
+		gotTarget = req.Target.TargetID
+		return core.Verdict{Success: true}, nil
+	}}
+	spec := testSpec(&scriptedReason{goalFirst: true}, verifier)
+	seedRunningRun(t, store, spec.Manifest("run-1", time.Unix(1_700_000_500, 0).UTC()))
+	overridden := spec
+	overridden.Task = core.Task{ID: "caller-task", Objective: "caller override"}
+	overridden.Target = core.TargetSpec{ID: "caller-target", Isolation: core.IsolationCallerManaged}
+	run, err := runner.Resume(context.Background(), "run-1", overridden)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := run.Wait(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Outcome != core.OutcomeSucceeded {
+		t.Fatalf("result = %+v", result)
+	}
+	if gotTask != "task-1" || gotTarget != "target-1" {
+		t.Fatalf("verifier saw task %q target %q, want the persisted manifest", gotTask, gotTarget)
+	}
+	_ = runner.Close(context.Background())
+}
+
+func TestKernelConcurrentResumeIsExclusive(t *testing.T) {
+	store := storeFactories()[0].open(t)
+	runner := newRunner(t, store)
+	spec := testSpec(&scriptedReason{delay: 500 * time.Millisecond}, &testVerifier{})
+	seedRunningRun(t, store, spec.Manifest("run-1", time.Unix(1_700_000_500, 0).UTC()))
+	first, err := runner.Resume(context.Background(), "run-1", spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Resume(context.Background(), "run-1", spec); err == nil || !strings.Contains(err.Error(), "already active") {
+		t.Fatalf("second resume err = %v, want already active", err)
+	}
+	_ = first.Cancel(context.Background())
+	_, _ = first.Wait(context.Background())
+	_ = runner.Close(context.Background())
+}
+
+type flakyExplore struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (f *flakyExplore) ExecutePrompt(core.ExploreRequest) (string, error)  { return "explore", nil }
+func (f *flakyExplore) ConcludePrompt(core.ExploreRequest) (string, error) { return "conclude", nil }
+func (f *flakyExplore) Parse(req core.ExploreRequest, turn core.TurnResult) (core.AttemptReport, error) {
+	f.mu.Lock()
+	f.calls++
+	call := f.calls
+	f.mu.Unlock()
+	// The execute and conclude parse both fail for the first attempt; the
+	// retried attempt parses normally.
+	if call <= 2 {
+		return core.AttemptReport{}, errors.New("unusable report")
+	}
+	return testExplore{}.Parse(req, turn)
+}
+
+func TestKernelRetryReopensIntent(t *testing.T) {
+	store := storeFactories()[0].open(t)
+	runner := newRunner(t, store)
+	spec := testSpec(&scriptedReason{}, &testVerifier{})
+	spec.ExploreStrategy = &flakyExplore{}
+	spec.Policy.Exploration.MaxAttemptsPerIntent = 2
+	result, err := runner.Run(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Outcome != core.OutcomeSucceeded {
+		t.Fatalf("result = %+v", result)
+	}
+	if len(result.Attempts) != 2 {
+		t.Fatalf("attempts = %+v, want a failed attempt and a retried one", result.Attempts)
+	}
+	if result.Attempts[0].Phase != core.IntentAttemptFailed || result.Attempts[1].Phase != core.IntentAttemptConcluded {
+		t.Fatalf("attempt phases = %q (%s), %q (%s)", result.Attempts[0].Phase, result.Attempts[0].Error, result.Attempts[1].Phase, result.Attempts[1].Error)
+	}
+	events, err := store.Events(context.Background(), result.RunID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened := false
+	for _, record := range events {
+		if record.Type == core.RecordIntentReopened {
+			reopened = true
+		}
+	}
+	if !reopened {
+		t.Fatal("retry did not append intent.reopened")
+	}
+	if err := store.VerifyChain(context.Background(), result.RunID); err != nil {
+		t.Fatal(err)
+	}
+	_ = runner.Close(context.Background())
 }
