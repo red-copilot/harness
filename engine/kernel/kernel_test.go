@@ -3,10 +3,12 @@ package kernel_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -708,32 +710,36 @@ func TestKernelConcurrentResumeIsExclusive(t *testing.T) {
 	_ = runner.Close(context.Background())
 }
 
-type flakyExplore struct {
-	mu    sync.Mutex
-	calls int
-}
-
-func (f *flakyExplore) ExecutePrompt(core.ExploreRequest) (string, error)  { return "explore", nil }
-func (f *flakyExplore) ConcludePrompt(core.ExploreRequest) (string, error) { return "conclude", nil }
-func (f *flakyExplore) Parse(req core.ExploreRequest, turn core.TurnResult) (core.AttemptReport, error) {
-	f.mu.Lock()
-	f.calls++
-	call := f.calls
-	f.mu.Unlock()
-	// The execute and conclude parse both fail for the first attempt; the
-	// retried attempt parses normally.
-	if call <= 2 {
-		return core.AttemptReport{}, errors.New("unusable report")
-	}
-	return testExplore{}.Parse(req, turn)
-}
-
 func TestKernelRetryReopensIntent(t *testing.T) {
 	store := storeFactories()[0].open(t)
 	runner := newRunner(t, store)
 	spec := testSpec(&scriptedReason{}, &testVerifier{})
-	spec.ExploreStrategy = &flakyExplore{}
 	spec.Policy.Exploration.MaxAttemptsPerIntent = 2
+	var prompts atomic.Int32
+	spec.Executor.Runtime = &fakeRuntime{new: func(req engine.RuntimeRequest) engine.AgentSession {
+		session := &fakeSession{events: make(chan engine.AgentEvent, 8)}
+		session.prompt = func(ctx context.Context, _ string, _ int) error {
+			if prompts.Add(1) == 1 {
+				return fmt.Errorf("%w: simulated lost session", engine.ErrAgentUnavailable)
+			}
+			if err := os.MkdirAll(req.WorkspaceDir, 0o700); err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(req.WorkspaceDir, "evidence.txt"), []byte("no signal"), 0o600); err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(req.WorkspaceDir, "report.json"), []byte(`{}`), 0o600); err != nil {
+				return err
+			}
+			select {
+			case session.events <- engine.AgentEvent{Kind: engine.AgentEventSettled}:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			return nil
+		}
+		return session
+	}}
 	result, err := runner.Run(context.Background(), spec)
 	if err != nil {
 		t.Fatal(err)
