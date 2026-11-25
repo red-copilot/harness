@@ -15,6 +15,7 @@ type Config struct {
 	Clock         Clock
 	IDs           IDSource
 	Secrets       SecretSource
+	Workspace     Workspace
 	WorkspaceRoot string
 	MaxSessions   int
 	PollInterval  time.Duration

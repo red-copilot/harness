@@ -39,9 +39,9 @@ func nonTestGoFiles(t *testing.T, dir string) []string {
 }
 
 // TestKernelHasNoAmbientTimeRandomnessOrEnvironment keeps the kernel
-// deterministic: clocks, randomness and the process environment are injected
-// ports, not ambient calls. Filesystem purity is enforced separately as the
-// Workspace port lands.
+// deterministic: clocks, randomness, the process environment and filesystem
+// access are injected ports, not ambient calls. path/filepath is allowed
+// because it is pure path manipulation; os and os/exec are not.
 func TestKernelHasNoAmbientTimeRandomnessOrEnvironment(t *testing.T) {
 	root := repoRoot(t)
 	for _, pkg := range []string{"core", "engine"} {
@@ -53,8 +53,13 @@ func TestKernelHasNoAmbientTimeRandomnessOrEnvironment(t *testing.T) {
 			rel, _ := filepath.Rel(root, path)
 			for _, imp := range file.Imports {
 				importPath := strings.Trim(imp.Path.Value, `"`)
-				if importPath == "crypto/rand" {
+				switch {
+				case importPath == "crypto/rand":
 					t.Errorf("%s imports crypto/rand; use the IDSource port", rel)
+				case importPath == "os" || importPath == "os/exec":
+					t.Errorf("%s imports %s; use the Workspace port", rel, importPath)
+				case pkg == "engine" && importPath == "net":
+					t.Errorf("%s imports net; the kernel owns no network I/O", rel)
 				}
 			}
 			ast.Inspect(file, func(node ast.Node) bool {

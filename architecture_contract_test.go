@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/red-copilot/harness"
+	"github.com/red-copilot/harness/runtime"
 )
 
 func TestTargetFingerprintUsesStableSpecIdentity(t *testing.T) {
@@ -51,7 +52,7 @@ func TestArchiveEvidenceRejectsUnauthorizedObservationTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := &fakeArtifactStore{}
-	_, err := harness.ArchiveAttemptEvidence(context.Background(), store, *harness.NewRedactor(), harness.EvidenceArchiveRequest{Now: time.Now(),
+	_, err := harness.ArchiveAttemptEvidence(context.Background(), store, *harness.NewRedactor(), runtime.OSWorkspace{}, harness.EvidenceArchiveRequest{Now: time.Now(),
 		RunID:        "run",
 		IntentID:     "branch",
 		AttemptID:    "attempt",

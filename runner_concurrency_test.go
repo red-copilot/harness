@@ -25,7 +25,7 @@ func TestRunnerMaxSessionsAppliesAcrossRuns(t *testing.T) {
 	spec.Reasoner.Runtime = blockingRuntime
 	spec.Executor.Runtime = blockingRuntime
 	runner, err := harness.NewRunner(harness.Config{
-		Store: store, Clock: testClock{}, IDs: testIDs{}, Secrets: testSecrets{},
+		Store: store, Clock: testClock{}, IDs: testIDs{}, Secrets: testSecrets{}, Workspace: testWorkspace,
 		WorkspaceRoot: t.TempDir(), MaxSessions: 2, SkipRecovery: true,
 	})
 	if err != nil {

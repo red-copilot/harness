@@ -23,6 +23,33 @@ type SecretSource interface {
 	LookupEnv(name string) (string, bool)
 }
 
+// RunDirs exposes the directory layout of one prepared Run workspace.
+type RunDirs interface {
+	Root() string
+	TaskDir() string
+	SkillsDir() string
+	SessionDir(sessionID string) string
+	PrepareSession(ctx context.Context, sessionID string) (string, error)
+}
+
+// EvidenceFile is one opened workspace file. Rel is the resolved path relative
+// to the workspace root; the workspace has already confined it.
+type EvidenceFile struct {
+	Rel    string
+	Size   int64
+	Reader io.ReadCloser
+}
+
+// Workspace confines all filesystem interaction the kernel needs: run/session
+// directories, the report protocol, evidence reads and verifier materialization.
+type Workspace interface {
+	PrepareRun(ctx context.Context, root, runID string, materializeSkills func(string) error) (RunDirs, error)
+	ClearReport(ctx context.Context, workspaceDir string) error
+	ReadReport(ctx context.Context, workspaceDir string, maxBytes int64) ([]byte, error)
+	OpenEvidence(ctx context.Context, workspaceDir, relPath string, maxBytes int64) (EvidenceFile, error)
+	MaterializeEvidence(ctx context.Context, root string, artifacts []Artifact, open func(context.Context, string) (io.ReadCloser, error)) (dir string, cleanup func() error, err error)
+}
+
 // AgentRuntimeFactory creates runtime-neutral, reset-capable sessions.
 type AgentRuntimeFactory interface {
 	NewSession(context.Context, RuntimeRequest) (AgentSession, error)

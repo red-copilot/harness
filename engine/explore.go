@@ -59,7 +59,7 @@ func (defaultExploreStrategy) Parse(req ExploreRequest, turn TurnResult) (Attemp
 // runExploreAttempt executes one Intent and invokes the same-session Conclude
 // fallback when execution times out or produces unusable output. The returned
 // phase is "execute" or "conclude".
-func runExploreAttempt(ctx context.Context, session AgentSession, req ExploreRequest, limits TurnLimits, concludeTimeout time.Duration, sink EventSink, strategy ExploreStrategy, clock Clock) (AttemptReport, string, error) {
+func runExploreAttempt(ctx context.Context, session AgentSession, req ExploreRequest, limits TurnLimits, concludeTimeout time.Duration, sink EventSink, strategy ExploreStrategy, clock Clock, workspace Workspace) (AttemptReport, string, error) {
 	if strategy == nil {
 		strategy = defaultExploreStrategy{}
 	}
@@ -70,13 +70,15 @@ func runExploreAttempt(ctx context.Context, session AgentSession, req ExploreReq
 	if err != nil {
 		return AttemptReport{}, "", err
 	}
-	if err := clearReport(req.WorkspaceDir); err != nil {
-		return AttemptReport{}, "execute", err
+	if req.WorkspaceDir != "" {
+		if err := workspace.ClearReport(ctx, req.WorkspaceDir); err != nil {
+			return AttemptReport{}, "execute", err
+		}
 	}
 	turn, executeErr := runAgentTurn(ctx, session, executePrompt, limits, sink, false, clock)
 	var parseErr error
 	if executeErr == nil && req.WorkspaceDir != "" {
-		turn.Report, executeErr = readReport(req.WorkspaceDir, req.MaxReportBytes)
+		turn.Report, executeErr = workspace.ReadReport(ctx, req.WorkspaceDir, req.MaxReportBytes)
 	}
 	if executeErr == nil {
 		report, err := strategy.Parse(req, turn)
@@ -108,16 +110,18 @@ func runExploreAttempt(ctx context.Context, session AgentSession, req ExploreReq
 		_ = abortSession(session)
 		return AttemptReport{}, "conclude", err
 	}
-	if err := clearReport(req.WorkspaceDir); err != nil {
-		_ = abortSession(session)
-		return AttemptReport{}, "conclude", err
+	if req.WorkspaceDir != "" {
+		if err := workspace.ClearReport(concludeCtx, req.WorkspaceDir); err != nil {
+			_ = abortSession(session)
+			return AttemptReport{}, "conclude", err
+		}
 	}
 	concludeTurn, concludeErr := runAgentTurn(concludeCtx, session, concludePrompt, TurnLimits{
 		MaxAssistantBytes: limits.MaxAssistantBytes,
 		ReportOnly:        true,
 	}, sink, true, clock)
 	if concludeErr == nil && req.WorkspaceDir != "" {
-		concludeTurn.Report, concludeErr = readReport(req.WorkspaceDir, req.MaxReportBytes)
+		concludeTurn.Report, concludeErr = workspace.ReadReport(concludeCtx, req.WorkspaceDir, req.MaxReportBytes)
 	}
 	if concludeErr != nil {
 		_ = abortSession(session)

@@ -32,6 +32,7 @@ type blackboardEngine struct {
 	controller *runController
 	spec       RunSpec
 	target     TargetBinding
+	workspace  Workspace
 	board      *boardState
 	committed  boardSnapshot
 	planner    AgentSession
@@ -81,7 +82,7 @@ func newBlackboardEngine(runner *Runner, controller *runController, spec RunSpec
 		}
 	}
 	return &blackboardEngine{
-		runner: runner, controller: controller, spec: spec, target: target,
+		runner: runner, controller: controller, spec: spec, target: target, workspace: controller.workspace,
 		board: board, reason: reason, explore: explore, stopped: stopped, resumed: resumed,
 		results: make(chan boardAttemptResult, 2), reasons: make(chan boardReasonResult, 1),
 	}
@@ -179,8 +180,11 @@ func (e *blackboardEngine) startSession(ctx context.Context, role AgentRole, spe
 	if spec.Runtime == nil {
 		return nil, fmt.Errorf("%s runtime is required", role)
 	}
-	workspace := e.controller.sessionWorkspace(sessionID)
-	if err := ensureDir(workspace); err != nil {
+	if e.controller.dirs == nil {
+		return nil, errors.New("run workspace is not prepared")
+	}
+	workspace, err := e.controller.dirs.PrepareSession(ctx, sessionID)
+	if err != nil {
 		return nil, err
 	}
 	env := buildEnvironment(e.controller.id, sessionID, e.spec, spec, e.target, workspace, e.controller.taskDir, e.controller.skillsDir, e.runner.secrets)
@@ -346,7 +350,7 @@ func (e *blackboardEngine) startIntent(ctx context.Context, intent Intent) error
 		report, conclusion, err := runExploreAttempt(attemptCtx, e.executor, requests, TurnLimits{
 			MaxToolCalls:      e.board.policy.Exploration.MaxToolCallsPerAttempt,
 			MaxAssistantBytes: e.board.policy.Context.MaxAssistantBytes,
-		}, e.board.policy.Exploration.ConcludeTimeout, e.eventSink(claimed.ExecutorID), e.explore, e.controller.clock)
+		}, e.board.policy.Exploration.ConcludeTimeout, e.eventSink(claimed.ExecutorID), e.explore, e.controller.clock, e.workspace)
 		usageAfter := e.executor.Usage()
 		e.results <- boardAttemptResult{
 			intent: claimed, attempt: attempt, report: report,
@@ -400,7 +404,7 @@ func (e *blackboardEngine) startReason(ctx context.Context) {
 		}
 		prompt, err := e.reason.Prompt(req)
 		if err == nil {
-			err = clearReport(e.controller.sessionWorkspace("planner"))
+			err = e.workspace.ClearReport(reasonCtx, e.controller.sessionWorkspace("planner"))
 		}
 		if err == nil {
 			var turn TurnResult
@@ -409,7 +413,7 @@ func (e *blackboardEngine) startReason(ctx context.Context) {
 				MaxAssistantBytes: e.board.policy.Context.MaxAssistantBytes,
 			}, e.eventSink("planner"), true, e.controller.clock)
 			if err == nil {
-				turn.Report, err = readReport(e.controller.sessionWorkspace("planner"), e.board.policy.Evidence.MaxReportBytes)
+				turn.Report, err = e.workspace.ReadReport(reasonCtx, e.controller.sessionWorkspace("planner"), e.board.policy.Evidence.MaxReportBytes)
 			}
 			if err == nil {
 				var report ReasonReport
@@ -702,7 +706,7 @@ func referencedObservations(report AttemptReport) []ObservationProposal {
 }
 
 func (e *blackboardEngine) collectEvidence(ctx context.Context, result boardAttemptResult, proposals []ObservationProposal) ([]Observation, []Artifact, error) {
-	observations, err := ArchiveAttemptEvidence(ctx, e.spec.Artifacts, *e.controller.redactor(), EvidenceArchiveRequest{
+	observations, err := ArchiveAttemptEvidence(ctx, e.spec.Artifacts, *e.controller.redactor(), e.workspace, EvidenceArchiveRequest{
 		Now:   e.controller.now(),
 		RunID: result.attempt.RunID, IntentID: result.intent.ID, AttemptID: result.attempt.ID,
 		SessionID: result.attempt.SessionID, WorkspaceDir: e.controller.sessionWorkspace(result.attempt.SessionID), Target: e.board.target,

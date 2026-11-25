@@ -12,9 +12,10 @@ func TestNewRunnerRequiresInjectedKernelPorts(t *testing.T) {
 		name string
 		cfg  harness.Config
 	}{
-		{name: "clock", cfg: harness.Config{Store: store, IDs: testIDs{}, Secrets: testSecrets{}}},
-		{name: "ids", cfg: harness.Config{Store: store, Clock: testClock{}, Secrets: testSecrets{}}},
-		{name: "secrets", cfg: harness.Config{Store: store, Clock: testClock{}, IDs: testIDs{}}},
+		{name: "clock", cfg: harness.Config{Store: store, IDs: testIDs{}, Secrets: testSecrets{}, Workspace: testWorkspace}},
+		{name: "ids", cfg: harness.Config{Store: store, Clock: testClock{}, Secrets: testSecrets{}, Workspace: testWorkspace}},
+		{name: "secrets", cfg: harness.Config{Store: store, Clock: testClock{}, IDs: testIDs{}, Workspace: testWorkspace}},
+		{name: "workspace", cfg: harness.Config{Store: store, Clock: testClock{}, IDs: testIDs{}, Secrets: testSecrets{}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

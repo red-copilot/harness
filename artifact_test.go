@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/red-copilot/harness"
+	"github.com/red-copilot/harness/runtime"
 )
 
 func TestValidateEvidencePathRejectsAbsoluteTraversalAndSymlink(t *testing.T) {
@@ -18,13 +19,13 @@ func TestValidateEvidencePathRejectsAbsoluteTraversalAndSymlink(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "ok.txt"), []byte("ok"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := harness.ValidateEvidencePath(root, filepath.Join(root, "ok.txt")); err == nil {
+	if _, err := runtime.ValidateEvidencePath(root, filepath.Join(root, "ok.txt")); err == nil {
 		t.Fatal("absolute path accepted")
 	}
-	if _, err := harness.ValidateEvidencePath(root, "../secret"); err == nil {
+	if _, err := runtime.ValidateEvidencePath(root, "../secret"); err == nil {
 		t.Fatal("traversal accepted")
 	}
-	if _, err := harness.ValidateEvidencePath(root, "."); err == nil {
+	if _, err := runtime.ValidateEvidencePath(root, "."); err == nil {
 		t.Fatal("directory accepted")
 	}
 	outside := t.TempDir()
@@ -34,7 +35,7 @@ func TestValidateEvidencePathRejectsAbsoluteTraversalAndSymlink(t *testing.T) {
 	if err := os.Symlink(filepath.Join(outside, "secret"), filepath.Join(root, "link")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := harness.ValidateEvidencePath(root, "link"); err == nil {
+	if _, err := runtime.ValidateEvidencePath(root, "link"); err == nil {
 		t.Fatal("symlink escape accepted")
 	}
 }
@@ -50,7 +51,7 @@ func TestArchiveEvidenceRejectsFileLimitBeforePut(t *testing.T) {
 		observations[0].EvidenceFiles = append(observations[0].EvidenceFiles, name)
 	}
 	store := &fakeArtifactStore{}
-	_, err := harness.ArchiveAttemptEvidence(context.Background(), store, *harness.NewRedactor(), harness.EvidenceArchiveRequest{Now: time.Now(), RunID: "run", IntentID: "branch", AttemptID: "attempt", SessionID: "session", WorkspaceDir: root, Target: harness.TargetBinding{TargetID: "target-1", Isolation: harness.IsolationCallerManaged}, Observations: observations, MaxFiles: 16})
+	_, err := harness.ArchiveAttemptEvidence(context.Background(), store, *harness.NewRedactor(), runtime.OSWorkspace{}, harness.EvidenceArchiveRequest{Now: time.Now(), RunID: "run", IntentID: "branch", AttemptID: "attempt", SessionID: "session", WorkspaceDir: root, Target: harness.TargetBinding{TargetID: "target-1", Isolation: harness.IsolationCallerManaged}, Observations: observations, MaxFiles: 16})
 	if err == nil || !strings.Contains(err.Error(), "limit") {
 		t.Fatalf("err = %v", err)
 	}
@@ -65,7 +66,7 @@ func TestArchiveEvidenceRejectsOversizeBeforePut(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(root, "large"), bytes.Repeat([]byte("x"), 32), 0o600)
 	observations := []harness.ObservationProposal{{LocalID: "one", Kind: "k", Summary: "one", Target: "target-1", EvidenceFiles: []string{"small"}}, {LocalID: "two", Kind: "k", Summary: "two", Target: "target-1", EvidenceFiles: []string{"large"}}}
 	store := &fakeArtifactStore{}
-	_, err := harness.ArchiveAttemptEvidence(context.Background(), store, *harness.NewRedactor(), harness.EvidenceArchiveRequest{Now: time.Now(), RunID: "run", IntentID: "branch", AttemptID: "attempt", SessionID: "session", WorkspaceDir: root, Target: harness.TargetBinding{TargetID: "target-1", Isolation: harness.IsolationCallerManaged}, Observations: observations, MaxFiles: 16, MaxFileBytes: 16, MaxTotalBytes: 64})
+	_, err := harness.ArchiveAttemptEvidence(context.Background(), store, *harness.NewRedactor(), runtime.OSWorkspace{}, harness.EvidenceArchiveRequest{Now: time.Now(), RunID: "run", IntentID: "branch", AttemptID: "attempt", SessionID: "session", WorkspaceDir: root, Target: harness.TargetBinding{TargetID: "target-1", Isolation: harness.IsolationCallerManaged}, Observations: observations, MaxFiles: 16, MaxFileBytes: 16, MaxTotalBytes: 64})
 	if err == nil || !strings.Contains(err.Error(), "size") {
 		t.Fatalf("err = %v", err)
 	}
@@ -88,7 +89,7 @@ func TestArchiveEvidenceRejectsArtifactIdentityMismatch(t *testing.T) {
 	root := t.TempDir()
 	_ = os.WriteFile(filepath.Join(root, "proof"), []byte("proof"), 0o600)
 	store := &tamperingArtifactStore{fakeArtifactStore: &fakeArtifactStore{}}
-	_, err := harness.ArchiveAttemptEvidence(context.Background(), store, *harness.NewRedactor(), harness.EvidenceArchiveRequest{Now: time.Now(), RunID: "run", IntentID: "intent", AttemptID: "attempt", SessionID: "session", WorkspaceDir: root, Target: harness.TargetBinding{TargetID: "target-1", Isolation: harness.IsolationCallerManaged}, Observations: []harness.ObservationProposal{{LocalID: "obs", Kind: "k", Summary: "s", Target: "target-1", EvidenceFiles: []string{"proof"}}}})
+	_, err := harness.ArchiveAttemptEvidence(context.Background(), store, *harness.NewRedactor(), runtime.OSWorkspace{}, harness.EvidenceArchiveRequest{Now: time.Now(), RunID: "run", IntentID: "intent", AttemptID: "attempt", SessionID: "session", WorkspaceDir: root, Target: harness.TargetBinding{TargetID: "target-1", Isolation: harness.IsolationCallerManaged}, Observations: []harness.ObservationProposal{{LocalID: "obs", Kind: "k", Summary: "s", Target: "target-1", EvidenceFiles: []string{"proof"}}}})
 	if err == nil || !strings.Contains(err.Error(), "identity") {
 		t.Fatalf("err = %v, want artifact identity mismatch", err)
 	}
@@ -99,7 +100,7 @@ func TestArchiveEvidenceUsesContentHash(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(root, "a.txt"), []byte("same"), 0o600)
 	_ = os.WriteFile(filepath.Join(root, "b.txt"), []byte("same"), 0o600)
 	store := &fakeArtifactStore{}
-	observations, err := harness.ArchiveAttemptEvidence(context.Background(), store, *harness.NewRedactor(), harness.EvidenceArchiveRequest{Now: time.Now(), RunID: "run", IntentID: "branch", AttemptID: "attempt", SessionID: "session", WorkspaceDir: root, Target: harness.TargetBinding{TargetID: "target-1", Isolation: harness.IsolationCallerManaged}, Observations: []harness.ObservationProposal{{LocalID: "obs", Kind: "k", Summary: "s", Target: "target-1", EvidenceFiles: []string{"a.txt", "b.txt"}}}, MaxFiles: 16, MaxFileBytes: 1024, MaxTotalBytes: 2048})
+	observations, err := harness.ArchiveAttemptEvidence(context.Background(), store, *harness.NewRedactor(), runtime.OSWorkspace{}, harness.EvidenceArchiveRequest{Now: time.Now(), RunID: "run", IntentID: "branch", AttemptID: "attempt", SessionID: "session", WorkspaceDir: root, Target: harness.TargetBinding{TargetID: "target-1", Isolation: harness.IsolationCallerManaged}, Observations: []harness.ObservationProposal{{LocalID: "obs", Kind: "k", Summary: "s", Target: "target-1", EvidenceFiles: []string{"a.txt", "b.txt"}}}, MaxFiles: 16, MaxFileBytes: 1024, MaxTotalBytes: 2048})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +114,7 @@ func TestArchiveEvidenceUsesContentHash(t *testing.T) {
 
 func TestArchiveEvidenceRequiresObservationFile(t *testing.T) {
 	store := &fakeArtifactStore{}
-	_, err := harness.ArchiveAttemptEvidence(context.Background(), store, *harness.NewRedactor(), harness.EvidenceArchiveRequest{Now: time.Now(), RunID: "run", IntentID: "branch", AttemptID: "attempt", SessionID: "session", WorkspaceDir: t.TempDir(), Target: harness.TargetBinding{TargetID: "target-1", Isolation: harness.IsolationCallerManaged}, Observations: []harness.ObservationProposal{{LocalID: "obs", Kind: "k", Summary: "s", Target: "target-1"}}})
+	_, err := harness.ArchiveAttemptEvidence(context.Background(), store, *harness.NewRedactor(), runtime.OSWorkspace{}, harness.EvidenceArchiveRequest{Now: time.Now(), RunID: "run", IntentID: "branch", AttemptID: "attempt", SessionID: "session", WorkspaceDir: t.TempDir(), Target: harness.TargetBinding{TargetID: "target-1", Isolation: harness.IsolationCallerManaged}, Observations: []harness.ObservationProposal{{LocalID: "obs", Kind: "k", Summary: "s", Target: "target-1"}}})
 	if err == nil || !strings.Contains(err.Error(), "evidence") {
 		t.Fatalf("err = %v", err)
 	}
@@ -123,7 +124,7 @@ func TestArchiveEvidenceRequiresArtifactWrite(t *testing.T) {
 	root := t.TempDir()
 	_ = os.WriteFile(filepath.Join(root, "proof"), []byte("proof"), 0o600)
 	store := &fakeArtifactStore{fail: errors.New("disk full")}
-	_, err := harness.ArchiveAttemptEvidence(context.Background(), store, *harness.NewRedactor(), harness.EvidenceArchiveRequest{Now: time.Now(), RunID: "run", IntentID: "branch", AttemptID: "attempt", SessionID: "session", WorkspaceDir: root, Target: harness.TargetBinding{TargetID: "target-1", Isolation: harness.IsolationCallerManaged}, Observations: []harness.ObservationProposal{{LocalID: "obs", Kind: "k", Summary: "s", Target: "target-1", EvidenceFiles: []string{"proof"}}}})
+	_, err := harness.ArchiveAttemptEvidence(context.Background(), store, *harness.NewRedactor(), runtime.OSWorkspace{}, harness.EvidenceArchiveRequest{Now: time.Now(), RunID: "run", IntentID: "branch", AttemptID: "attempt", SessionID: "session", WorkspaceDir: root, Target: harness.TargetBinding{TargetID: "target-1", Isolation: harness.IsolationCallerManaged}, Observations: []harness.ObservationProposal{{LocalID: "obs", Kind: "k", Summary: "s", Target: "target-1", EvidenceFiles: []string{"proof"}}}})
 	if err == nil || !strings.Contains(err.Error(), "disk full") {
 		t.Fatalf("err = %v", err)
 	}
@@ -133,7 +134,7 @@ func TestTextArtifactIsRedactedBeforeHash(t *testing.T) {
 	root := t.TempDir()
 	_ = os.WriteFile(filepath.Join(root, "proof.txt"), []byte("token=supersecret"), 0o600)
 	store := &fakeArtifactStore{}
-	obs, err := harness.ArchiveAttemptEvidence(context.Background(), store, *harness.NewRedactor("supersecret"), harness.EvidenceArchiveRequest{Now: time.Now(), RunID: "run", IntentID: "branch", AttemptID: "attempt", SessionID: "session", WorkspaceDir: root, Target: harness.TargetBinding{TargetID: "target-1", Isolation: harness.IsolationCallerManaged}, Observations: []harness.ObservationProposal{{LocalID: "obs", Kind: "k", Summary: "s", Target: "target-1", EvidenceFiles: []string{"proof.txt"}}}})
+	obs, err := harness.ArchiveAttemptEvidence(context.Background(), store, *harness.NewRedactor("supersecret"), runtime.OSWorkspace{}, harness.EvidenceArchiveRequest{Now: time.Now(), RunID: "run", IntentID: "branch", AttemptID: "attempt", SessionID: "session", WorkspaceDir: root, Target: harness.TargetBinding{TargetID: "target-1", Isolation: harness.IsolationCallerManaged}, Observations: []harness.ObservationProposal{{LocalID: "obs", Kind: "k", Summary: "s", Target: "target-1", EvidenceFiles: []string{"proof.txt"}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +150,7 @@ func TestBinaryArtifactWithKnownSecretIsRejected(t *testing.T) {
 	root := t.TempDir()
 	_ = os.WriteFile(filepath.Join(root, "proof.bin"), []byte{0, 1, 2, 's', 'u', 'p', 'e', 'r', 's', 'e', 'c', 'r', 'e', 't', 0xff}, 0o600)
 	store := &fakeArtifactStore{}
-	_, err := harness.ArchiveAttemptEvidence(context.Background(), store, *harness.NewRedactor("supersecret"), harness.EvidenceArchiveRequest{Now: time.Now(), RunID: "run", IntentID: "branch", AttemptID: "attempt", SessionID: "session", WorkspaceDir: root, Target: harness.TargetBinding{TargetID: "target-1", Isolation: harness.IsolationCallerManaged}, Observations: []harness.ObservationProposal{{LocalID: "obs", Kind: "k", Summary: "s", Target: "target-1", EvidenceFiles: []string{"proof.bin"}}}})
+	_, err := harness.ArchiveAttemptEvidence(context.Background(), store, *harness.NewRedactor("supersecret"), runtime.OSWorkspace{}, harness.EvidenceArchiveRequest{Now: time.Now(), RunID: "run", IntentID: "branch", AttemptID: "attempt", SessionID: "session", WorkspaceDir: root, Target: harness.TargetBinding{TargetID: "target-1", Isolation: harness.IsolationCallerManaged}, Observations: []harness.ObservationProposal{{LocalID: "obs", Kind: "k", Summary: "s", Target: "target-1", EvidenceFiles: []string{"proof.bin"}}}})
 	if err == nil || !strings.Contains(err.Error(), "secret") {
 		t.Fatalf("err = %v", err)
 	}

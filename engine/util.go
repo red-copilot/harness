@@ -3,15 +3,12 @@ package engine
 import (
 	"encoding/json"
 	"errors"
-	"os"
 	"time"
 
 	"github.com/red-copilot/harness/core"
 )
 
 var ErrRunNotFound = errors.New("run not found")
-
-func ensureDir(path string) error { return os.MkdirAll(path, 0o700) }
 
 func mustJSON(value any) json.RawMessage {
 	data, _ := json.Marshal(value)

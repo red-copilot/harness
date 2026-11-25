@@ -17,7 +17,10 @@ import (
 	"time"
 
 	"github.com/red-copilot/harness"
+	"github.com/red-copilot/harness/runtime"
 )
+
+var testWorkspace = runtime.OSWorkspace{}
 
 type testClock struct{}
 
@@ -463,7 +466,7 @@ func attachBackend(spec *harness.RunSpec, backend harness.Backend) {
 func newTestRunner(t *testing.T, store harness.Store) *harness.Runner {
 	t.Helper()
 	runner, err := harness.NewRunner(harness.Config{
-		Store: store, Clock: testClock{}, IDs: testIDs{}, Secrets: testSecrets{},
+		Store: store, Clock: testClock{}, IDs: testIDs{}, Secrets: testSecrets{}, Workspace: testWorkspace,
 		WorkspaceRoot: t.TempDir(), SkipRecovery: true,
 	})
 	if err != nil {
