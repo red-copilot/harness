@@ -92,10 +92,10 @@ func TestFinalizeFailureDoesNotPersistTerminalRunSeparately(t *testing.T) {
 	}
 	store := newRedactingStore(inner)
 	store.register("run-1", NewRedactor())
-	runner := &Runner{store: store, redacting: store}
+	runner := &Runner{store: store, redacting: store, clock: testClock{}, secrets: testSecrets{}}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	controller := newRunController(runner, "run-1", ctx, cancel, t.TempDir(), Budget{}, NewRedactor(), nil)
+	controller := newRunController(runner, "run-1", ctx, cancel, t.TempDir(), Budget{}, NewRedactor(), nil, testClock{})
 
 	controller.finishExecution(RunOutcomeFailed, errors.New("original failure"), &Verdict{Success: false})
 
@@ -124,10 +124,10 @@ func newFinalizationTestRun(t *testing.T) (*Run, *controllerTestStore) {
 	}}
 	store := newRedactingStore(inner)
 	store.register("run-1", NewRedactor())
-	runner := &Runner{store: store, redacting: store}
+	runner := &Runner{store: store, redacting: store, clock: testClock{}, secrets: testSecrets{}}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	controller := newRunController(runner, "run-1", ctx, cancel, t.TempDir(), Budget{}, NewRedactor(), nil)
+	controller := newRunController(runner, "run-1", ctx, cancel, t.TempDir(), Budget{}, NewRedactor(), nil, testClock{})
 	run := newRun(controller)
 	return run, inner
 }
@@ -183,7 +183,7 @@ func TestControllerIsSingleWriterUnderConcurrentCompletion(t *testing.T) {
 func TestControllerSerializesControlTransitionsThroughApply(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	controller := newRunController(nil, "run-1", ctx, cancel, t.TempDir(), Budget{MaxTokens: 1000}, NewRedactor(), nil)
+	controller := newRunController(nil, "run-1", ctx, cancel, t.TempDir(), Budget{MaxTokens: 1000}, NewRedactor(), nil, testClock{})
 
 	if result := controller.apply(runTransition{kind: runTransitionStarted, at: time.Now().UTC()}); !result.applied {
 		t.Fatal("start transition was rejected")
@@ -254,10 +254,10 @@ func TestControllerRejectsEventWritesWhileFinalizationOwnsStream(t *testing.T) {
 	}
 	store := newRedactingStore(inner)
 	store.register("run-1", NewRedactor())
-	runner := &Runner{store: store, redacting: store}
+	runner := &Runner{store: store, redacting: store, clock: testClock{}, secrets: testSecrets{}}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	controller := newRunController(runner, "run-1", ctx, cancel, t.TempDir(), Budget{}, NewRedactor(), nil)
+	controller := newRunController(runner, "run-1", ctx, cancel, t.TempDir(), Budget{}, NewRedactor(), nil, testClock{})
 	run := newRun(controller)
 
 	finished := make(chan struct{})
@@ -296,10 +296,10 @@ func TestInFlightCanonicalEventFailureDowngradesSuccess(t *testing.T) {
 	}
 	store := newRedactingStore(inner)
 	store.register("run-1", NewRedactor())
-	runner := &Runner{store: store, redacting: store}
+	runner := &Runner{store: store, redacting: store, clock: testClock{}, secrets: testSecrets{}}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	controller := newRunController(runner, "run-1", ctx, cancel, t.TempDir(), Budget{}, NewRedactor(), nil)
+	controller := newRunController(runner, "run-1", ctx, cancel, t.TempDir(), Budget{}, NewRedactor(), nil, testClock{})
 
 	emitDone := make(chan error, 1)
 	go func() {
@@ -330,7 +330,7 @@ func TestInFlightCanonicalEventFailureDowngradesSuccess(t *testing.T) {
 func TestControllerRejectsRunPhaseRewind(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	controller := newRunController(nil, "run-1", ctx, cancel, t.TempDir(), Budget{}, NewRedactor(), nil)
+	controller := newRunController(nil, "run-1", ctx, cancel, t.TempDir(), Budget{}, NewRedactor(), nil, testClock{})
 	if result := controller.apply(runTransition{kind: runTransitionPhase, phase: RunPhaseProvisioning}); !result.applied {
 		t.Fatalf("queued -> provisioning rejected: %+v", result)
 	}

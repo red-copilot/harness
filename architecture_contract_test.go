@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/red-copilot/harness"
 )
@@ -50,7 +51,7 @@ func TestArchiveEvidenceRejectsUnauthorizedObservationTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := &fakeArtifactStore{}
-	_, err := harness.ArchiveAttemptEvidence(context.Background(), store, *harness.NewRedactor(), harness.EvidenceArchiveRequest{
+	_, err := harness.ArchiveAttemptEvidence(context.Background(), store, *harness.NewRedactor(), harness.EvidenceArchiveRequest{Now: time.Now(),
 		RunID:        "run",
 		IntentID:     "branch",
 		AttemptID:    "attempt",

@@ -14,12 +14,13 @@ import (
 type Runner struct {
 	store         Store
 	redacting     *redactingStore
-	starter       ProcessStarter
+	clock         Clock
+	ids           IDSource
+	secrets       SecretSource
 	workspaceRoot string
 	maxSessions   int
 	pollInterval  time.Duration
 	closeTimeout  time.Duration
-	cleaner       ResourceCleaner
 	sessionSlots  chan struct{}
 	closed        chan struct{}
 	closeOnce     sync.Once
@@ -34,8 +35,14 @@ func NewRunner(cfg Config) (*Runner, error) {
 	if cfg.Store == nil {
 		return nil, errors.New("runner store is required")
 	}
-	if cfg.Starter == nil {
-		return nil, errors.New("runner process starter is required")
+	if cfg.Clock == nil {
+		return nil, errors.New("runner clock is required")
+	}
+	if cfg.IDs == nil {
+		return nil, errors.New("runner id source is required")
+	}
+	if cfg.Secrets == nil {
+		return nil, errors.New("runner secret source is required")
 	}
 	if cfg.MaxSessions < 0 || cfg.PollInterval < 0 || cfg.CloseTimeout < 0 {
 		return nil, errors.New("runner durations and MaxSessions must not be negative")
@@ -56,8 +63,9 @@ func NewRunner(cfg Config) (*Runner, error) {
 	// adapter can reach the canonical store without redaction.
 	redacting := newRedactingStore(cfg.Store)
 	runner := &Runner{
-		store: redacting, redacting: redacting, starter: cfg.Starter, workspaceRoot: cfg.WorkspaceRoot,
-		maxSessions: cfg.MaxSessions, pollInterval: cfg.PollInterval, closeTimeout: cfg.CloseTimeout, cleaner: cfg.Cleaner,
+		store: redacting, redacting: redacting, clock: cfg.Clock, ids: cfg.IDs, secrets: cfg.Secrets,
+		workspaceRoot: cfg.WorkspaceRoot,
+		maxSessions:   cfg.MaxSessions, pollInterval: cfg.PollInterval, closeTimeout: cfg.CloseTimeout,
 		runs: map[string]*Run{}, sessionSlots: make(chan struct{}, cfg.MaxSessions), closed: make(chan struct{}),
 	}
 	if !cfg.SkipRecovery {
@@ -68,11 +76,6 @@ func NewRunner(cfg Config) (*Runner, error) {
 		}
 		if err := cfg.Store.MarkInterrupted(context.Background()); err != nil {
 			return nil, fmt.Errorf("mark interrupted runs: %w", err)
-		}
-		if cfg.Cleaner != nil {
-			if err := cfg.Cleaner.CleanupOrphans(context.Background()); err != nil {
-				return nil, fmt.Errorf("cleanup orphans: %w", err)
-			}
 		}
 	}
 	return runner, nil
@@ -102,11 +105,11 @@ func (r *Runner) Start(ctx context.Context, spec RunSpec) (*Run, error) {
 			releaseSessions()
 		}
 	}()
-	runID, err := randomID()
+	runID, err := r.ids.NewRunID()
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now().UTC()
+	now := r.clock.Now().UTC()
 	baseCtx := ctx
 	var timeoutCancel context.CancelFunc
 	if spec.Policy.Budget.WallTime > 0 {
@@ -117,13 +120,13 @@ func (r *Runner) Start(ctx context.Context, spec RunSpec) (*Run, error) {
 		inner := cancel
 		cancel = func() { inner(); timeoutCancel() }
 	}
-	redactor := redactorForSpec(spec)
+	redactor := redactorForSpec(spec, r.secrets)
 	r.redacting.register(runID, redactor)
 	workspaceRoot := spec.WorkspaceRoot
 	if workspaceRoot == "" {
 		workspaceRoot = r.workspaceRoot
 	}
-	controller := newRunController(r, runID, runCtx, cancel, filepath.Join(workspaceRoot, runID), spec.Policy.Budget, redactor, spec.MaterializeSkills)
+	controller := newRunController(r, runID, runCtx, cancel, filepath.Join(workspaceRoot, runID), spec.Policy.Budget, redactor, spec.MaterializeSkills, r.clock)
 	controller.maxObserveFailures = spec.Policy.Exploration.MaxAuthorityObserveFailures
 	run := newRun(controller)
 	descriptor := spec.Descriptor()
@@ -205,7 +208,7 @@ func (r *Runner) Resume(ctx context.Context, runID string, spec RunSpec) (*Run, 
 			releaseSessions()
 		}
 	}()
-	now := time.Now().UTC()
+	now := r.clock.Now().UTC()
 	baseCtx := ctx
 	var timeoutCancel context.CancelFunc
 	if spec.Policy.Budget.WallTime > 0 {
@@ -216,13 +219,13 @@ func (r *Runner) Resume(ctx context.Context, runID string, spec RunSpec) (*Run, 
 		inner := cancel
 		cancel = func() { inner(); timeoutCancel() }
 	}
-	redactor := redactorForSpec(spec)
+	redactor := redactorForSpec(spec, r.secrets)
 	r.redacting.register(runID, redactor)
 	workspaceRoot := spec.WorkspaceRoot
 	if workspaceRoot == "" {
 		workspaceRoot = r.workspaceRoot
 	}
-	controller := newRunController(r, runID, runCtx, cancel, filepath.Join(workspaceRoot, runID), spec.Policy.Budget, redactor, spec.MaterializeSkills)
+	controller := newRunController(r, runID, runCtx, cancel, filepath.Join(workspaceRoot, runID), spec.Policy.Budget, redactor, spec.MaterializeSkills, r.clock)
 	controller.maxObserveFailures = spec.Policy.Exploration.MaxAuthorityObserveFailures
 	controller.resumeCommit = &commit
 	controller.boardRevision = commit.Revision

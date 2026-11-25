@@ -105,7 +105,7 @@ func TestCommitRoundTripsAndAppendsIntentVersions(t *testing.T) {
 		t.Fatal(err)
 	}
 	intent := harness.Intent{ID: "intent-1", RunID: "run-1", FromClaimIDs: []string{"origin"}, Description: "probe", State: harness.IntentOpen, CreatedAt: now}
-	event, err := harness.NewEvent("run-1", harness.EventIntentCreated, harness.IntentPayload{Intent: intent})
+	event, err := harness.NewEvent("run-1", harness.EventIntentCreated, time.Now().UTC(), harness.IntentPayload{Intent: intent})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func TestFinalizeIsAtomicAndTerminalWritesAreRejected(t *testing.T) {
 	if err := store.CreateRun(ctx, harness.RunRecord{ID: "run-1", Phase: harness.RunPhaseRunning, CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	event, err := harness.NewEvent("run-1", harness.EventRunFinalized, harness.RunFinalizedPayload{Outcome: harness.RunOutcomeSucceeded})
+	event, err := harness.NewEvent("run-1", harness.EventRunFinalized, time.Now().UTC(), harness.RunFinalizedPayload{Outcome: harness.RunOutcomeSucceeded})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func TestFinalizeIsAtomicAndTerminalWritesAreRejected(t *testing.T) {
 	if err != nil || !stored.Success || stored.Authority != harness.VerdictAuthorityVerifier {
 		t.Fatalf("verdict = %+v err=%v", stored, err)
 	}
-	late, _ := harness.NewEvent("run-1", harness.EventAgent, harness.AgentEventPayload{NativeType: "late"})
+	late, _ := harness.NewEvent("run-1", harness.EventAgent, time.Now().UTC(), harness.AgentEventPayload{NativeType: "late"})
 	if _, err := store.AppendEvent(ctx, late); err == nil {
 		t.Fatal("event accepted after finalization")
 	}

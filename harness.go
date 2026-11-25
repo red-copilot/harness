@@ -16,9 +16,7 @@ type (
 	RuntimeRequest      = engine.RuntimeRequest
 	AgentRuntimeFactory = engine.AgentRuntimeFactory
 	AgentSession        = engine.AgentSession
-	ProcessStarter      = engine.ProcessStarter
 	TargetProvisioner   = engine.TargetProvisioner
-	ResourceCleaner     = engine.ResourceCleaner
 	CompletionSource    = engine.CompletionSource
 	Backend             = engine.Backend
 	Verifier            = engine.Verifier

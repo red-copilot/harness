@@ -318,6 +318,3 @@ func (r *Runner) CleanupOrphans(ctx context.Context) error {
 	}
 	return nil
 }
-
-var _ harness.ProcessStarter = (*Runner)(nil)
-var _ harness.ResourceCleaner = (*Runner)(nil)

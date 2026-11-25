@@ -32,14 +32,14 @@ func TestBuildTargetUnknownKindFailsClosed(t *testing.T) {
 }
 
 func TestBuildRuntimeDefaultsToPi(t *testing.T) {
-	runtime, err := buildRuntime(nil)
+	runtime, err := buildRuntime(nil, nil)
 	if err != nil {
 		t.Fatalf("default runtime: %v", err)
 	}
 	if runtime == nil {
 		t.Fatal("default runtime is nil")
 	}
-	explicit, err := buildRuntime(json.RawMessage(`{"type":"pi","provider":"x"}`))
+	explicit, err := buildRuntime(json.RawMessage(`{"type":"pi","provider":"x"}`), nil)
 	if err != nil {
 		t.Fatalf("explicit pi runtime: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestBuildRuntimeDefaultsToPi(t *testing.T) {
 }
 
 func TestBuildRuntimeUnknownTypeFailsClosed(t *testing.T) {
-	_, err := buildRuntime(json.RawMessage(`{"type":"crewai"}`))
+	_, err := buildRuntime(json.RawMessage(`{"type":"crewai"}`), nil)
 	if err == nil {
 		t.Fatal("unknown runtime type accepted")
 	}
@@ -59,7 +59,7 @@ func TestBuildRuntimeUnknownTypeFailsClosed(t *testing.T) {
 }
 
 func TestBuildRuntimeRejectsInvalidPiConfig(t *testing.T) {
-	if _, err := buildRuntime(json.RawMessage(`{"type":"pi","provider":123}`)); err == nil {
+	if _, err := buildRuntime(json.RawMessage(`{"type":"pi","provider":123}`), nil); err == nil {
 		t.Fatal("invalid pi config accepted")
 	}
 }

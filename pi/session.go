@@ -40,8 +40,17 @@ type Config struct {
 	Image        string   `json:"image,omitempty" yaml:"image,omitempty"`
 }
 
+// Starter starts one agent process. The adapter owns this dependency so the
+// kernel no longer carries process-lifecycle ports.
+type Starter interface {
+	Start(context.Context, harness.ProcessSpec) (harness.Process, error)
+}
+
 // Factory creates Pi RPC sessions from runtime-neutral requests.
-type Factory struct{ config Config }
+type Factory struct {
+	config  Config
+	starter Starter
+}
 
 func NewFactory(config ...Config) *Factory {
 	factory := &Factory{}
@@ -51,9 +60,16 @@ func NewFactory(config ...Config) *Factory {
 	return factory
 }
 
+// WithStarter returns a copy of the factory bound to a process starter.
+func (f *Factory) WithStarter(starter Starter) *Factory {
+	copy := *f
+	copy.starter = starter
+	return &copy
+}
+
 func (f *Factory) NewSession(ctx context.Context, req harness.RuntimeRequest) (harness.AgentSession, error) {
-	if req.Starter == nil {
-		return nil, errors.New("pi session requires a ProcessStarter")
+	if f.starter == nil {
+		return nil, errors.New("pi session requires a process starter")
 	}
 	config := f.config
 	if len(req.Agent.RuntimeConfig) > 0 {
@@ -129,7 +145,7 @@ func (f *Factory) NewSession(ctx context.Context, req harness.RuntimeRequest) (h
 		resources.CPUs = "2"
 	}
 	spec := harness.ProcessSpec{Image: image, Command: command, Env: env, Mounts: mounts, Network: network, CapAdd: caps, Name: "harness_pi_" + naming.Identifier(req.RunID+"_"+req.SessionID, "session"), Labels: map[string]string{"harness.run_id": req.RunID, "harness.session_id": req.SessionID}, WorkingDir: "/workspace", User: fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), ReadOnlyRoot: true, PidsLimit: resources.PidsLimit, Memory: resources.Memory, CPUs: resources.CPUs}
-	proc, err := req.Starter.Start(ctx, spec)
+	proc, err := f.starter.Start(ctx, spec)
 	if err != nil {
 		return nil, fmt.Errorf("start pi process: %w", err)
 	}

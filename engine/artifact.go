@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 	"unicode/utf8"
 )
 
@@ -190,7 +189,10 @@ func ArchiveAttemptEvidence(ctx context.Context, store ArtifactStore, redactor R
 		}
 		prepared = append(prepared, item)
 	}
-	now := time.Now().UTC()
+	now := req.Now.UTC()
+	if now.IsZero() {
+		return nil, errors.New("evidence archive time is required")
+	}
 	out := make([]Observation, 0, len(prepared))
 	for _, item := range prepared {
 		artifacts := make([]Artifact, 0, len(item.artifacts))

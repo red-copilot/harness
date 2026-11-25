@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -176,8 +177,12 @@ func EventSchemaVersion(typ EventType) (int, bool) {
 	return contract.version, true
 }
 
-// NewEvent builds a typed, versioned canonical event.
-func NewEvent(runID string, typ EventType, payload any) (Event, error) {
+// NewEvent builds a typed, versioned canonical event at the supplied time.
+// The clock is explicit so core remains deterministic and free of ambient I/O.
+func NewEvent(runID string, typ EventType, at time.Time, payload any) (Event, error) {
+	if at.IsZero() {
+		return Event{}, errors.New("event time is required")
+	}
 	contract, ok := eventContracts[typ]
 	if !ok {
 		return Event{}, fmt.Errorf("unknown event type %q", typ)
@@ -189,5 +194,5 @@ func NewEvent(runID string, typ EventType, payload any) (Event, error) {
 	if err != nil {
 		return Event{}, fmt.Errorf("marshal event %q: %w", typ, err)
 	}
-	return Event{RunID: runID, SchemaVersion: contract.version, Type: typ, Time: time.Now().UTC(), Data: data}, nil
+	return Event{RunID: runID, SchemaVersion: contract.version, Type: typ, Time: at.UTC(), Data: data}, nil
 }

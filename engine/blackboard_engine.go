@@ -66,7 +66,7 @@ func newBlackboardEngine(runner *Runner, controller *runController, spec RunSpec
 	if explore == nil {
 		explore = defaultExploreStrategy{}
 	}
-	board := newBoardState(controller.id, spec, target)
+	board := newBoardState(controller.id, spec, target, controller.clock)
 	stopped := false
 	resumed := false
 	if controller.resumeCommit != nil {
@@ -183,11 +183,11 @@ func (e *blackboardEngine) startSession(ctx context.Context, role AgentRole, spe
 	if err := ensureDir(workspace); err != nil {
 		return nil, err
 	}
-	env := buildEnvironment(e.controller.id, sessionID, e.spec, spec, e.target, workspace, e.controller.taskDir, e.controller.skillsDir)
+	env := buildEnvironment(e.controller.id, sessionID, e.spec, spec, e.target, workspace, e.controller.taskDir, e.controller.skillsDir, e.runner.secrets)
 	session, err := spec.Runtime.NewSession(ctx, RuntimeRequest{
 		RunID: e.controller.id, SessionID: sessionID, Role: role, Agent: spec, Task: e.spec.Task,
 		Target: e.target, WorkspaceDir: workspace, TaskDir: e.controller.taskDir, SkillsDir: e.controller.skillsDir,
-		Env: env, Starter: e.runner.starter, Redactor: e.controller.redactor(),
+		Env: env, Redactor: e.controller.redactor(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("start %s session: %w", role, err)
@@ -200,7 +200,7 @@ func (e *blackboardEngine) startSession(ctx context.Context, role AgentRole, spe
 			for log := range logs {
 				// Log persistence is part of the canonical audit. A failure
 				// must stop the Run rather than silently dropping records.
-				if err := e.controller.appendLog(LogRecord{RunID: e.controller.id, SessionID: sessionID, Stream: log.Stream, Time: time.Now().UTC(), Text: log.Text}); err != nil {
+				if err := e.controller.appendLog(LogRecord{RunID: e.controller.id, SessionID: sessionID, Stream: log.Stream, Time: e.controller.now(), Text: log.Text}); err != nil {
 					e.controller.setControlError(err)
 					return
 				}
@@ -298,12 +298,12 @@ func (e *blackboardEngine) startIntent(ctx context.Context, intent Intent) error
 	if e.active != nil {
 		return fmt.Errorf("%w: executor slot is occupied", ErrIntentCapacity)
 	}
-	claimed, err := e.board.claimIntent(intent.ID, "executor", time.Now().UTC())
+	claimed, err := e.board.claimIntent(intent.ID, "executor", e.controller.now())
 	if err != nil {
 		return err
 	}
 	attemptID := e.board.nextID("attempt")
-	attempt := IntentAttempt{ID: attemptID, RunID: e.board.runID, IntentID: intent.ID, SessionID: claimed.ExecutorID, Phase: IntentAttemptRunning, StartedAt: time.Now().UTC()}
+	attempt := IntentAttempt{ID: attemptID, RunID: e.board.runID, IntentID: intent.ID, SessionID: claimed.ExecutorID, Phase: IntentAttemptRunning, StartedAt: e.controller.now()}
 	e.board.addAttempt(attempt)
 	claimed, err = e.board.registerAttempt(intent.ID, attemptID)
 	if err != nil {
@@ -346,7 +346,7 @@ func (e *blackboardEngine) startIntent(ctx context.Context, intent Intent) error
 		report, conclusion, err := runExploreAttempt(attemptCtx, e.executor, requests, TurnLimits{
 			MaxToolCalls:      e.board.policy.Exploration.MaxToolCallsPerAttempt,
 			MaxAssistantBytes: e.board.policy.Context.MaxAssistantBytes,
-		}, e.board.policy.Exploration.ConcludeTimeout, e.eventSink(claimed.ExecutorID), e.explore)
+		}, e.board.policy.Exploration.ConcludeTimeout, e.eventSink(claimed.ExecutorID), e.explore, e.controller.clock)
 		usageAfter := e.executor.Usage()
 		e.results <- boardAttemptResult{
 			intent: claimed, attempt: attempt, report: report,
@@ -407,7 +407,7 @@ func (e *blackboardEngine) startReason(ctx context.Context) {
 			turn, err = runAgentTurn(reasonCtx, e.planner, prompt, TurnLimits{
 				MaxToolCalls:      e.board.policy.Exploration.MaxReasonerToolCalls,
 				MaxAssistantBytes: e.board.policy.Context.MaxAssistantBytes,
-			}, e.eventSink("planner"), true)
+			}, e.eventSink("planner"), true, e.controller.clock)
 			if err == nil {
 				turn.Report, err = readReport(e.controller.sessionWorkspace("planner"), e.board.policy.Evidence.MaxReportBytes)
 			}
@@ -491,13 +491,13 @@ func (e *blackboardEngine) retryOrAbandon(intent Intent, reason string) (Intent,
 		attempts = len(current.AttemptIDs)
 	}
 	if attempts >= e.board.policy.Exploration.MaxAttemptsPerIntent {
-		updated, err := e.board.abandonIntent(intent.ID, reason, time.Now().UTC())
+		updated, err := e.board.abandonIntent(intent.ID, reason, e.controller.now())
 		if err == nil {
 			return updated, EventIntentAbandoned
 		}
 		return intent, ""
 	}
-	updated, err := e.board.returnIntentToOpen(intent.ID, time.Now().UTC())
+	updated, err := e.board.returnIntentToOpen(intent.ID, e.controller.now())
 	if err == nil {
 		return updated, EventIntentReleased
 	}
@@ -509,7 +509,7 @@ func (e *blackboardEngine) handleAttempt(ctx context.Context, result boardAttemp
 	if err := e.controller.addUsage(result.usage); err != nil {
 		return err
 	}
-	result.attempt.FinishedAt = time.Now().UTC()
+	result.attempt.FinishedAt = e.controller.now()
 	result.attempt.Conclusion = result.conclusion
 
 	if result.err != nil {
@@ -570,7 +570,7 @@ func (e *blackboardEngine) handleAttempt(ctx context.Context, result boardAttemp
 	updated, intentEventType := e.board.findIntent(result.intent.ID), EventType("")
 	attemptEventType := EventAttemptConcluded
 	if result.report.Claim != nil {
-		concluded, err := e.board.concludeIntent(result.intent.ID, claim.ID, time.Now().UTC())
+		concluded, err := e.board.concludeIntent(result.intent.ID, claim.ID, e.controller.now())
 		if err != nil {
 			return err
 		}
@@ -578,7 +578,7 @@ func (e *blackboardEngine) handleAttempt(ctx context.Context, result boardAttemp
 		result.attempt.Phase = IntentAttemptConcluded
 		intentEventType = EventIntentConcluded
 	} else {
-		abandoned, _ := e.board.abandonIntent(result.intent.ID, "no claim produced", time.Now().UTC())
+		abandoned, _ := e.board.abandonIntent(result.intent.ID, "no claim produced", e.controller.now())
 		updated = &abandoned
 		result.attempt.Phase = IntentAttemptFailed
 		attemptEventType = EventAttemptFailed
@@ -640,7 +640,7 @@ func (e *blackboardEngine) failAttempt(ctx context.Context, result boardAttemptR
 	e.board.updateAttempt(result.attempt)
 	updated, intentEventType := e.retryOrAbandon(result.intent, result.attempt.Error)
 	if forcedAbandon {
-		abandoned, abandonErr := e.board.abandonIntent(result.intent.ID, "artifact store failure: "+result.attempt.Error, time.Now().UTC())
+		abandoned, abandonErr := e.board.abandonIntent(result.intent.ID, "artifact store failure: "+result.attempt.Error, e.controller.now())
 		if abandonErr != nil {
 			return errors.Join(withErr, abandonErr)
 		}
@@ -703,6 +703,7 @@ func referencedObservations(report AttemptReport) []ObservationProposal {
 
 func (e *blackboardEngine) collectEvidence(ctx context.Context, result boardAttemptResult, proposals []ObservationProposal) ([]Observation, []Artifact, error) {
 	observations, err := ArchiveAttemptEvidence(ctx, e.spec.Artifacts, *e.controller.redactor(), EvidenceArchiveRequest{
+		Now:   e.controller.now(),
 		RunID: result.attempt.RunID, IntentID: result.intent.ID, AttemptID: result.attempt.ID,
 		SessionID: result.attempt.SessionID, WorkspaceDir: e.controller.sessionWorkspace(result.attempt.SessionID), Target: e.board.target,
 		Observations: proposals, MaxFiles: e.board.policy.Evidence.MaxEvidenceFilesPerAttempt,
@@ -783,7 +784,7 @@ reasons:
 func (e *blackboardEngine) recordCanceledAttempt(result boardAttemptResult) {
 	e.releaseActive()
 	_ = e.controller.addUsage(result.usage)
-	result.attempt.FinishedAt = time.Now().UTC()
+	result.attempt.FinishedAt = e.controller.now()
 	result.attempt.Phase = IntentAttemptCancelled
 	result.attempt.Conclusion = result.conclusion
 	if result.err != nil {
@@ -793,7 +794,7 @@ func (e *blackboardEngine) recordCanceledAttempt(result boardAttemptResult) {
 	var abandoned *Intent
 	intentEventType := EventType("")
 	if intent := e.board.findIntent(result.intent.ID); intent != nil && intent.State == IntentClaimed {
-		updated, _ := e.board.abandonIntent(intent.ID, "run canceled before conclusion", time.Now().UTC())
+		updated, _ := e.board.abandonIntent(intent.ID, "run canceled before conclusion", e.controller.now())
 		abandoned = &updated
 		intentEventType = EventIntentAbandoned
 	}

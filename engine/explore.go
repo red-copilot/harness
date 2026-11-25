@@ -59,7 +59,7 @@ func (defaultExploreStrategy) Parse(req ExploreRequest, turn TurnResult) (Attemp
 // runExploreAttempt executes one Intent and invokes the same-session Conclude
 // fallback when execution times out or produces unusable output. The returned
 // phase is "execute" or "conclude".
-func runExploreAttempt(ctx context.Context, session AgentSession, req ExploreRequest, limits TurnLimits, concludeTimeout time.Duration, sink EventSink, strategy ExploreStrategy) (AttemptReport, string, error) {
+func runExploreAttempt(ctx context.Context, session AgentSession, req ExploreRequest, limits TurnLimits, concludeTimeout time.Duration, sink EventSink, strategy ExploreStrategy, clock Clock) (AttemptReport, string, error) {
 	if strategy == nil {
 		strategy = defaultExploreStrategy{}
 	}
@@ -73,7 +73,7 @@ func runExploreAttempt(ctx context.Context, session AgentSession, req ExploreReq
 	if err := clearReport(req.WorkspaceDir); err != nil {
 		return AttemptReport{}, "execute", err
 	}
-	turn, executeErr := runAgentTurn(ctx, session, executePrompt, limits, sink, false)
+	turn, executeErr := runAgentTurn(ctx, session, executePrompt, limits, sink, false, clock)
 	var parseErr error
 	if executeErr == nil && req.WorkspaceDir != "" {
 		turn.Report, executeErr = readReport(req.WorkspaceDir, req.MaxReportBytes)
@@ -115,7 +115,7 @@ func runExploreAttempt(ctx context.Context, session AgentSession, req ExploreReq
 	concludeTurn, concludeErr := runAgentTurn(concludeCtx, session, concludePrompt, TurnLimits{
 		MaxAssistantBytes: limits.MaxAssistantBytes,
 		ReportOnly:        true,
-	}, sink, true)
+	}, sink, true, clock)
 	if concludeErr == nil && req.WorkspaceDir != "" {
 		concludeTurn.Report, concludeErr = readReport(req.WorkspaceDir, req.MaxReportBytes)
 	}

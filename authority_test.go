@@ -234,7 +234,10 @@ func TestSessionCleanupFailureDowngradesSuccess(t *testing.T) {
 
 func newTestRunnerWithPoll(t *testing.T, store harness.Store, poll time.Duration) *harness.Runner {
 	t.Helper()
-	runner, err := harness.NewRunner(harness.Config{Store: store, Starter: noopStarter{}, WorkspaceRoot: t.TempDir(), PollInterval: poll, SkipRecovery: true})
+	runner, err := harness.NewRunner(harness.Config{
+		Store: store, Clock: testClock{}, IDs: testIDs{}, Secrets: testSecrets{},
+		WorkspaceRoot: t.TempDir(), PollInterval: poll, SkipRecovery: true,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

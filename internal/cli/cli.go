@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/red-copilot/harness"
+	"github.com/red-copilot/harness/runtime"
 	"github.com/red-copilot/harness/sandbox/docker"
 	"github.com/red-copilot/harness/store/sqlite"
 )
@@ -97,12 +98,18 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	defer func() { _ = release() }()
-	spec, err := cfg.ToRunSpec(store)
+	starter := docker.New()
+	if err := starter.CleanupOrphans(context.Background()); err != nil {
+		return fmt.Errorf("cleanup orphans: %w", err)
+	}
+	spec, err := cfg.ToRunSpec(store, starter)
 	if err != nil {
 		return err
 	}
-	starter := docker.New()
-	runner, err := harness.NewRunner(harness.Config{Store: store, Starter: starter, Cleaner: starter, WorkspaceRoot: cfg.WorkspaceRoot, CloseTimeout: 30 * time.Second})
+	runner, err := harness.NewRunner(harness.Config{
+		Store: store, Clock: runtime.SystemClock{}, IDs: runtime.CryptoIDs{}, Secrets: runtime.OSSecrets{},
+		WorkspaceRoot: cfg.WorkspaceRoot, CloseTimeout: 30 * time.Second,
+	})
 	if err != nil {
 		return err
 	}

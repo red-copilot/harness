@@ -11,7 +11,7 @@ func eventTypes(events []Event) []EventType {
 }
 
 func TestAttemptEventsDoNotReleaseConcludedIntent(t *testing.T) {
-	engine := &blackboardEngine{controller: &runController{id: "run-1"}}
+	engine := &blackboardEngine{controller: &runController{id: "run-1", clock: testClock{}}}
 	intent := Intent{ID: "intent-1", RunID: "run-1", State: IntentConcluded}
 	attempt := IntentAttempt{ID: "attempt-1", RunID: "run-1", IntentID: intent.ID, Phase: IntentAttemptConcluded}
 	events, err := engine.attemptEvents(attempt, intent, EventAttemptConcluded, EventIntentConcluded)
@@ -30,7 +30,7 @@ func TestAttemptEventsDoNotReleaseConcludedIntent(t *testing.T) {
 }
 
 func TestAttemptEventsEmitSingleReleaseOnRetry(t *testing.T) {
-	engine := &blackboardEngine{controller: &runController{id: "run-1"}}
+	engine := &blackboardEngine{controller: &runController{id: "run-1", clock: testClock{}}}
 	intent := Intent{ID: "intent-1", RunID: "run-1", State: IntentOpen}
 	attempt := IntentAttempt{ID: "attempt-1", RunID: "run-1", IntentID: intent.ID, Phase: IntentAttemptFailed}
 	events, err := engine.attemptEvents(attempt, intent, EventAttemptFailed, EventIntentReleased)
@@ -44,7 +44,7 @@ func TestAttemptEventsEmitSingleReleaseOnRetry(t *testing.T) {
 }
 
 func TestAttemptEventsSkipIntentEventWhenCanceledWithoutIntent(t *testing.T) {
-	engine := &blackboardEngine{controller: &runController{id: "run-1"}}
+	engine := &blackboardEngine{controller: &runController{id: "run-1", clock: testClock{}}}
 	attempt := IntentAttempt{ID: "attempt-1", RunID: "run-1", Phase: IntentAttemptCancelled}
 	events, err := engine.attemptEvents(attempt, Intent{}, EventAttemptFailed, "")
 	if err != nil {

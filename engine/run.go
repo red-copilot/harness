@@ -12,12 +12,13 @@ import (
 // Config configures a Runner.
 type Config struct {
 	Store         Store
-	Starter       ProcessStarter
+	Clock         Clock
+	IDs           IDSource
+	Secrets       SecretSource
 	WorkspaceRoot string
 	MaxSessions   int
 	PollInterval  time.Duration
 	CloseTimeout  time.Duration
-	Cleaner       ResourceCleaner
 	SkipRecovery  bool
 	// RecoveryGuard is consulted before unfinished historical runs are marked
 	// interrupted. A non-nil error means another live process owns the

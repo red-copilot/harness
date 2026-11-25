@@ -11,6 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/red-copilot/harness"
+	"github.com/red-copilot/harness/pi"
 	"github.com/red-copilot/harness/verify"
 )
 
@@ -128,7 +129,7 @@ func LoadConfig(path string) (*FileConfig, error) {
 }
 
 // ToRunSpec composes serializable configuration with deployment adapters.
-func (c *FileConfig) ToRunSpec(artifacts harness.ArtifactStore) (harness.RunSpec, error) {
+func (c *FileConfig) ToRunSpec(artifacts harness.ArtifactStore, starter pi.Starter) (harness.RunSpec, error) {
 	if artifacts == nil {
 		return harness.RunSpec{}, errors.New("artifact store is required")
 	}
@@ -141,7 +142,7 @@ func (c *FileConfig) ToRunSpec(artifacts harness.ArtifactStore) (harness.RunSpec
 	if convertErr != nil {
 		return harness.RunSpec{}, fmt.Errorf("reasoner: %w", convertErr)
 	}
-	spec.Reasoner, err = composeAgent(reasoner)
+	spec.Reasoner, err = composeAgent(reasoner, starter)
 	if err != nil {
 		return harness.RunSpec{}, fmt.Errorf("reasoner: %w", err)
 	}
@@ -149,7 +150,7 @@ func (c *FileConfig) ToRunSpec(artifacts harness.ArtifactStore) (harness.RunSpec
 	if convertErr != nil {
 		return harness.RunSpec{}, fmt.Errorf("executor: %w", convertErr)
 	}
-	executor, err = composeAgent(executor)
+	executor, err = composeAgent(executor, starter)
 	if err != nil {
 		return harness.RunSpec{}, fmt.Errorf("executor: %w", err)
 	}
@@ -178,8 +179,8 @@ func (a AgentFileSpec) toHarness() (harness.AgentSpec, error) {
 
 // composeAgent resolves the agent's declared runtime through the runtime
 // registry. An empty runtime type keeps the Pi default.
-func composeAgent(agent harness.AgentSpec) (harness.AgentSpec, error) {
-	runtime, err := buildRuntime(agent.RuntimeConfig)
+func composeAgent(agent harness.AgentSpec, starter pi.Starter) (harness.AgentSpec, error) {
+	runtime, err := buildRuntime(agent.RuntimeConfig, starter)
 	if err != nil {
 		return agent, err
 	}

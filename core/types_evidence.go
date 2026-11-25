@@ -69,6 +69,7 @@ type Verdict struct {
 }
 
 type EvidenceArchiveRequest struct {
+	Now           time.Time
 	RunID         string
 	IntentID      string
 	AttemptID     string

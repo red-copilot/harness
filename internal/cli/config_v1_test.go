@@ -40,7 +40,7 @@ budget:
 		t.Fatal(err)
 	}
 	defer store.Close()
-	spec, err := cfg.ToRunSpec(store)
+	spec, err := cfg.ToRunSpec(store, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ policy:
 		t.Fatal(err)
 	}
 	defer store.Close()
-	spec, err := cfg.ToRunSpec(store)
+	spec, err := cfg.ToRunSpec(store, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

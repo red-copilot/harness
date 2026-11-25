@@ -38,7 +38,7 @@ func TestFactoryExecutorUsesConfiguredOrDefaultShellTools(t *testing.T) {
 
 func TestFactoryRejectsInvalidModelsJSON(t *testing.T) {
 	starter := &recordingStarter{}
-	_, err := NewFactory().NewSession(context.Background(), harness.RuntimeRequest{RunID: "run", SessionID: "planner", Role: harness.AgentRoleReasoner, Agent: harness.AgentSpec{ID: "planner", RuntimeConfig: []byte(`{"models_json":"not-json"}`)}, WorkspaceDir: t.TempDir(), TaskDir: t.TempDir(), SkillsDir: t.TempDir(), Starter: starter})
+	_, err := NewFactory().WithStarter(starter).NewSession(context.Background(), harness.RuntimeRequest{RunID: "run", SessionID: "planner", Role: harness.AgentRoleReasoner, Agent: harness.AgentSpec{ID: "planner", RuntimeConfig: []byte(`{"models_json":"not-json"}`)}, WorkspaceDir: t.TempDir(), TaskDir: t.TempDir(), SkillsDir: t.TempDir()})
 	if err == nil {
 		t.Fatal("expected invalid models JSON error")
 	}
@@ -49,7 +49,7 @@ func TestFactoryRejectsInvalidModelsJSON(t *testing.T) {
 
 func TestFactoryNeverReceivesDockerSocket(t *testing.T) {
 	starter := &recordingStarter{}
-	_, err := NewFactory().NewSession(context.Background(), harness.RuntimeRequest{RunID: "run", SessionID: "executor", Role: harness.AgentRoleExecutor, Agent: harness.AgentSpec{ID: "executor", Image: "image"}, WorkspaceDir: t.TempDir(), TaskDir: t.TempDir(), SkillsDir: t.TempDir(), Starter: starter})
+	_, err := NewFactory().WithStarter(starter).NewSession(context.Background(), harness.RuntimeRequest{RunID: "run", SessionID: "executor", Role: harness.AgentRoleExecutor, Agent: harness.AgentSpec{ID: "executor", Image: "image"}, WorkspaceDir: t.TempDir(), TaskDir: t.TempDir(), SkillsDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,11 +260,11 @@ func TestFactoryRedactsKnownSecretsInModelsJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	workspace := t.TempDir()
-	_, err = NewFactory().NewSession(context.Background(), harness.RuntimeRequest{
+	_, err = NewFactory().WithStarter(&recordingStarter{}).NewSession(context.Background(), harness.RuntimeRequest{
 		RunID: "run", SessionID: "planner", Role: harness.AgentRoleReasoner,
 		Agent:        harness.AgentSpec{ID: "planner", RuntimeConfig: runtimeConfig},
 		WorkspaceDir: workspace, TaskDir: t.TempDir(), SkillsDir: t.TempDir(),
-		Redactor: harness.NewRedactor(secret), Starter: &recordingStarter{},
+		Redactor: harness.NewRedactor(secret),
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -3,7 +3,25 @@ package engine
 import (
 	"context"
 	"io"
+	"time"
 )
+
+// Clock is the only time source available to the kernel.
+type Clock interface {
+	Now() time.Time
+}
+
+// IDSource supplies opaque Run identities. Entity IDs remain board-local until
+// the v5 domain cutover.
+type IDSource interface {
+	NewRunID() (string, error)
+}
+
+// SecretSource resolves secret-bearing environment values without letting the
+// kernel read the process environment directly.
+type SecretSource interface {
+	LookupEnv(name string) (string, bool)
+}
 
 // AgentRuntimeFactory creates runtime-neutral, reset-capable sessions.
 type AgentRuntimeFactory interface {
@@ -19,14 +37,6 @@ type AgentSession interface {
 	Usage() Usage
 	Abort(context.Context) error
 	Close(context.Context) error
-}
-
-type ProcessStarter interface {
-	Start(context.Context, ProcessSpec) (Process, error)
-}
-
-type ResourceCleaner interface {
-	CleanupOrphans(context.Context) error
 }
 
 // TargetProvisioner creates and tears down the per-Run Target.

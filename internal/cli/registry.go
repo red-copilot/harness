@@ -16,7 +16,7 @@ import (
 type targetBackend func(TargetFileConfig) (harness.TargetProvisioner, error)
 
 // agentRuntimeFactory builds one agent runtime from its opaque config.
-type agentRuntimeFactory func(json.RawMessage) (harness.AgentRuntimeFactory, error)
+type agentRuntimeFactory func(json.RawMessage, pi.Starter) (harness.AgentRuntimeFactory, error)
 
 // targetBackends is the kind registry for target provisioners. Adding a backend
 // is a registration, not an edit to the composition root.
@@ -34,22 +34,22 @@ var targetBackends = map[string]targetBackend{
 // agentRuntimes is the runtime-type registry. Pi is the default because it is
 // the only runtime shipped in this repository.
 var agentRuntimes = map[string]agentRuntimeFactory{
-	"": func(raw json.RawMessage) (harness.AgentRuntimeFactory, error) {
-		return piFactory(raw)
+	"": func(raw json.RawMessage, starter pi.Starter) (harness.AgentRuntimeFactory, error) {
+		return piFactory(raw, starter)
 	},
-	"pi": func(raw json.RawMessage) (harness.AgentRuntimeFactory, error) {
-		return piFactory(raw)
+	"pi": func(raw json.RawMessage, starter pi.Starter) (harness.AgentRuntimeFactory, error) {
+		return piFactory(raw, starter)
 	},
 }
 
-func piFactory(raw json.RawMessage) (harness.AgentRuntimeFactory, error) {
+func piFactory(raw json.RawMessage, starter pi.Starter) (harness.AgentRuntimeFactory, error) {
 	config := pi.Config{}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &config); err != nil {
 			return nil, fmt.Errorf("invalid pi runtime config: %w", err)
 		}
 	}
-	return pi.NewFactory(config), nil
+	return pi.NewFactory(config).WithStarter(starter), nil
 }
 
 // buildTarget resolves the configured target kind to a provisioner. Unknown
@@ -65,7 +65,7 @@ func buildTarget(config TargetFileConfig) (harness.TargetProvisioner, error) {
 // buildRuntime resolves an agent runtime from its declared type. The type is
 // read from the runtime config when it carries a "type" key; otherwise Pi is
 // assumed, preserving the existing single-runtime configuration.
-func buildRuntime(raw json.RawMessage) (harness.AgentRuntimeFactory, error) {
+func buildRuntime(raw json.RawMessage, starter pi.Starter) (harness.AgentRuntimeFactory, error) {
 	kind := ""
 	if len(raw) > 0 {
 		var header struct {
@@ -79,7 +79,7 @@ func buildRuntime(raw json.RawMessage) (harness.AgentRuntimeFactory, error) {
 	if !ok {
 		return nil, fmt.Errorf("unsupported agent runtime %q (registered: %s)", kind, registeredRuntimeKinds())
 	}
-	return factory(raw)
+	return factory(raw, starter)
 }
 
 func registeredTargetKinds() string {

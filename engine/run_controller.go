@@ -93,6 +93,7 @@ type runController struct {
 	root               string
 	taskDir            string
 	skillsDir          string
+	clock              Clock
 	redaction          *core.Redactor
 	budget             core.Budget
 	maxObserveFailures int
@@ -117,17 +118,24 @@ type runController struct {
 	transitionSeq uint64
 }
 
-func newRunController(runner *Runner, id string, ctx context.Context, cancel context.CancelFunc, root string, budget core.Budget, redaction *core.Redactor, materializeSkills func(string) error) *runController {
+func newRunController(runner *Runner, id string, ctx context.Context, cancel context.CancelFunc, root string, budget core.Budget, redaction *core.Redactor, materializeSkills func(string) error, clock Clock) *runController {
 	if redaction == nil {
 		redaction = core.NewRedactor()
+	}
+	if clock == nil {
+		clock = runner.clock
 	}
 	return &runController{
 		runner: runner, id: id, ctx: ctx, cancel: cancel,
 		events: make(chan core.Event, 256), done: make(chan struct{}),
 		root: root, taskDir: filepath.Join(root, "task"), skillsDir: filepath.Join(root, "skills"),
-		redaction: redaction, budget: budget, materializeSkills: materializeSkills,
+		redaction: redaction, budget: budget, materializeSkills: materializeSkills, clock: clock,
 		state: runControlState{phase: core.RunPhaseQueued, sessions: map[string]AgentSession{}, sessionHistory: map[string]core.SessionResult{}},
 	}
+}
+
+func (c *runController) now() time.Time {
+	return c.clock.Now().UTC()
 }
 
 func (c *runController) apply(transition runTransition) runTransitionResult {
@@ -342,7 +350,10 @@ func (c *runController) waitResult() (core.Result, error) {
 }
 
 func (c *runController) canonicalEvent(source string, typ core.EventType, payload any) (core.Event, error) {
-	event, err := core.NewEvent(c.id, typ, payload)
+	if c.clock == nil {
+		return core.Event{}, errors.New("controller clock is required")
+	}
+	event, err := core.NewEvent(c.id, typ, c.clock.Now().UTC(), payload)
 	if err != nil {
 		return core.Event{}, err
 	}
@@ -383,7 +394,10 @@ func (c *runController) emitEvent(event core.Event) error {
 		return fmt.Errorf("event %q requires a valid JSON payload", event.Type)
 	}
 	if event.Time.IsZero() {
-		event.Time = time.Now().UTC()
+		if c.clock == nil {
+			return errors.New("controller clock is required")
+		}
+		event.Time = c.clock.Now().UTC()
 	}
 	if err := c.lockCanonicalWrite(); err != nil {
 		return err
@@ -400,7 +414,7 @@ func (c *runController) emitEvent(event core.Event) error {
 
 func (c *runController) appendLog(record core.LogRecord) error {
 	if record.Time.IsZero() {
-		record.Time = time.Now().UTC()
+		record.Time = c.clock.Now().UTC()
 	}
 	if err := c.lockCanonicalWrite(); err != nil {
 		return err
@@ -428,7 +442,7 @@ func (c *runController) updatePhase(phase core.RunPhase) error {
 		c.setControlError(err)
 		return err
 	}
-	now := time.Now().UTC()
+	now := c.clock.Now().UTC()
 	record.Phase, record.Outcome = phase, ""
 	if phase == core.RunPhaseProvisioning {
 		record.StartedAt = &now
@@ -480,7 +494,7 @@ func (c *runController) finishExecution(outcome core.RunOutcome, finalErr error,
 		result.Usage = frozen.usage
 	}
 	result.StartedAt = frozen.startedAt
-	now := time.Now().UTC()
+	now := c.clock.Now().UTC()
 	result.FinishedAt = &now
 	result.Error = errorText
 	if frozen.controlErr != nil {
@@ -545,7 +559,7 @@ func (c *runController) finishExecution(outcome core.RunOutcome, finalErr error,
 
 func (c *runController) run(spec RunSpec) {
 	defer c.cancel()
-	_ = c.apply(runTransition{kind: runTransitionStarted, at: time.Now().UTC()})
+	_ = c.apply(runTransition{kind: runTransitionStarted, at: c.clock.Now().UTC()})
 	if err := ensureDir(c.taskDir); err != nil {
 		c.finishExecution(core.RunOutcomeFailed, err, nil)
 		return
