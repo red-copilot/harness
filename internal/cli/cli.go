@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/red-copilot/harness"
+	"github.com/red-copilot/harness/core"
+	"github.com/red-copilot/harness/engine/kernel"
 	"github.com/red-copilot/harness/runtime"
 	"github.com/red-copilot/harness/sandbox/docker"
 	"github.com/red-copilot/harness/store/sqlite"
@@ -102,18 +104,20 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if err := starter.CleanupOrphans(context.Background()); err != nil {
 		return fmt.Errorf("cleanup orphans: %w", err)
 	}
-	spec, err := cfg.ToRunSpec(store, starter)
+	spec, err := cfg.ToKernelSpec(starter)
 	if err != nil {
 		return err
 	}
-	runner, err := harness.NewRunner(harness.Config{
-		Store: store, Clock: runtime.SystemClock{}, IDs: runtime.CryptoIDs{}, Secrets: runtime.OSSecrets{},
-		Workspace: runtime.OSWorkspace{}, WorkspaceRoot: cfg.WorkspaceRoot, CloseTimeout: 30 * time.Second,
+	runner, err := kernel.New(kernel.Config{
+		Store: sqlite.NewV4Bridge(store), Clock: runtime.SystemClock{}, IDs: runtime.CryptoIDs{}, Secrets: runtime.OSSecrets{},
+		Workspace: runtime.OSWorkspace{}, WorkspaceRoot: cfg.WorkspaceRoot,
+		CloseTimeout: 30 * time.Second, FinalizeTimeout: 30 * time.Second,
 	})
 	if err != nil {
 		return err
 	}
-	var result harness.Result
+	defer func() { _ = runner.Close(context.Background()) }()
+	var result core.RunResult
 	var runErr error
 	if *resumeID != "" {
 		resumed, resumeErr := runner.Resume(context.Background(), *resumeID, spec)
@@ -196,7 +200,7 @@ func backup(args []string, stdout, stderr io.Writer) error {
 	return printJSON(stdout, manifest)
 }
 
-func scoreOf(result harness.Result) float64 {
+func scoreOf(result core.RunResult) float64 {
 	if result.Verdict == nil {
 		return 0
 	}
