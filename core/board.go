@@ -60,6 +60,8 @@ func (b *Board) Apply(record Record) error {
 		return b.addObservation(p.Observation)
 	case ArtifactStoredRecord:
 		return b.addArtifact(p.Artifact)
+	case RunResumedRecord:
+		return b.normalizeResume(p.Normalizations, record.At)
 	default:
 		return nil
 	}
@@ -206,6 +208,44 @@ func (b *Board) addArtifact(artifact Artifact) error {
 	}
 	b.Artifacts = append(b.Artifacts, artifact)
 	b.Revision++
+	return nil
+}
+
+// normalizeResume applies run.resumed normalizations deterministically so a
+// replay reconstructs exactly the board the resumed process adopted.
+func (b *Board) normalizeResume(normalizations []string, at time.Time) error {
+	changed := false
+	for _, normalization := range normalizations {
+		switch normalization {
+		case NormalizeAttemptsInterrupted:
+			for i := range b.Attempts {
+				if b.Attempts[i].Phase != IntentAttemptRunning {
+					continue
+				}
+				b.Attempts[i].Phase = IntentAttemptInterrupted
+				if b.Attempts[i].Error == "" {
+					b.Attempts[i].Error = "interrupted by resume"
+				}
+				b.Attempts[i].FinishedAt = at.UTC()
+				changed = true
+			}
+		case NormalizeIntentsReopened:
+			for i := range b.Intents {
+				if b.Intents[i].State != IntentClaimed {
+					continue
+				}
+				b.Intents[i].State = IntentOpen
+				b.Intents[i].ExecutorID = ""
+				b.Intents[i].ClaimedAt = nil
+				changed = true
+			}
+		default:
+			return fmt.Errorf("unknown resume normalization %q", normalization)
+		}
+	}
+	if changed {
+		b.Revision++
+	}
 	return nil
 }
 
@@ -402,7 +442,7 @@ func validateAttempt(attempt IntentAttempt) error {
 		return errors.New("attempt id, run_id, intent_id and session_id are required")
 	}
 	switch attempt.Phase {
-	case IntentAttemptRunning, IntentAttemptConcluded, IntentAttemptFailed, IntentAttemptCancelled, IntentAttemptTimedOut:
+	case IntentAttemptRunning, IntentAttemptConcluded, IntentAttemptFailed, IntentAttemptCancelled, IntentAttemptTimedOut, IntentAttemptInterrupted:
 		return nil
 	default:
 		return fmt.Errorf("unknown attempt phase %q", attempt.Phase)

@@ -121,6 +121,14 @@ func (s State) Validate() error {
 	return nil
 }
 
+// AppendResult is the state projection and exact records produced by one
+// journal write. Stores return the records they persisted so a caller can
+// publish them without re-reading.
+type AppendResult struct {
+	State   State
+	Records []Record
+}
+
 // TransitionKind names the explicit lifecycle operations accepted by Advance.
 type TransitionKind string
 
