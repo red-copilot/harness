@@ -64,6 +64,7 @@ type State struct {
 	Phase           Phase      `json:"phase"`
 	Outcome         Outcome    `json:"outcome,omitempty"`
 	HeadSeq         uint64     `json:"head_seq"`
+	HeadHash        string     `json:"head_hash,omitempty"`
 	BoardRevision   uint64     `json:"board_revision"`
 	Usage           Usage      `json:"usage,omitempty"`
 	GoalCandidate   bool       `json:"goal_candidate,omitempty"`
@@ -103,6 +104,9 @@ func (s State) Validate() error {
 	}
 	if s.HeadSeq == 0 {
 		return errors.New("state head_seq must be at least 1")
+	}
+	if s.HeadHash != "" && len(s.HeadHash) != 64 {
+		return errors.New("state head_hash must be 64 hex characters")
 	}
 	if s.NonGrowthRounds < 0 || s.ReasonFailures < 0 {
 		return errors.New("state counters must not be negative")
