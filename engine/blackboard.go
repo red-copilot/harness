@@ -30,6 +30,7 @@ type boardState struct {
 	task      Task
 	target    TargetBinding
 	policy    RunPolicy
+	clock     Clock
 	claims    []Claim
 	intents   []Intent
 	attempts  []IntentAttempt
@@ -39,17 +40,25 @@ type boardState struct {
 	version   uint64
 }
 
-func newBoardState(runID string, spec RunSpec, target TargetBinding) *boardState {
-	board := &boardState{runID: runID, task: spec.Task, target: target, policy: NormalizeRunPolicy(spec.Policy)}
+func newBoardState(runID string, spec RunSpec, target TargetBinding, clock Clock) *boardState {
+	board := &boardState{runID: runID, task: spec.Task, target: target, policy: NormalizeRunPolicy(spec.Policy), clock: clock}
 	board.seq = 2
 	originID := "origin"
 	goalID := "goal"
+	now := board.now()
 	board.claims = append(board.claims,
-		Claim{ID: originID, RunID: runID, TaskID: spec.Task.ID, Kind: ClaimOrigin, Description: spec.Task.Objective, CreatedAt: time.Now().UTC()},
-		Claim{ID: goalID, RunID: runID, TaskID: spec.Task.ID, Kind: ClaimGoal, Description: spec.Task.Objective, CreatedAt: time.Now().UTC()},
+		Claim{ID: originID, RunID: runID, TaskID: spec.Task.ID, Kind: ClaimOrigin, Description: spec.Task.Objective, CreatedAt: now},
+		Claim{ID: goalID, RunID: runID, TaskID: spec.Task.ID, Kind: ClaimGoal, Description: spec.Task.Objective, CreatedAt: now},
 	)
 	board.version = 1
 	return board
+}
+
+func (b *boardState) now() time.Time {
+	if b.clock == nil {
+		return time.Time{}
+	}
+	return b.clock.Now().UTC()
 }
 
 func (b *boardState) nextID(kind string) string {
@@ -87,7 +96,7 @@ func (b *boardState) addClaim(claim Claim) (Claim, error) {
 		claim.TaskID = b.task.ID
 	}
 	if claim.CreatedAt.IsZero() {
-		claim.CreatedAt = time.Now().UTC()
+		claim.CreatedAt = b.now()
 	}
 	if err := ValidateClaim(claim); err != nil {
 		return Claim{}, err
@@ -114,7 +123,7 @@ func (b *boardState) createIntent(intent Intent) (Intent, error) {
 		intent.State = IntentOpen
 	}
 	if intent.CreatedAt.IsZero() {
-		intent.CreatedAt = time.Now().UTC()
+		intent.CreatedAt = b.now()
 	}
 	if intent.State != IntentOpen {
 		return Intent{}, fmt.Errorf("new intent must be open")
@@ -390,7 +399,7 @@ func admitReasonIntents(board *boardState, report ReasonReport, canCreateIntent 
 			FromClaimIDs: append([]string(nil), proposal.From...),
 			Description:  proposal.Description,
 			State:        IntentOpen,
-			CreatedAt:    time.Now().UTC(),
+			CreatedAt:    board.now(),
 		}
 		if err := board.validateIntentClaims(intent); err != nil {
 			return nil, err

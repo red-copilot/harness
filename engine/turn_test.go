@@ -27,7 +27,7 @@ func TestRunAgentTurnRejectsOversizedEventBeforeSink(t *testing.T) {
 	_, err := runAgentTurn(context.Background(), session, "prompt", TurnLimits{MaxAssistantBytes: 10}, func(Event) error {
 		sinkCalls++
 		return nil
-	}, true)
+	}, true, testClock{})
 	if err == nil || !strings.Contains(err.Error(), "event limit") {
 		t.Fatalf("err = %v, want event limit error", err)
 	}
@@ -41,7 +41,7 @@ func TestRunAgentTurnReportOnlyRejectsInvestigationTools(t *testing.T) {
 	session.events <- AgentEvent{Kind: AgentEventToolStart, Tool: "bash", ToolPath: "scan.sh"}
 	session.events <- AgentEvent{Kind: AgentEventSettled}
 
-	_, err := runAgentTurn(context.Background(), session, "prompt", TurnLimits{ReportOnly: true}, nil, true)
+	_, err := runAgentTurn(context.Background(), session, "prompt", TurnLimits{ReportOnly: true}, nil, true, testClock{})
 	if err == nil || !strings.Contains(err.Error(), "report-only") {
 		t.Fatalf("err = %v, want report-only tool rejection", err)
 	}
@@ -52,7 +52,7 @@ func TestRunAgentTurnReportOnlyAllowsReportWrite(t *testing.T) {
 	session.events <- AgentEvent{Kind: AgentEventToolStart, Tool: "write", ToolPath: "/workspace/report.json", WritesFile: true}
 	session.events <- AgentEvent{Kind: AgentEventSettled}
 
-	if _, err := runAgentTurn(context.Background(), session, "prompt", TurnLimits{ReportOnly: true}, nil, true); err != nil {
+	if _, err := runAgentTurn(context.Background(), session, "prompt", TurnLimits{ReportOnly: true}, nil, true, testClock{}); err != nil {
 		t.Fatalf("report write rejected: %v", err)
 	}
 }

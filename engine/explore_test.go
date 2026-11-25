@@ -129,7 +129,7 @@ func TestConcludeRunsAfterExecuteTimeout(t *testing.T) {
 	session := &scriptedExploreSession{events: make(chan AgentEvent, 4)}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
-	report, phase, err := runExploreAttempt(ctx, session, testExploreRequest(), TurnLimits{}, 100*time.Millisecond, nil, defaultExploreTestStrategy{})
+	report, phase, err := runExploreAttempt(ctx, session, testExploreRequest(), TurnLimits{}, 100*time.Millisecond, nil, defaultExploreTestStrategy{}, testClock{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestConcludeRunsAfterExecuteTimeout(t *testing.T) {
 
 func TestConcludeDoesNotRunAfterProcessExit(t *testing.T) {
 	session := &exitExploreSession{events: make(chan AgentEvent)}
-	_, _, err := runExploreAttempt(context.Background(), session, testExploreRequest(), TurnLimits{}, 100*time.Millisecond, nil, defaultExploreTestStrategy{})
+	_, _, err := runExploreAttempt(context.Background(), session, testExploreRequest(), TurnLimits{}, 100*time.Millisecond, nil, defaultExploreTestStrategy{}, testClock{})
 	if err == nil {
 		t.Fatal("expected process failure")
 	}
@@ -156,7 +156,7 @@ func TestConcludeDoesNotRunAfterProcessExit(t *testing.T) {
 
 func TestConcludeDoesNotRunAfterAgentErrorEvent(t *testing.T) {
 	session := &errorEventSession{events: make(chan AgentEvent, 1)}
-	_, _, err := runExploreAttempt(context.Background(), session, testExploreRequest(), TurnLimits{}, 100*time.Millisecond, nil, defaultExploreTestStrategy{})
+	_, _, err := runExploreAttempt(context.Background(), session, testExploreRequest(), TurnLimits{}, 100*time.Millisecond, nil, defaultExploreTestStrategy{}, testClock{})
 	if err == nil || !errors.Is(err, ErrAgentUnavailable) {
 		t.Fatalf("err = %v, want agent unavailable", err)
 	}
@@ -169,7 +169,7 @@ func TestConcludeCannotExceedItsTimeout(t *testing.T) {
 	session := &scriptedExploreSession{events: make(chan AgentEvent, 4)}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
-	_, phase, err := runExploreAttempt(ctx, session, testExploreRequest(), TurnLimits{}, 10*time.Millisecond, nil, blockingExploreStrategy{})
+	_, phase, err := runExploreAttempt(ctx, session, testExploreRequest(), TurnLimits{}, 10*time.Millisecond, nil, blockingExploreStrategy{}, testClock{})
 	if err == nil || phase != "conclude" {
 		t.Fatalf("phase=%q err=%v", phase, err)
 	}
@@ -201,7 +201,7 @@ func TestConcludeDoesNotRunAfterEventStreamClose(t *testing.T) {
 	events := make(chan AgentEvent)
 	close(events)
 	session := &closedEventsSession{events: events}
-	_, _, err := runExploreAttempt(context.Background(), session, testExploreRequest(), TurnLimits{}, 100*time.Millisecond, nil, defaultExploreTestStrategy{})
+	_, _, err := runExploreAttempt(context.Background(), session, testExploreRequest(), TurnLimits{}, 100*time.Millisecond, nil, defaultExploreTestStrategy{}, testClock{})
 	if !errors.Is(err, ErrAgentUnavailable) {
 		t.Fatalf("err = %v, want ErrAgentUnavailable", err)
 	}

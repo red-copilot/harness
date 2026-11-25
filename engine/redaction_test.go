@@ -12,7 +12,7 @@ func TestRedactorForSpecIncludesInlineEnvAndKnownSecrets(t *testing.T) {
 		KnownSecrets: []string{"adapter-secret-value"},
 	}
 
-	redactor := redactorForSpec(spec)
+	redactor := redactorForSpec(spec, testSecrets{})
 	for _, secret := range []string{envSecret, "planner-inline-secret", "executor-inline-secret", "adapter-secret-value"} {
 		if !redactor.Contains(secret) {
 			t.Fatalf("redactor does not know %q", secret)

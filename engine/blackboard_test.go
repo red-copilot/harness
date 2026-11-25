@@ -14,7 +14,7 @@ func testBoard(t *testing.T) *boardState {
 		Target: TargetSpec{ID: "target-1", Isolation: IsolationCallerManaged},
 		Policy: policy,
 	}
-	return newBoardState("run-1", spec, TargetBinding{TargetID: "target-1", Isolation: IsolationCallerManaged})
+	return newBoardState("run-1", spec, TargetBinding{TargetID: "target-1", Isolation: IsolationCallerManaged}, testClock{})
 }
 
 func TestBoardStartsWithOriginAndGoal(t *testing.T) {

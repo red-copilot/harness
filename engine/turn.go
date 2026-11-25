@@ -17,13 +17,16 @@ var ErrAgentUnavailable = errors.New("agent session unavailable")
 
 // RunAgentTurn sends one prompt and consumes normalized events until the
 // adapter reports settlement. Existing callers keep fail-closed abort behavior.
-func RunAgentTurn(ctx context.Context, session AgentSession, prompt string, limits TurnLimits, sink EventSink) (TurnResult, error) {
-	return runAgentTurn(ctx, session, prompt, limits, sink, true)
+func RunAgentTurn(ctx context.Context, session AgentSession, prompt string, limits TurnLimits, sink EventSink, clock Clock) (TurnResult, error) {
+	return runAgentTurn(ctx, session, prompt, limits, sink, true, clock)
 }
 
-func runAgentTurn(ctx context.Context, session AgentSession, prompt string, limits TurnLimits, sink EventSink, abortOnFailure bool) (TurnResult, error) {
+func runAgentTurn(ctx context.Context, session AgentSession, prompt string, limits TurnLimits, sink EventSink, abortOnFailure bool, clock Clock) (TurnResult, error) {
 	if session == nil {
 		return TurnResult{}, errors.New("agent session is required")
+	}
+	if clock == nil {
+		return TurnResult{}, errors.New("agent turn clock is required")
 	}
 	if limits.ToolTimeout <= 0 {
 		limits.ToolTimeout = DefaultToolCallTimeout
@@ -71,7 +74,7 @@ func runAgentTurn(ctx context.Context, session AgentSession, prompt string, limi
 				return TurnResult{}, fmt.Errorf("agent event limit exceeded: %d > %d", len(event.Data), limits.MaxAssistantBytes)
 			}
 			if sink != nil {
-				canonical, eventErr := NewEvent("", EventAgent, AgentEventPayload{NativeType: event.Type, Data: event.Data})
+				canonical, eventErr := NewEvent("", EventAgent, clock.Now().UTC(), AgentEventPayload{NativeType: event.Type, Data: event.Data})
 				if eventErr != nil {
 					abortIfNeeded()
 					return TurnResult{}, eventErr

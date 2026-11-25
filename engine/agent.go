@@ -55,7 +55,6 @@ type RuntimeRequest struct {
 	TaskDir      string
 	SkillsDir    string
 	Env          map[string]string
-	Starter      ProcessStarter
 	Redactor     *core.Redactor
 }
 

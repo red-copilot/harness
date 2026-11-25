@@ -438,7 +438,7 @@ func (s *Store) MarkInterrupted(ctx context.Context) error {
 	_ = rows.Close()
 	now := time.Now().UTC()
 	for _, id := range ids {
-		event, err := core.NewEvent(id, core.EventRunFinalized, core.RunFinalizedPayload{Outcome: core.RunOutcomeInterrupted})
+		event, err := core.NewEvent(id, core.EventRunFinalized, time.Now().UTC(), core.RunFinalizedPayload{Outcome: core.RunOutcomeInterrupted})
 		if err != nil {
 			return err
 		}
@@ -476,7 +476,7 @@ func (s *Store) MarkRunInterrupted(ctx context.Context, runID string) (bool, err
 		return false, nil
 	}
 	now := time.Now().UTC()
-	event, err := core.NewEvent(runID, core.EventRunFinalized, core.RunFinalizedPayload{Outcome: core.RunOutcomeInterrupted})
+	event, err := core.NewEvent(runID, core.EventRunFinalized, time.Now().UTC(), core.RunFinalizedPayload{Outcome: core.RunOutcomeInterrupted})
 	if err != nil {
 		return false, err
 	}

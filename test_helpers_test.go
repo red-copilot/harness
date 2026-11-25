@@ -7,15 +7,37 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/red-copilot/harness"
 )
+
+type testClock struct{}
+
+var testClockTick atomic.Int64
+
+func (testClock) Now() time.Time {
+	return time.Unix(1700000000, testClockTick.Add(1)*int64(time.Millisecond)).UTC()
+}
+
+type testIDs struct{}
+
+var testIDCounter atomic.Uint64
+
+func (testIDs) NewRunID() (string, error) {
+	return fmt.Sprintf("run-%d", testIDCounter.Add(1)), nil
+}
+
+type testSecrets struct{}
+
+func (testSecrets) LookupEnv(name string) (string, bool) { return os.LookupEnv(name) }
 
 type memoryStore struct {
 	mu                   sync.Mutex
@@ -440,7 +462,10 @@ func attachBackend(spec *harness.RunSpec, backend harness.Backend) {
 
 func newTestRunner(t *testing.T, store harness.Store) *harness.Runner {
 	t.Helper()
-	runner, err := harness.NewRunner(harness.Config{Store: store, Starter: noopStarter{}, WorkspaceRoot: t.TempDir(), SkipRecovery: true})
+	runner, err := harness.NewRunner(harness.Config{
+		Store: store, Clock: testClock{}, IDs: testIDs{}, Secrets: testSecrets{},
+		WorkspaceRoot: t.TempDir(), SkipRecovery: true,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
