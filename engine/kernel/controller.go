@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -465,6 +464,10 @@ func (r *activeRun) handleReason(result reasonResult) error {
 		return err
 	}
 	if result.err != nil {
+		if isPanic(result.err) {
+			r.setControlError(result.err)
+			return result.err
+		}
 		return r.rejectReason(result, result.err)
 	}
 	board := r.writer.boardSnapshot()
@@ -540,6 +543,10 @@ func (r *activeRun) handleAttempt(result attemptResult) error {
 	result.attempt.FinishedAt = r.now()
 	result.attempt.Conclusion = result.conclusion
 	if result.err != nil {
+		if isPanic(result.err) {
+			r.setControlError(result.err)
+			return result.err
+		}
 		return r.failAttempt(result, r.writer.redactor.Redact(result.err.Error()), false)
 	}
 	if result.report.Claim == nil {
@@ -625,7 +632,7 @@ func (r *activeRun) failAttempt(result attemptResult, errorText string, control 
 	result.attempt.Error = errorText
 	result.attempt.FinishedAt = now
 	entries := []entry{{core.RecordAttemptFailed, core.AttemptFailedRecord{AttemptID: result.attempt.ID, Error: errorText, At: now}}}
-	attempts := len(r.attemptsFor(result.intent.ID)) + 1
+	attempts := len(r.attemptsFor(result.intent.ID))
 	if attempts < r.policy().Exploration.MaxAttemptsPerIntent {
 		entries = append(entries, entry{core.RecordIntentReopened, core.IntentReopenedRecord{IntentID: result.intent.ID, At: now}})
 	} else {
@@ -879,11 +886,7 @@ func (r *activeRun) verify() (core.Outcome, *core.Verdict, string, error) {
 }
 
 func verifySafe(ctx context.Context, verifier engine.Verifier, request core.VerifyRequest) (verdict core.Verdict, err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("verifier panic: %v\n%s", recovered, debug.Stack())
-		}
-	}()
+	defer capturePanic(&err)
 	if verifier == nil {
 		return core.Verdict{}, errors.New("verifier is required")
 	}
@@ -966,7 +969,8 @@ func (r *activeRun) eventSink(ctx context.Context) engine.EventSink {
 }
 
 func (r *activeRun) setControlError(err error) {
-	if err == nil || errors.Is(err, ErrRunClosed) || errors.Is(err, core.ErrTerminal) {
+	if err == nil || errors.Is(err, ErrRunClosed) || errors.Is(err, core.ErrTerminal) ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return
 	}
 	r.errMu.Lock()
@@ -1036,12 +1040,6 @@ func childContext(parent context.Context, timeout time.Duration) (context.Contex
 	base, timeoutCancel := context.WithTimeout(parent, timeout)
 	child, cancel := context.WithCancel(base)
 	return child, func() { cancel(); timeoutCancel() }
-}
-
-func capturePanic(err *error) {
-	if recovered := recover(); recovered != nil {
-		*err = fmt.Errorf("panic: %v\n%s", recovered, debug.Stack())
-	}
 }
 
 func boundedClaims(claims []core.Claim, policy core.RunPolicy) []core.Claim {

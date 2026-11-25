@@ -605,7 +605,12 @@ func (b *V4Bridge) NonTerminal(ctx context.Context) ([]core.State, error) {
 
 // Replay reconstructs a Run from its journal and validates every invariant.
 func (b *V4Bridge) Replay(ctx context.Context, runID string) (core.Restored, error) {
-	manifest, err := b.Manifest(ctx, runID)
+	tx, err := b.store.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return core.Restored{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	manifest, err := loadV4BridgeManifest(ctx, tx, runID)
 	if err != nil {
 		return core.Restored{}, err
 	}
@@ -613,7 +618,7 @@ func (b *V4Bridge) Replay(ctx context.Context, runID string) (core.Restored, err
 	if err != nil {
 		return core.Restored{}, err
 	}
-	records, err := loadV4BridgeRecords(ctx, b.store.db, runID)
+	records, err := loadV4BridgeRecords(ctx, tx, runID)
 	if err != nil {
 		return core.Restored{}, err
 	}
@@ -626,7 +631,7 @@ func (b *V4Bridge) Replay(ctx context.Context, runID string) (core.Restored, err
 			return core.Restored{}, fmt.Errorf("%w: %v", core.ErrCorruptJournal, err)
 		}
 	}
-	state, err := loadV4BridgeState(ctx, b.store.db, runID)
+	state, err := loadV4BridgeState(ctx, tx, runID)
 	if err != nil {
 		return core.Restored{}, err
 	}

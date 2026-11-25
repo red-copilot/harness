@@ -20,6 +20,7 @@ const stateSelect = `SELECT ` + stateColumns + ` FROM run_state WHERE run_id=?`
 
 type v5Queryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
 // Manifest loads and validates the persisted manifest.
@@ -52,7 +53,11 @@ func (s *V5Store) Manifest(ctx context.Context, runID string) (core.Manifest, er
 
 // State loads the current run state projection.
 func (s *V5Store) State(ctx context.Context, runID string) (core.State, error) {
-	state, err := scanStateRow(s.db.QueryRowContext(ctx, stateSelect, runID), runID)
+	return loadStateQ(ctx, s.db, runID)
+}
+
+func loadStateQ(ctx context.Context, q v5Queryer, runID string) (core.State, error) {
+	state, err := scanStateRow(q.QueryRowContext(ctx, stateSelect, runID), runID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return core.State{}, fmt.Errorf("%w: run %s", core.ErrNotFound, runID)
 	}
@@ -61,7 +66,11 @@ func (s *V5Store) State(ctx context.Context, runID string) (core.State, error) {
 
 // Events returns journal records after seq.
 func (s *V5Store) Events(ctx context.Context, runID string, after uint64) ([]core.Record, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT run_id,seq,type,schema_version,at,payload,prev_hash,hash FROM run_journal WHERE run_id=? AND seq>? ORDER BY seq`, runID, after)
+	return eventsQ(ctx, s.db, runID, after)
+}
+
+func eventsQ(ctx context.Context, q v5Queryer, runID string, after uint64) ([]core.Record, error) {
+	rows, err := q.QueryContext(ctx, `SELECT run_id,seq,type,schema_version,at,payload,prev_hash,hash FROM run_journal WHERE run_id=? AND seq>? ORDER BY seq`, runID, after)
 	if err != nil {
 		return nil, err
 	}
@@ -176,18 +185,23 @@ func (s *V5Store) OpenArtifact(ctx context.Context, sha string) (io.ReadCloser, 
 
 // VerifyChain verifies the entire per-run hash chain and its state head.
 func (s *V5Store) VerifyChain(ctx context.Context, runID string) error {
-	_, digest, err := s.manifestDigest(ctx, runID)
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return err
 	}
-	records, err := s.Events(ctx, runID, 0)
+	defer func() { _ = tx.Rollback() }()
+	_, digest, err := loadManifestTx(ctx, tx, runID)
+	if err != nil {
+		return err
+	}
+	records, err := eventsQ(ctx, tx, runID, 0)
 	if err != nil {
 		return err
 	}
 	if err := core.VerifyRecordChain(digest, records); err != nil {
 		return fmt.Errorf("%w: %v", core.ErrCorruptJournal, err)
 	}
-	state, err := s.State(ctx, runID)
+	state, err := loadStateQ(ctx, tx, runID)
 	if err != nil {
 		return err
 	}
