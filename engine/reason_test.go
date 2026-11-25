@@ -3,22 +3,25 @@ package engine
 import (
 	"strings"
 	"testing"
+
+	"github.com/red-copilot/harness/core"
 )
 
-func TestReasonPromptIncludesOnlyBoundedGraph(t *testing.T) {
-	board := testBoard(t)
-	for i := 0; i < 100; i++ {
-		if _, err := board.addClaim(Claim{Kind: ClaimNegative, Description: "negative", ObservationIDs: []string{"obs-1"}}); err != nil {
-			t.Fatal(err)
-		}
+func reasonTestRequest() ReasonRequest {
+	return ReasonRequest{
+		Task:   core.Task{ID: "task-1", Objective: "bounded objective"},
+		Target: core.TargetBinding{TargetID: "target-1"},
+		Claims: []core.Claim{
+			{ID: "origin", Kind: core.ClaimOrigin, Description: "objective"},
+			{ID: "goal", Kind: core.ClaimGoal, Description: "goal"},
+		},
+		CanCreateIntent: true,
+		BoardRevision:   3,
 	}
-	req := buildReasonContext(board.snapshot(), board.target, board.policy, Completion{})
-	if len(req.Claims) > maxReasonClaims {
-		t.Fatalf("claims = %d, want <= %d", len(req.Claims), maxReasonClaims)
-	}
-	if req.Claims[0].Kind != ClaimOrigin || req.Claims[1].Kind != ClaimGoal {
-		t.Fatalf("origin/goal missing from bounded context: %+v", req.Claims[:2])
-	}
+}
+
+func TestReasonPromptPreservesSingleSlotAndAuthority(t *testing.T) {
+	req := reasonTestRequest()
 	prompt, err := (defaultReasonStrategy{}).Prompt(req)
 	if err != nil {
 		t.Fatal(err)
@@ -26,7 +29,7 @@ func TestReasonPromptIncludesOnlyBoundedGraph(t *testing.T) {
 	if !strings.Contains(prompt, "At most one") {
 		t.Fatalf("prompt missing intent cap:\n%s", prompt)
 	}
-	if !strings.Contains(prompt, board.task.Objective) {
+	if !strings.Contains(prompt, "bounded objective") {
 		t.Fatalf("prompt missing task objective:\n%s", prompt)
 	}
 	if !strings.Contains(strings.ToLower(prompt), "verifier") {
@@ -35,8 +38,8 @@ func TestReasonPromptIncludesOnlyBoundedGraph(t *testing.T) {
 }
 
 func TestReasonPromptIncludesProgress(t *testing.T) {
-	board := testBoard(t)
-	req := buildReasonContext(board.snapshot(), board.target, board.policy, Completion{Progress: 2, Total: 5})
+	req := reasonTestRequest()
+	req.Progress = Completion{Progress: 2, Total: 5}
 	prompt, err := (defaultReasonStrategy{}).Prompt(req)
 	if err != nil {
 		t.Fatal(err)
@@ -47,9 +50,7 @@ func TestReasonPromptIncludesProgress(t *testing.T) {
 }
 
 func TestReasonPromptRequiresReportFile(t *testing.T) {
-	board := testBoard(t)
-	req := buildReasonContext(board.snapshot(), board.target, board.policy, Completion{})
-	prompt, err := (defaultReasonStrategy{}).Prompt(req)
+	prompt, err := (defaultReasonStrategy{}).Prompt(reasonTestRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,27 +86,5 @@ func TestReasonParserRejectsNarrativeJSON(t *testing.T) {
 	turn := TurnResult{Report: []byte("I will propose one direction.\n{\"intents\":[{\"from\":[\"origin\"],\"description\":\"probe\"}]}\nDone.")}
 	if _, err := (defaultReasonStrategy{}).Parse(req, turn); err == nil {
 		t.Fatal("narrative report accepted")
-	}
-}
-
-func TestReasonContextHonorsPolicyByteAndItemBounds(t *testing.T) {
-	board := testBoard(t)
-	board.policy.Context.MaxBoardItems = 3
-	board.policy.Context.MaxBoardBytes = 256
-	board.policy.Context.MaxClaimBytes = 40
-	for i := 0; i < 10; i++ {
-		if _, err := board.addClaim(Claim{Kind: ClaimNegative, Description: "this-description-is-long-but-valid", ObservationIDs: []string{"obs-1"}}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	board.policy.Context.MaxClaimBytes = 12
-	req := buildReasonContext(board.snapshot(), board.target, board.policy, Completion{})
-	if len(req.Claims) > board.policy.Context.MaxBoardItems {
-		t.Fatalf("claims = %d, want <= %d", len(req.Claims), board.policy.Context.MaxBoardItems)
-	}
-	for _, claim := range req.Claims {
-		if len(claim.Description) > board.policy.Context.MaxClaimBytes {
-			t.Fatalf("claim description = %d bytes, want <= %d", len(claim.Description), board.policy.Context.MaxClaimBytes)
-		}
 	}
 }

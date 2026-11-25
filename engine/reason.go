@@ -5,8 +5,6 @@ import (
 	"strings"
 )
 
-const maxReasonClaims = 64
-
 type defaultReasonStrategy struct{}
 
 // DefaultReasonStrategy returns the protocol-compliant Reason strategy.
@@ -28,72 +26,6 @@ func (defaultReasonStrategy) Parse(req ReasonRequest, turn TurnResult) (ReasonRe
 		return ReasonReport{}, err
 	}
 	return report, nil
-}
-
-func buildReasonContext(snapshot boardSnapshot, target TargetBinding, policy RunPolicy, progress Completion) ReasonRequest {
-	policy = NormalizeRunPolicy(policy)
-	claims := boundedClaimsWithPolicy(snapshot.Claims, policy)
-	intents := make([]Intent, 0, 1)
-	for _, intent := range snapshot.Intents {
-		if intent.State == IntentOpen || intent.State == IntentClaimed {
-			intents = append(intents, intent)
-		}
-	}
-	if len(intents) > 1 {
-		intents = intents[len(intents)-1:]
-	}
-	return ReasonRequest{
-		Task:            snapshot.Task,
-		Target:          target,
-		Claims:          claims,
-		Intents:         intents,
-		CanCreateIntent: true,
-		BoardRevision:   snapshot.BoardRevision,
-		Progress:        progress,
-		Policy:          policy,
-	}
-}
-
-func boundedClaims(claims []Claim, limit int) []Claim {
-	if limit <= 0 || len(claims) <= limit {
-		return cloneClaims(claims)
-	}
-	out := make([]Claim, 0, limit)
-	for _, claim := range claims {
-		if claim.Kind == ClaimOrigin || claim.Kind == ClaimGoal {
-			out = append(out, claim)
-		}
-	}
-	for _, claim := range claims {
-		if len(out) >= limit {
-			break
-		}
-		if claim.Kind == ClaimOrigin || claim.Kind == ClaimGoal {
-			continue
-		}
-		out = append(out, claim)
-	}
-	return cloneClaims(out)
-}
-
-func boundedClaimsWithPolicy(claims []Claim, policy RunPolicy) []Claim {
-	limit := policy.Context.MaxBoardItems
-	if limit <= 0 || limit > maxReasonClaims {
-		limit = maxReasonClaims
-	}
-	base := boundedClaims(claims, limit)
-	out := make([]Claim, 0, len(base))
-	var used int64
-	for _, claim := range base {
-		claim.Description = truncateUTF8(claim.Description, policy.Context.MaxClaimBytes)
-		cost := int64(len(claim.Description) + len(claim.ID) + 32)
-		if len(out) >= 2 && policy.Context.MaxBoardBytes > 0 && used+cost > policy.Context.MaxBoardBytes {
-			continue
-		}
-		used += cost
-		out = append(out, claim)
-	}
-	return out
 }
 
 func reasonPrompt(req ReasonRequest) string {
