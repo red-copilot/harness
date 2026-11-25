@@ -1,12 +1,12 @@
 # v5 迁移、分阶段交付与切换
 
-> **状态：v5 目标设计（提案）。** 当前代码仍是 v4 / schema 8。本文档是 P1–P9 的执行依据。
+> **状态：v5 目标设计；P4 已落地。** 自 P4 起 CLI 与 kernel 是 v5，默认磁盘仍是 schema 8（通过 v4 桥写入）。根 `README.md`/`AGENTS.md`/`CLAUDE.md` 在 P9 前仍以 v4 描述。本文档是 P1–P9 的执行依据。
 
 ## 1. 交付模型
 
 - 每个阶段是短生命周期分支（off `main`）→ PR → 门禁 → squash 合并。
 - `main` 在每个合并点都必须可构建、`go test ./...` 与 `-race` 通过。
-- 不使用长期 `release/v5` 分支；不维护两个 kernel。P4 通过一个临时的 v4 存储桥保持 v8 数据库可运行，只保留一个 kernel。
+- 不使用长期 `release/v5` 分支；不维护两个 kernel。P4 删除了 v4 控制循环，只保留 v5 kernel（过渡位置 `engine/kernel`），并通过一个临时的 v4 存储桥保持 v8 数据库可运行。
 - 过渡层必须在 P9 删除；每个 PR 描述列出新增/删除的过渡层。
 - `docs/design` 描述目标；根 `README.md`/`AGENTS.md`/`CLAUDE.md` 在 P9 前仍以 v4/v8 为准。
 
@@ -29,8 +29,11 @@
 
 | 过渡层 | 引入 | 删除 | 说明 |
 |---|---|---|---|
-| v4 端口适配器（v4 类型 → 窄端口） | P1 | P4（由 v4 桥替代） | 不是长期层；P4 起由桥统一 |
+| v4 端口适配器（v4 类型 → 窄端口） | P1 | P4（控制循环删除；端口类型留存到 P9） | P4 起由桥统一；v8 store 仍实现旧端口类型 |
 | v4 存储桥（v5 records ↔ v8 表） | P4 | P9 | 单个 kernel 同时跑 v8 默认库；porttest 必须通过 |
+| `engine/kernel` 过渡包 | P4 | P7（并入 `engine`） | v5 kernel 的临时包位置，不是第二套语义 |
+| v4 端口类型 / `engine.Commit` / `FinalizationRecord` | P1 | P9 | v8 store 与旧适配器测试仍引用 |
+| 根 `harness` v4 类型别名 | P1 | P9 | CLI 已不引用；仅供旧适配器测试/外部使用者 |
 | 旧 `core` v4 类型与其别名 | P2 标 deprecated | P9 | 新类型与旧类型并存；禁止新增引用 |
 | `harness/v4` 配置映射 | P7（严格化的 v4 配置） | P9 | P9 切到 `harness/v5` |
 | v8 只读/备份/校验工具 | P3 | P9 | 仅用于切换与回滚 |
@@ -76,6 +79,15 @@
 - 单 kernel 重写，使用 v5 类型；v4 桥把 v5 records/state 映射到 v8 的 `events`/`board_commits`/`runs`，使 main 继续跑 v8 库。
 - 行为更新：resume 正确、原子 append、terminal-only-finalize、panic 捕获、单 usage、attempt timed_out。
 - 退出：同一 porttest 在 v5 store 与 v4 桥上通过；kill-restart resume；并发 append/resume/interrupt；端到端对照。
+
+**落地状态：**
+
+- `engine/kernel` 是唯一控制循环：`Runner`/`Run`、`writer`、reason/explore 循环、证据归档、resume、verifier 仲裁。v4 的 `run_controller.go`/`blackboard*.go`/`runner.go`/`run.go` 已删除。
+- `store/sqlite.NewV4Bridge` 在 v8 表上实现 v5 journal/read/artifact/log 语义；每个写是一个事务，`raw` 保存完整 record 信封，`runs.metadata` 保存状态投影。
+- CLI 已切到 kernel + 桥；`runs cancel` 通过 sealed、expected-head 的 `run.interrupted` 终结路径。只读命令仍读 v8 投影。
+- 门禁：`porttest` 同时跑 v5 store 与桥；端到端在两者上通过；崩溃状态 resume、并发 Resume 互斥、注入 append 失败、deadline、panic、retry 均有测试。
+- `engine` 目录保留共享协议（turn/explore/reason/artifact）、窄端口、v5 端口类型，以及 v8 store 所需的 `Commit`/`FinalizationRecord`/v4 `Store` 类型。
+- 尚未完成：P5 删除 backend 主导的 v4 端口/事件/文档表述；P7 把 `engine/kernel` 并入 `engine` 并删除根 facade/别名。
 
 ### P5 — 仅 verifier 权威
 

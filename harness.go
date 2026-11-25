@@ -5,13 +5,14 @@ package harness
 import (
 	"github.com/red-copilot/harness/core"
 	"github.com/red-copilot/harness/engine"
+	"github.com/red-copilot/harness/engine/kernel"
 )
 
 type (
-	Runner              = engine.Runner
-	Config              = engine.Config
-	Run                 = engine.Run
-	RunSpec             = engine.RunSpec
+	Runner              = kernel.Runner
+	Config              = kernel.Config
+	Run                 = kernel.Run
+	RunSpec             = kernel.Spec
 	AgentSpec           = engine.AgentSpec
 	RuntimeRequest      = engine.RuntimeRequest
 	AgentRuntimeFactory = engine.AgentRuntimeFactory
@@ -20,9 +21,9 @@ type (
 	CompletionSource    = engine.CompletionSource
 	Backend             = engine.Backend
 	Verifier            = engine.Verifier
-	ArtifactStore       = engine.ArtifactStore
-	ArtifactWriter      = engine.ArtifactWriter
-	Store               = engine.Store
+	Store               = engine.V5Store
+	Commit              = engine.Commit
+	FinalizationRecord  = engine.FinalizationRecord
 	Journal             = engine.Journal
 	Reader              = engine.Reader
 	Recovery            = engine.Recovery
@@ -30,8 +31,8 @@ type (
 	ReadStore           = engine.ReadStore
 	RunRecovery         = engine.RunRecovery
 	CanonicalWriter     = engine.CanonicalWriter
-	Commit              = engine.Commit
-	FinalizationRecord  = engine.FinalizationRecord
+	ArtifactStore       = engine.ArtifactStore
+	ArtifactWriter      = engine.ArtifactWriter
 	EventSink           = engine.EventSink
 
 	Task                       = core.Task
@@ -57,7 +58,7 @@ type (
 	Usage                      = core.Usage
 	ResourceSpec               = core.ResourceSpec
 	Completion                 = core.Completion
-	Result                     = core.Result
+	Result                     = core.RunResult
 	RunDescriptor              = core.RunDescriptor
 	Event                      = core.Event
 	EventType                  = core.EventType
@@ -185,14 +186,13 @@ const (
 )
 
 var (
-	NewRunner                = engine.NewRunner
+	NewRunner                = kernel.New
 	ArchiveAttemptEvidence   = engine.ArchiveAttemptEvidence
 	ArtifactContentID        = engine.ArtifactContentID
-	ValidateRunSpec          = engine.ValidateRunSpec
+	ValidateRunSpec          = kernel.ValidateRunSpec
 	RunAgentTurn             = engine.RunAgentTurn
 	ErrAgentUnavailable      = engine.ErrAgentUnavailable
-	ErrRunNotFound           = engine.ErrRunNotFound
-	ErrRunClosed             = engine.ErrRunClosed
+	ErrRunClosed             = kernel.ErrRunClosed
 	NewRedactor              = core.NewRedactor
 	DefaultRunPolicy         = core.DefaultRunPolicy
 	NormalizeRunPolicy       = core.NormalizeRunPolicy
