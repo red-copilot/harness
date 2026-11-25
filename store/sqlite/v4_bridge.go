@@ -17,6 +17,10 @@ import (
 // bridge (for example a v4 Run already in the database).
 var errNotBridgeRun = errors.New("run is not a v5 bridge run")
 
+// ErrNotBridgeRun lets operators fall back to the v4 recovery path for legacy
+// Runs. It is removed with the bridge at the v5 cutover.
+var ErrNotBridgeRun = errNotBridgeRun
+
 // V4Bridge projects the v5 journal onto the v8 tables so the v5 kernel can run
 // against the existing database generation. It is a temporary P4-P8
 // compatibility layer and is deleted at the v5 cutover:

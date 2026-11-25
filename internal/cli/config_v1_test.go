@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/red-copilot/harness"
-	"github.com/red-copilot/harness/store/sqlite"
 )
 
 func TestCLIComposesReasonerExecutorAndAdapters(t *testing.T) {
@@ -35,19 +34,14 @@ budget:
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "harness.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	spec, err := cfg.ToRunSpec(store, nil)
+	spec, err := cfg.ToKernelSpec(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if spec.Reasoner.ID != "reasoner" || spec.Executor.ID != "exec-1" || spec.Reasoner.Runtime == nil || spec.Executor.Runtime == nil {
 		t.Fatalf("spec = %+v", spec)
 	}
-	if spec.Target.Isolation != harness.IsolationCallerManaged || spec.Artifacts == nil {
+	if spec.Target.Isolation != harness.IsolationCallerManaged {
 		t.Fatalf("binding = %+v", spec)
 	}
 	if spec.Policy.Budget.WallTime != 60*time.Second {
@@ -102,12 +96,7 @@ policy:
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "harness.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	spec, err := cfg.ToRunSpec(store, nil)
+	spec, err := cfg.ToKernelSpec(nil)
 	if err != nil {
 		t.Fatal(err)
 	}

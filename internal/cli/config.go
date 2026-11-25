@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -11,6 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/red-copilot/harness"
+	"github.com/red-copilot/harness/engine/kernel"
 	"github.com/red-copilot/harness/pi"
 	"github.com/red-copilot/harness/verify"
 )
@@ -128,36 +128,38 @@ func LoadConfig(path string) (*FileConfig, error) {
 	return &cfg, nil
 }
 
-// ToRunSpec composes serializable configuration with deployment adapters.
-func (c *FileConfig) ToRunSpec(artifacts harness.ArtifactStore, starter pi.Starter) (harness.RunSpec, error) {
-	if artifacts == nil {
-		return harness.RunSpec{}, errors.New("artifact store is required")
-	}
+// ToKernelSpec composes serializable configuration with deployment adapters
+// for the v5 kernel.
+func (c *FileConfig) ToKernelSpec(starter pi.Starter) (kernel.Spec, error) {
 	target := harness.TargetSpec{ID: c.Target.ID, Addresses: append([]string(nil), c.Target.Addresses...), Isolation: harness.IsolationMode(c.Target.Isolation)}
 	policy := c.Policy.toRunPolicy()
 	policy.Budget = harness.Budget{WallTime: time.Duration(c.Budget.WallTimeSeconds) * time.Second, MaxTokens: c.Budget.MaxTokens, MaxModelCalls: c.Budget.MaxModelCalls, MaxToolCalls: c.Budget.MaxToolCalls, MaxCostUSD: c.Budget.MaxCostUSD}
-	spec := harness.RunSpec{Task: c.Task, Target: target, Policy: policy, Artifacts: artifacts, SecretEnv: append([]string(nil), c.SecretEnv...), WorkspaceRoot: c.WorkspaceRoot}
+	spec := kernel.Spec{
+		Task: c.Task, Target: target, Policy: policy,
+		SecretEnv: append([]string(nil), c.SecretEnv...), WorkspaceRoot: c.WorkspaceRoot,
+		VerifierID: "verifier",
+	}
 	var err error
 	reasoner, convertErr := c.Reasoner.toHarness()
 	if convertErr != nil {
-		return harness.RunSpec{}, fmt.Errorf("reasoner: %w", convertErr)
+		return kernel.Spec{}, fmt.Errorf("reasoner: %w", convertErr)
 	}
 	spec.Reasoner, err = composeAgent(reasoner, starter)
 	if err != nil {
-		return harness.RunSpec{}, fmt.Errorf("reasoner: %w", err)
+		return kernel.Spec{}, fmt.Errorf("reasoner: %w", err)
 	}
 	executor, convertErr := c.Executor.toHarness()
 	if convertErr != nil {
-		return harness.RunSpec{}, fmt.Errorf("executor: %w", convertErr)
+		return kernel.Spec{}, fmt.Errorf("executor: %w", convertErr)
 	}
 	executor, err = composeAgent(executor, starter)
 	if err != nil {
-		return harness.RunSpec{}, fmt.Errorf("executor: %w", err)
+		return kernel.Spec{}, fmt.Errorf("executor: %w", err)
 	}
 	spec.Executor = executor
 	spec.Provisioner, err = buildTarget(c.Target)
 	if err != nil {
-		return harness.RunSpec{}, err
+		return kernel.Spec{}, err
 	}
 	if c.Verifier != nil {
 		spec.Verifier = *c.Verifier
