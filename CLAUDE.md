@@ -47,6 +47,7 @@ engine  Single-writer Run lifecycle · board · one slot · authority · ports
 root    Thin façade: type aliases and constructors only
 adapters  pi · sandbox/docker · verify · store/sqlite
 internal/cli + cmd/harness  Composition root
+internal/naming            Shared Docker/Pi identifier rules
 ```
 
 Import rules are enforced by `import_boundary_test.go`:
@@ -57,10 +58,11 @@ Import rules are enforced by `import_boundary_test.go`:
 - Root `harness.go` must stay a façade; no state machine or I/O belongs there.
 
 `engine/ports.go` defines the entire integration boundary:
-`AgentRuntimeFactory`/`AgentSession`, `ProcessStarter`, `TargetProvisioner`,
-`CompletionSource`/`Backend`, `Verifier`, `ArtifactStore`, `EventSink`, and the
-persistence ports (`Store`, `CanonicalWriter`, `BoardReader`, `ReadStore`).
-Adapters implement ports; `engine` never depends on them.
+`AgentRuntimeFactory`/`AgentSession`, `ProcessStarter`, `ResourceCleaner`,
+`TargetProvisioner`, `CompletionSource`/`Backend`, `Verifier`, `ArtifactStore`,
+`EventSink`, and the persistence/recovery ports (`Store`, `CanonicalWriter`,
+`BoardReader`, `ReadStore`, `BoardRestorer`, `RunRecovery`). Adapters implement
+ports; `engine` never depends on them.
 
 Control-loop files to know:
 
@@ -100,6 +102,24 @@ outcome: succeeded | failed | cancelled | timed_out | stagnated | interrupted
   authority-terminal flow.
 - A Run needs two live sessions (Reasoner + Executor); `Runner` enforces
   `MaxSessions` (default 4) at start.
+
+## Recovery and process ownership
+
+- `NewRunner` finalizes unfinished historical Runs as interrupted unless
+  `Config.SkipRecovery` is set. If `Config.RecoveryGuard` returns an error, it
+  refuses instead — another live process owns the database.
+- `Runner.Resume` loads the Run, replays its newest canonical board snapshot via
+  `Store.RestoreBoardState`, re-validates it, then re-creates workspace, target
+  and both sessions. A damaged or revision-mismatched snapshot fails closed.
+  Operator entry point: `harness run --resume run-id`.
+- Process isolation is an OS `flock` on `<db>.lock` held for the life of the
+  process (`internal/cli/recovery_guard.go`); it is released automatically on
+  crash. A second process refuses rather than clobbering a live runner.
+- `harness runs cancel` acquires the same lock first, so it only finalizes a Run
+  it can prove has no live owner (`internal/cli/cancel.go`).
+- Target kinds (`external`, `image`, `compose`) and agent runtimes (`pi`) live
+  in registries in `internal/cli/registry.go`; unknown kinds fail closed and
+  name the registered kinds. Add one by registering it, not by editing a switch.
 
 ## Invariants
 
@@ -156,10 +176,12 @@ For documentation-only changes do not claim the full Go matrix was run.
 
 ## Configuration
 
-- Configs must declare `apiVersion: harness/v4`. `internal/cli` uses strict
-  `KnownFields(true)`, so unknown keys fail closed; legacy keys `workflow`,
-  `pi`, `agents`, `targets`, `exploration` are rejected with a pointer to
-  `examples/run.yaml`.
+- Configs use `apiVersion: harness/v4` (defaulted when omitted; any other value
+  is rejected). `internal/cli` uses strict `KnownFields(true)`, so unknown keys
+  fail closed; legacy keys `workflow`, `pi`, `agents`, `targets`, `exploration`
+  are rejected with a pointer to `examples/run.yaml`.
+- Target `kind` selects `external`, `image` or `compose`; a missing runtime
+  `type` defaults to `pi` (`internal/cli/registry.go`).
 - Only `caller_managed` isolation is supported; target reference checks are not
   network ACLs.
 - Default database: `.harness/harness.db`. `.env` and `*.ovpn` are gitignored
@@ -204,6 +226,9 @@ For documentation-only changes do not claim the full Go matrix was run.
 - Pi framing/completion: `pi/session.go` and its tests.
 - SQLite schema, backup/cutover/rollback: `store/sqlite/store.go`,
   `store/sqlite/backup.go`, the `backup` CLI subcommand.
+- Recovery replay and audit integrity: `store/sqlite/restore.go`,
+  `store/sqlite/audit.go` (`VerifyEventChain`, run by `harness doctor`), and
+  `engine/runner.go` (`Resume`).
 - Evidence trust: `engine/artifact.go`, `core/types_evidence.go`,
   `core/redactor.go`.
 - The Go types in `core/` are the contract; any local untracked `docs/` plans
