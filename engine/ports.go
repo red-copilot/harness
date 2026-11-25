@@ -87,8 +87,14 @@ type Verifier interface {
 	Verify(context.Context, VerifyRequest) (Verdict, error)
 }
 
-type ArtifactStore interface {
+// ArtifactWriter stores content-addressed evidence bytes.
+type ArtifactWriter interface {
 	Put(context.Context, ArtifactInput) (Artifact, error)
+}
+
+// ArtifactStore is the v4 composite artifact surface.
+type ArtifactStore interface {
+	ArtifactWriter
 	Open(context.Context, string) (io.ReadCloser, error)
 }
 
@@ -112,8 +118,8 @@ type FinalizationRecord struct {
 	Event   Event
 }
 
-// CanonicalWriter is the only write boundary for Run and board state.
-type CanonicalWriter interface {
+// Journal is the only write boundary for Run and board state.
+type Journal interface {
 	CreateRun(context.Context, RunRecord) error
 	UpdateRun(context.Context, RunRecord) error
 	AppendEvent(context.Context, Event) (Event, error)
@@ -122,7 +128,30 @@ type CanonicalWriter interface {
 	Finalize(context.Context, FinalizationRecord) (Event, error)
 }
 
+// CanonicalWriter is the v4 name for Journal.
+// Deprecated: use Journal.
+type CanonicalWriter = Journal
+
+// Reader is the narrow read surface the kernel needs.
+type Reader interface {
+	GetRun(context.Context, string) (RunRecord, error)
+	ListArtifacts(context.Context, string) ([]Artifact, error)
+	OpenArtifact(context.Context, string) (io.ReadCloser, error)
+}
+
+// Recovery is the process-lifecycle and replay surface the kernel needs.
+type Recovery interface {
+	RestoreBoardState(context.Context, string) (Commit, error)
+	MarkInterrupted(context.Context) error
+}
+
+// StoreCloser releases the underlying store.
+type StoreCloser interface {
+	Close() error
+}
+
 // BoardReader queries the append-only Claim/Intent board.
+// Deprecated: read-model queries use the concrete store.
 type BoardReader interface {
 	ListClaims(context.Context, string) ([]Claim, error)
 	ListIntents(context.Context, string) ([]Intent, error)
@@ -130,7 +159,8 @@ type BoardReader interface {
 	ListBlackboardObservations(context.Context, string) ([]Observation, error)
 }
 
-// ReadStore is the query boundary.
+// ReadStore is the v4 query boundary.
+// Deprecated: the kernel uses Reader; the CLI uses the concrete store.
 type ReadStore interface {
 	BoardReader
 	GetRun(context.Context, string) (RunRecord, error)
@@ -146,25 +176,25 @@ type ReadStore interface {
 // BoardRestorer replays the newest canonical board commit for one Run. The
 // restore path is read-only; the resumed engine re-enters through the
 // canonical Commit boundary.
+// Deprecated: use Recovery.
 type BoardRestorer interface {
 	RestoreBoardState(context.Context, string) (Commit, error)
 }
 
-// RunRecovery is the process-lifecycle and replay surface: it finalizes
-// orphaned Runs and replays committed board revisions on resume.
+// RunRecovery is the v4 process-lifecycle and replay surface.
+// Deprecated: use Recovery.
 type RunRecovery interface {
 	BoardRestorer
 	MarkInterrupted(context.Context) error
 }
 
-// Store composes the canonical writer, board/read queries, recovery and
-// process lifecycle. Consumers that only read should depend on ReadStore, and
-// components that only write Run lifecycle should depend on CanonicalWriter.
+// Store is the narrow composite the Runner requires. Read-model methods are
+// not part of the kernel contract.
 type Store interface {
-	CanonicalWriter
-	ReadStore
-	RunRecovery
-	Close() error
+	Journal
+	Reader
+	Recovery
+	StoreCloser
 }
 
 // EventSink persists raw session events.

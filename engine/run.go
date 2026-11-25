@@ -39,7 +39,7 @@ type RunSpec struct {
 	Provisioner       TargetProvisioner
 	Backend           CompletionSource
 	Verifier          Verifier
-	Artifacts         ArtifactStore
+	Artifacts         ArtifactWriter
 	SecretEnv         []string
 	KnownSecrets      []string
 	WorkspaceRoot     string
