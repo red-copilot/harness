@@ -200,6 +200,18 @@ type (
 	}
 )
 
+// Resume normalizations. A resumed Run has no executor attempt in flight, so
+// running attempts become interrupted and claimed intents return to the open
+// column. The run.resumed record makes the normalization replayable.
+const (
+	NormalizeAttemptsInterrupted = "attempts.interrupted"
+	NormalizeIntentsReopened     = "intents.reopened"
+)
+
+// ResumeNormalizations is the deterministic normalization set applied when a
+// Run is resumed.
+var ResumeNormalizations = []string{NormalizeAttemptsInterrupted, NormalizeIntentsReopened}
+
 // Record is one canonical journal entry. Hash covers the envelope fields and
 // the exact payload bytes, chained through PrevHash.
 type Record struct {

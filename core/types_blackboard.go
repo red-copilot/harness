@@ -60,11 +60,12 @@ type Intent struct {
 type IntentAttemptPhase string
 
 const (
-	IntentAttemptRunning   IntentAttemptPhase = "running"
-	IntentAttemptConcluded IntentAttemptPhase = "concluded"
-	IntentAttemptFailed    IntentAttemptPhase = "failed"
-	IntentAttemptCancelled IntentAttemptPhase = "cancelled"
-	IntentAttemptTimedOut  IntentAttemptPhase = "timed_out"
+	IntentAttemptRunning     IntentAttemptPhase = "running"
+	IntentAttemptConcluded   IntentAttemptPhase = "concluded"
+	IntentAttemptFailed      IntentAttemptPhase = "failed"
+	IntentAttemptCancelled   IntentAttemptPhase = "cancelled"
+	IntentAttemptTimedOut    IntentAttemptPhase = "timed_out"
+	IntentAttemptInterrupted IntentAttemptPhase = "interrupted"
 )
 
 // IntentAttempt is one execution of an Intent. Execute and conclude are phases

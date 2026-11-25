@@ -346,6 +346,96 @@ func projectRecordsTx(ctx context.Context, tx *sql.Tx, runID string, records []c
 			if err := upsertArtifactTx(ctx, tx, record.Seq, p.Artifact); err != nil {
 				return err
 			}
+		case core.RunResumedRecord:
+			if err := normalizeResumeProjectionTx(ctx, tx, record.Seq, runID, p.Normalizations, record.At); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// normalizeResumeProjectionTx mirrors core.Board.normalizeResume in the read
+// model so Replay and the rm_* projection agree after a resume.
+func normalizeResumeProjectionTx(ctx context.Context, tx *sql.Tx, seq uint64, runID string, normalizations []string, at time.Time) error {
+	for _, normalization := range normalizations {
+		switch normalization {
+		case core.NormalizeAttemptsInterrupted:
+			rows, err := tx.QueryContext(ctx, `SELECT payload FROM rm_attempts WHERE run_id=?`, runID)
+			if err != nil {
+				return err
+			}
+			var attempts []core.IntentAttempt
+			for rows.Next() {
+				var payload []byte
+				if err := rows.Scan(&payload); err != nil {
+					rows.Close()
+					return err
+				}
+				var attempt core.IntentAttempt
+				if err := json.Unmarshal(payload, &attempt); err != nil {
+					rows.Close()
+					return err
+				}
+				attempts = append(attempts, attempt)
+			}
+			if err := rows.Close(); err != nil {
+				return err
+			}
+			if err := rows.Err(); err != nil {
+				return err
+			}
+			for _, attempt := range attempts {
+				if attempt.Phase != core.IntentAttemptRunning {
+					continue
+				}
+				attempt.Phase = core.IntentAttemptInterrupted
+				if attempt.Error == "" {
+					attempt.Error = "interrupted by resume"
+				}
+				attempt.FinishedAt = at.UTC()
+				if err := upsertAttemptTx(ctx, tx, seq, attempt); err != nil {
+					return err
+				}
+			}
+		case core.NormalizeIntentsReopened:
+			rows, err := tx.QueryContext(ctx, `SELECT payload FROM rm_intents WHERE run_id=?`, runID)
+			if err != nil {
+				return err
+			}
+			var intents []core.Intent
+			for rows.Next() {
+				var payload []byte
+				if err := rows.Scan(&payload); err != nil {
+					rows.Close()
+					return err
+				}
+				var intent core.Intent
+				if err := json.Unmarshal(payload, &intent); err != nil {
+					rows.Close()
+					return err
+				}
+				intents = append(intents, intent)
+			}
+			if err := rows.Close(); err != nil {
+				return err
+			}
+			if err := rows.Err(); err != nil {
+				return err
+			}
+			for _, intent := range intents {
+				if intent.State != core.IntentClaimed {
+					continue
+				}
+				intent.State = core.IntentOpen
+				intent.ExecutorID = ""
+				intent.ClaimedAt = nil
+				if err := upsertIntentTx(ctx, tx, seq, intent); err != nil {
+					return err
+				}
+			}
+		default:
+			return fmt.Errorf("unknown resume normalization %q", normalization)
 		}
 	}
 	return nil

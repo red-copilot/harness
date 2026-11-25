@@ -183,3 +183,42 @@ func TestBoardValidateDetectsDanglingEvidence(t *testing.T) {
 		t.Fatalf("valid board rejected: %v", err)
 	}
 }
+
+func TestBoardResumeNormalization(t *testing.T) {
+	at := time.Unix(1, 0).UTC()
+	records := boardChain(t, "run-1", []boardRecord{
+		{RecordClaimCreated, ClaimCreatedRecord{Claim: Claim{ID: "origin", RunID: "run-1", TaskID: "task-1", Kind: ClaimOrigin, Description: "goal", CreatedAt: at}}},
+		{RecordIntentProposed, IntentProposedRecord{Intent: Intent{ID: "intent-1", RunID: "run-1", FromClaimIDs: []string{"origin"}, Description: "probe", State: IntentOpen, CreatedAt: at}}},
+		{RecordIntentClaimed, IntentClaimedRecord{IntentID: "intent-1", ExecutorID: "executor", At: at}},
+		{RecordAttemptStarted, AttemptStartedRecord{Attempt: IntentAttempt{ID: "attempt-1", RunID: "run-1", IntentID: "intent-1", SessionID: "executor", Phase: IntentAttemptRunning, StartedAt: at}}},
+		{RecordRunResumed, RunResumedRecord{HeadSeq: 4, Normalizations: ResumeNormalizations}},
+	})
+	board := NewBoard("run-1")
+	if err := board.ApplyAll(records); err != nil {
+		t.Fatal(err)
+	}
+	if board.Revision != 5 {
+		t.Fatalf("revision = %d, want 5", board.Revision)
+	}
+	if board.Intents[0].State != IntentOpen || board.Intents[0].ExecutorID != "" || board.Intents[0].ClaimedAt != nil {
+		t.Fatalf("intent not reopened: %+v", board.Intents[0])
+	}
+	attempt := board.Attempts[0]
+	if attempt.Phase != IntentAttemptInterrupted || attempt.FinishedAt.IsZero() || attempt.Error == "" {
+		t.Fatalf("attempt not interrupted: %+v", attempt)
+	}
+	if err := board.Validate(); err != nil {
+		t.Fatalf("normalized board invalid: %v", err)
+	}
+}
+
+func TestBoardRejectsUnknownResumeNormalization(t *testing.T) {
+	at := time.Unix(1, 0).UTC()
+	record, err := NewRecord("run-1", 1, RecordRunResumed, at, RunResumedRecord{Normalizations: []string{"unknown"}}, testManifestDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewBoard("run-1").Apply(record); err == nil {
+		t.Fatal("unknown normalization accepted")
+	}
+}

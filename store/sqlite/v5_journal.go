@@ -14,10 +14,9 @@ import (
 )
 
 // V5AppendResult is the state and records produced by one journal write.
-type V5AppendResult struct {
-	State   core.State
-	Records []core.Record
-}
+//
+// Deprecated: use core.AppendResult.
+type V5AppendResult = core.AppendResult
 
 // Create writes the manifest, the first journal batch, the initial state, the
 // read-model projection and the first checkpoint in one transaction.
@@ -126,39 +125,39 @@ func (s *V5Store) Create(ctx context.Context, sealedManifest core.SealedManifest
 }
 
 // Append atomically extends the journal and updates the state projection.
-func (s *V5Store) Append(ctx context.Context, sealed core.SealedBatch) (V5AppendResult, error) {
+func (s *V5Store) Append(ctx context.Context, sealed core.SealedBatch) (core.AppendResult, error) {
 	if s.readOnly {
-		return V5AppendResult{}, errors.New("read-only v5 store")
+		return core.AppendResult{}, errors.New("read-only v5 store")
 	}
 	batch := sealed.Batch()
 	if err := batch.Validate(); err != nil {
-		return V5AppendResult{}, err
+		return core.AppendResult{}, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return V5AppendResult{}, err
+		return core.AppendResult{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	state, err := loadStateTx(ctx, tx, batch.RunID)
 	if err != nil {
-		return V5AppendResult{}, err
+		return core.AppendResult{}, err
 	}
 	if state.Phase == core.PhaseTerminal {
-		return V5AppendResult{}, fmt.Errorf("%w: %s", core.ErrTerminal, batch.RunID)
+		return core.AppendResult{}, fmt.Errorf("%w: %s", core.ErrTerminal, batch.RunID)
 	}
 	if batch.ExpectedHead != state.HeadSeq {
-		return V5AppendResult{}, fmt.Errorf("%w: expected %d, current %d", core.ErrStaleHead, batch.ExpectedHead, state.HeadSeq)
+		return core.AppendResult{}, fmt.Errorf("%w: expected %d, current %d", core.ErrStaleHead, batch.ExpectedHead, state.HeadSeq)
 	}
 	first := batch.Records[0]
 	if first.Seq != state.HeadSeq+1 || first.PrevHash != state.HeadHash {
-		return V5AppendResult{}, fmt.Errorf("%w: first record does not extend the current head", core.ErrStaleHead)
+		return core.AppendResult{}, fmt.Errorf("%w: first record does not extend the current head", core.ErrStaleHead)
 	}
 	if err := insertRecordsTx(ctx, tx, batch.Records); err != nil {
-		return V5AppendResult{}, err
+		return core.AppendResult{}, err
 	}
 	if s.testAfterJournal != nil {
 		if err := s.testAfterJournal(); err != nil {
-			return V5AppendResult{}, err
+			return core.AppendResult{}, err
 		}
 	}
 	last := batch.Records[len(batch.Records)-1]
@@ -166,13 +165,13 @@ func (s *V5Store) Append(ctx context.Context, sealed core.SealedBatch) (V5Append
 	if batch.State != nil {
 		next = *batch.State
 		if next.RunID != state.RunID {
-			return V5AppendResult{}, fmt.Errorf("state run_id %q does not match %q", next.RunID, state.RunID)
+			return core.AppendResult{}, fmt.Errorf("state run_id %q does not match %q", next.RunID, state.RunID)
 		}
 		if next.Phase == core.PhaseTerminal {
-			return V5AppendResult{}, errors.New("append cannot write a terminal state; use Finalize")
+			return core.AppendResult{}, errors.New("append cannot write a terminal state; use Finalize")
 		}
 		if next.HeadSeq != 0 && next.HeadSeq != last.Seq {
-			return V5AppendResult{}, fmt.Errorf("state head_seq %d does not match last record %d", next.HeadSeq, last.Seq)
+			return core.AppendResult{}, fmt.Errorf("state head_seq %d does not match last record %d", next.HeadSeq, last.Seq)
 		}
 		if batch.BoardRevision != 0 {
 			next.BoardRevision = batch.BoardRevision
@@ -180,84 +179,84 @@ func (s *V5Store) Append(ctx context.Context, sealed core.SealedBatch) (V5Append
 	}
 	next.HeadSeq, next.HeadHash = last.Seq, last.Hash
 	if err := next.Validate(); err != nil {
-		return V5AppendResult{}, err
+		return core.AppendResult{}, err
 	}
 	updateStateTx(ctx, tx, next)
 	if err := projectRecordsTx(ctx, tx, batch.RunID, batch.Records); err != nil {
-		return V5AppendResult{}, err
+		return core.AppendResult{}, err
 	}
 	if next.Phase != state.Phase || last.Seq%256 == 0 {
 		board, err := loadBoardTx(ctx, tx, batch.RunID, next.BoardRevision)
 		if err != nil {
-			return V5AppendResult{}, err
+			return core.AppendResult{}, err
 		}
 		if err := writeCheckpointTx(ctx, tx, next, board); err != nil {
-			return V5AppendResult{}, err
+			return core.AppendResult{}, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return V5AppendResult{}, fmt.Errorf("commit append: %w", err)
+		return core.AppendResult{}, fmt.Errorf("commit append: %w", err)
 	}
-	return V5AppendResult{State: next, Records: batch.Records}, nil
+	return core.AppendResult{State: next, Records: batch.Records}, nil
 }
 
 // Finalize writes the terminal outcome, verdict and finalization atomically.
-func (s *V5Store) Finalize(ctx context.Context, sealed core.SealedFinalization) (V5AppendResult, error) {
+func (s *V5Store) Finalize(ctx context.Context, sealed core.SealedFinalization) (core.AppendResult, error) {
 	if s.readOnly {
-		return V5AppendResult{}, errors.New("read-only v5 store")
+		return core.AppendResult{}, errors.New("read-only v5 store")
 	}
 	finalization := sealed.Finalization()
 	if err := finalization.Validate(); err != nil {
-		return V5AppendResult{}, err
+		return core.AppendResult{}, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return V5AppendResult{}, err
+		return core.AppendResult{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	state, err := loadStateTx(ctx, tx, finalization.RunID)
 	if err != nil {
-		return V5AppendResult{}, err
+		return core.AppendResult{}, err
 	}
 	if state.Phase == core.PhaseTerminal {
-		return V5AppendResult{}, fmt.Errorf("%w: %s", core.ErrTerminal, finalization.RunID)
+		return core.AppendResult{}, fmt.Errorf("%w: %s", core.ErrTerminal, finalization.RunID)
 	}
 	if finalization.ExpectedHead != state.HeadSeq {
-		return V5AppendResult{}, fmt.Errorf("%w: expected %d, current %d", core.ErrStaleHead, finalization.ExpectedHead, state.HeadSeq)
+		return core.AppendResult{}, fmt.Errorf("%w: expected %d, current %d", core.ErrStaleHead, finalization.ExpectedHead, state.HeadSeq)
 	}
 	first := finalization.Records[0]
 	if first.Seq != state.HeadSeq+1 || first.PrevHash != state.HeadHash {
-		return V5AppendResult{}, fmt.Errorf("%w: first final record does not extend the current head", core.ErrStaleHead)
+		return core.AppendResult{}, fmt.Errorf("%w: first final record does not extend the current head", core.ErrStaleHead)
 	}
 	last := finalization.Records[len(finalization.Records)-1]
 	if err := validateFinalRecord(last, finalization.Outcome); err != nil {
-		return V5AppendResult{}, err
+		return core.AppendResult{}, err
 	}
 	if finalization.Outcome == core.OutcomeSucceeded {
 		if state.Phase != core.PhaseVerifying {
-			return V5AppendResult{}, fmt.Errorf("success requires verifying phase, have %q", state.Phase)
+			return core.AppendResult{}, fmt.Errorf("success requires verifying phase, have %q", state.Phase)
 		}
 		if finalization.Verdict == nil || !finalization.Verdict.Success {
-			return V5AppendResult{}, errors.New("success requires a successful verdict")
+			return core.AppendResult{}, errors.New("success requires a successful verdict")
 		}
 	}
 	manifest, _, err := loadManifestTx(ctx, tx, finalization.RunID)
 	if err != nil {
-		return V5AppendResult{}, err
+		return core.AppendResult{}, err
 	}
 	if err := insertRecordsTx(ctx, tx, finalization.Records); err != nil {
-		return V5AppendResult{}, err
+		return core.AppendResult{}, err
 	}
 	if s.testAfterJournal != nil {
 		if err := s.testAfterJournal(); err != nil {
-			return V5AppendResult{}, err
+			return core.AppendResult{}, err
 		}
 	}
 	verdictSHA := ""
 	if finalization.Verdict != nil {
 		data, err := core.CanonicalJSON(finalization.Verdict)
 		if err != nil {
-			return V5AppendResult{}, err
+			return core.AppendResult{}, err
 		}
 		sum := sha256.Sum256(data)
 		verdictSHA = hex.EncodeToString(sum[:])
@@ -265,12 +264,12 @@ func (s *V5Store) Finalize(ctx context.Context, sealed core.SealedFinalization) 
 			finalization.RunID, boolInt(finalization.Verdict.Success), finalization.Verdict.Score,
 			finalization.Verdict.Message, nullableBytes(finalization.Verdict.Evidence),
 			manifest.Verifier.ID, finalization.FinishedAt.UTC().UnixNano()); err != nil {
-			return V5AppendResult{}, fmt.Errorf("insert verdict: %w", err)
+			return core.AppendResult{}, fmt.Errorf("insert verdict: %w", err)
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO run_finalization(run_id,outcome,journal_seq,verdict_sha256,finalized_at) VALUES(?,?,?,?,?)`,
 		finalization.RunID, string(finalization.Outcome), last.Seq, nullableString(verdictSHA), finalization.FinishedAt.UTC().UnixNano()); err != nil {
-		return V5AppendResult{}, fmt.Errorf("insert finalization: %w", err)
+		return core.AppendResult{}, fmt.Errorf("insert finalization: %w", err)
 	}
 	next := state
 	next.Phase = core.PhaseTerminal
@@ -281,23 +280,23 @@ func (s *V5Store) Finalize(ctx context.Context, sealed core.SealedFinalization) 
 	finished := finalization.FinishedAt.UTC()
 	next.FinishedAt = &finished
 	if err := next.Validate(); err != nil {
-		return V5AppendResult{}, err
+		return core.AppendResult{}, err
 	}
 	updateStateTx(ctx, tx, next)
 	if err := projectRecordsTx(ctx, tx, finalization.RunID, finalization.Records); err != nil {
-		return V5AppendResult{}, err
+		return core.AppendResult{}, err
 	}
 	board, err := loadBoardTx(ctx, tx, finalization.RunID, next.BoardRevision)
 	if err != nil {
-		return V5AppendResult{}, err
+		return core.AppendResult{}, err
 	}
 	if err := writeCheckpointTx(ctx, tx, next, board); err != nil {
-		return V5AppendResult{}, err
+		return core.AppendResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return V5AppendResult{}, fmt.Errorf("commit finalization: %w", err)
+		return core.AppendResult{}, fmt.Errorf("commit finalization: %w", err)
 	}
-	return V5AppendResult{State: next, Records: finalization.Records}, nil
+	return core.AppendResult{State: next, Records: finalization.Records}, nil
 }
 
 // Interrupt finalizes a non-terminal Run as interrupted. The caller supplies
