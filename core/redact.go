@@ -82,7 +82,12 @@ func (f Finalization) Validate() error {
 			return fmt.Errorf("finalization record %d prev_hash does not chain to record %d", i, i-1)
 		}
 	}
-	if last := f.Records[len(f.Records)-1]; last.Type != RecordRunFinalized {
+	last := f.Records[len(f.Records)-1]
+	if f.Outcome == OutcomeInterrupted {
+		if last.Type != RecordRunInterrupted {
+			return errors.New("interrupted finalization must end with run.interrupted")
+		}
+	} else if last.Type != RecordRunFinalized {
 		return errors.New("finalization must end with run.finalized")
 	}
 	if f.Outcome.Success() {
