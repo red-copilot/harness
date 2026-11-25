@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
@@ -22,105 +21,31 @@ type ArtifactStoreError struct{ Err error }
 func (e *ArtifactStoreError) Error() string { return "artifact store: " + e.Err.Error() }
 func (e *ArtifactStoreError) Unwrap() error { return e.Err }
 
-// ValidateEvidencePath resolves a workspace-relative regular file and rejects
-// traversal, symlink escape and directories.
-func ValidateEvidencePath(root, candidate string) (string, error) {
-	if strings.TrimSpace(root) == "" {
-		return "", errors.New("workspace root is required")
-	}
-	evalRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return "", fmt.Errorf("resolve workspace: %w", err)
-	}
-	path, _, err := validateEvidencePath(evalRoot, candidate)
-	return path, err
-}
-
-// validateEvidencePath resolves a candidate against an already-resolved
-// workspace root and returns its FileInfo to avoid a second stat.
-func validateEvidencePath(evalRoot, candidate string) (string, os.FileInfo, error) {
+func cleanEvidencePath(candidate string) (string, error) {
 	if candidate == "" || filepath.IsAbs(candidate) {
-		return "", nil, fmt.Errorf("invalid evidence path %q", candidate)
+		return "", fmt.Errorf("invalid evidence path %q", candidate)
 	}
 	clean := filepath.Clean(candidate)
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", nil, fmt.Errorf("evidence path escapes workspace: %q", candidate)
+		return "", fmt.Errorf("evidence path escapes workspace: %q", candidate)
 	}
-	resolved := filepath.Join(evalRoot, clean)
-	evalPath, err := filepath.EvalSymlinks(resolved)
-	if err != nil {
-		return "", nil, fmt.Errorf("resolve evidence path: %w", err)
-	}
-	rel, err := filepath.Rel(evalRoot, evalPath)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", nil, fmt.Errorf("evidence path escapes workspace: %q", candidate)
-	}
-	info, err := os.Lstat(evalPath)
-	if err != nil {
-		return "", nil, fmt.Errorf("stat evidence: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return "", nil, fmt.Errorf("evidence path is not a regular file: %q", candidate)
-	}
-	return evalPath, info, nil
-}
-
-func readEvidenceFile(path string, maxBytes int64) ([]byte, error) {
-	before, err := os.Lstat(path)
-	if err != nil {
-		return nil, fmt.Errorf("stat evidence: %w", err)
-	}
-	if before.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("evidence path is a symlink: %q", path)
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("open evidence: %w", err)
-	}
-	defer file.Close()
-	after, err := file.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("stat open evidence: %w", err)
-	}
-	current, err := os.Lstat(path)
-	if err != nil || !os.SameFile(before, after) || !os.SameFile(after, current) {
-		return nil, fmt.Errorf("evidence path changed while opening: %q", path)
-	}
-	if !after.Mode().IsRegular() {
-		return nil, fmt.Errorf("evidence path is not a regular file: %q", path)
-	}
-	if maxBytes > 0 && after.Size() > maxBytes {
-		return nil, fmt.Errorf("evidence file %q exceeds byte limit", path)
-	}
-	reader := io.Reader(file)
-	if maxBytes > 0 {
-		reader = io.LimitReader(file, maxBytes+1)
-	}
-	content, err := io.ReadAll(reader)
-	if err != nil {
-		return nil, fmt.Errorf("read evidence %q: %w", path, err)
-	}
-	if maxBytes > 0 && int64(len(content)) > maxBytes {
-		return nil, fmt.Errorf("evidence file %q exceeds byte limit", path)
-	}
-	return content, nil
+	return clean, nil
 }
 
 // ArchiveAttemptEvidence validates and stores every referenced file, then
 // constructs Observations only after all Artifact writes succeed.
-func ArchiveAttemptEvidence(ctx context.Context, store ArtifactStore, redactor Redactor, req EvidenceArchiveRequest) ([]Observation, error) {
+func ArchiveAttemptEvidence(ctx context.Context, store ArtifactStore, redactor Redactor, workspace Workspace, req EvidenceArchiveRequest) ([]Observation, error) {
 	if store == nil {
 		return nil, errors.New("artifact store is required")
+	}
+	if workspace == nil {
+		return nil, errors.New("workspace is required")
 	}
 	if len(req.Observations) == 0 {
 		return nil, errors.New("attempt requires at least one observation")
 	}
 	if strings.TrimSpace(req.WorkspaceDir) == "" {
 		return nil, errors.New("workspace root is required")
-	}
-	evalRoot, err := filepath.EvalSymlinks(req.WorkspaceDir)
-	if err != nil {
-		return nil, fmt.Errorf("resolve workspace: %w", err)
 	}
 	type preparedArtifact struct {
 		name, mediaType string
@@ -150,7 +75,7 @@ func ArchiveAttemptEvidence(ctx context.Context, store ArtifactStore, redactor R
 		}
 		item := preparedObservation{proposal: proposal, artifacts: make([]preparedArtifact, 0, len(proposal.EvidenceFiles))}
 		for _, file := range proposal.EvidenceFiles {
-			path, _, err := validateEvidencePath(evalRoot, file)
+			clean, err := cleanEvidencePath(file)
 			if err != nil {
 				return nil, err
 			}
@@ -164,9 +89,14 @@ func ArchiveAttemptEvidence(ctx context.Context, store ArtifactStore, redactor R
 					readLimit = remaining + 1
 				}
 			}
-			content, err := readEvidenceFile(path, readLimit)
+			opened, err := workspace.OpenEvidence(ctx, req.WorkspaceDir, clean, readLimit)
 			if err != nil {
 				return nil, err
+			}
+			content, readErr := io.ReadAll(opened.Reader)
+			closeErr := opened.Reader.Close()
+			if readErr != nil || closeErr != nil {
+				return nil, fmt.Errorf("read evidence %q: %w", file, errors.Join(readErr, closeErr))
 			}
 			totalBytes += int64(len(content))
 			if req.MaxFileBytes > 0 && int64(len(content)) > req.MaxFileBytes {

@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -93,6 +91,9 @@ type runController struct {
 	root               string
 	taskDir            string
 	skillsDir          string
+	workspaceRoot      string
+	workspace          Workspace
+	dirs               RunDirs
 	clock              Clock
 	redaction          *core.Redactor
 	budget             core.Budget
@@ -118,17 +119,20 @@ type runController struct {
 	transitionSeq uint64
 }
 
-func newRunController(runner *Runner, id string, ctx context.Context, cancel context.CancelFunc, root string, budget core.Budget, redaction *core.Redactor, materializeSkills func(string) error, clock Clock) *runController {
+func newRunController(runner *Runner, id string, ctx context.Context, cancel context.CancelFunc, workspaceRoot string, workspace Workspace, budget core.Budget, redaction *core.Redactor, materializeSkills func(string) error, clock Clock) *runController {
 	if redaction == nil {
 		redaction = core.NewRedactor()
 	}
-	if clock == nil {
+	if clock == nil && runner != nil {
 		clock = runner.clock
+	}
+	if workspace == nil && runner != nil {
+		workspace = runner.workspace
 	}
 	return &runController{
 		runner: runner, id: id, ctx: ctx, cancel: cancel,
 		events: make(chan core.Event, 256), done: make(chan struct{}),
-		root: root, taskDir: filepath.Join(root, "task"), skillsDir: filepath.Join(root, "skills"),
+		workspaceRoot: workspaceRoot, workspace: workspace,
 		redaction: redaction, budget: budget, materializeSkills: materializeSkills, clock: clock,
 		state: runControlState{phase: core.RunPhaseQueued, sessions: map[string]AgentSession{}, sessionHistory: map[string]core.SessionResult{}},
 	}
@@ -338,7 +342,10 @@ func (c *runController) sessionResults() []core.SessionResult {
 }
 
 func (c *runController) sessionWorkspace(sessionID string) string {
-	return filepath.Join(c.root, sessionID)
+	if c.dirs == nil {
+		return ""
+	}
+	return c.dirs.SessionDir(sessionID)
 }
 
 func (c *runController) redactor() *core.Redactor { return c.redaction }
@@ -560,20 +567,19 @@ func (c *runController) finishExecution(outcome core.RunOutcome, finalErr error,
 func (c *runController) run(spec RunSpec) {
 	defer c.cancel()
 	_ = c.apply(runTransition{kind: runTransitionStarted, at: c.clock.Now().UTC()})
-	if err := ensureDir(c.taskDir); err != nil {
+	if c.workspace == nil {
+		c.finishExecution(core.RunOutcomeFailed, errors.New("workspace is required"), nil)
+		return
+	}
+	dirs, err := c.workspace.PrepareRun(c.ctx, c.workspaceRoot, c.id, c.materializeSkills)
+	if err != nil {
 		c.finishExecution(core.RunOutcomeFailed, err, nil)
 		return
 	}
-	if err := ensureDir(c.skillsDir); err != nil {
-		c.finishExecution(core.RunOutcomeFailed, err, nil)
-		return
-	}
-	if c.materializeSkills != nil {
-		if err := c.materializeSkills(c.skillsDir); err != nil {
-			c.finishExecution(core.RunOutcomeFailed, err, nil)
-			return
-		}
-	}
+	c.dirs = dirs
+	c.root = dirs.Root()
+	c.taskDir = dirs.TaskDir()
+	c.skillsDir = dirs.SkillsDir()
 	if err := c.updatePhase(core.RunPhaseProvisioning); err != nil {
 		c.finishExecution(core.RunOutcomeFailed, err, nil)
 		return
@@ -724,11 +730,13 @@ func (c *runController) arbitrateVerified(spec RunSpec, target core.TargetBindin
 		decision.finalErr = err
 		return decision
 	}
-	evidenceDir, bundleErr := buildEvidenceBundle(c.ctx, c.runner.store, c.id, c.root)
+	evidenceDir, cleanup, bundleErr := buildEvidenceBundle(c.ctx, c.runner.store, c.workspace, c.id, c.root)
 	verifyVerdict, verifyErr := core.Verdict{}, bundleErr
 	if bundleErr == nil {
 		verifyVerdict, verifyErr = spec.Verifier.Verify(c.ctx, core.VerifyRequest{RunID: c.id, Task: spec.Task, Target: target, EvidenceDir: evidenceDir})
-		_ = os.RemoveAll(evidenceDir)
+		if cleanup != nil {
+			_ = cleanup()
+		}
 	}
 	if verifyErr == nil {
 		verifyVerdict.Authority = core.VerdictAuthorityVerifier

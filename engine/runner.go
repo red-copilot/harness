@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sync"
 	"time"
 )
@@ -17,6 +16,7 @@ type Runner struct {
 	clock         Clock
 	ids           IDSource
 	secrets       SecretSource
+	workspace     Workspace
 	workspaceRoot string
 	maxSessions   int
 	pollInterval  time.Duration
@@ -44,6 +44,9 @@ func NewRunner(cfg Config) (*Runner, error) {
 	if cfg.Secrets == nil {
 		return nil, errors.New("runner secret source is required")
 	}
+	if cfg.Workspace == nil {
+		return nil, errors.New("runner workspace is required")
+	}
 	if cfg.MaxSessions < 0 || cfg.PollInterval < 0 || cfg.CloseTimeout < 0 {
 		return nil, errors.New("runner durations and MaxSessions must not be negative")
 	}
@@ -64,8 +67,8 @@ func NewRunner(cfg Config) (*Runner, error) {
 	redacting := newRedactingStore(cfg.Store)
 	runner := &Runner{
 		store: redacting, redacting: redacting, clock: cfg.Clock, ids: cfg.IDs, secrets: cfg.Secrets,
-		workspaceRoot: cfg.WorkspaceRoot,
-		maxSessions:   cfg.MaxSessions, pollInterval: cfg.PollInterval, closeTimeout: cfg.CloseTimeout,
+		workspace: cfg.Workspace, workspaceRoot: cfg.WorkspaceRoot,
+		maxSessions: cfg.MaxSessions, pollInterval: cfg.PollInterval, closeTimeout: cfg.CloseTimeout,
 		runs: map[string]*Run{}, sessionSlots: make(chan struct{}, cfg.MaxSessions), closed: make(chan struct{}),
 	}
 	if !cfg.SkipRecovery {
@@ -126,7 +129,7 @@ func (r *Runner) Start(ctx context.Context, spec RunSpec) (*Run, error) {
 	if workspaceRoot == "" {
 		workspaceRoot = r.workspaceRoot
 	}
-	controller := newRunController(r, runID, runCtx, cancel, filepath.Join(workspaceRoot, runID), spec.Policy.Budget, redactor, spec.MaterializeSkills, r.clock)
+	controller := newRunController(r, runID, runCtx, cancel, workspaceRoot, r.workspace, spec.Policy.Budget, redactor, spec.MaterializeSkills, r.clock)
 	controller.maxObserveFailures = spec.Policy.Exploration.MaxAuthorityObserveFailures
 	run := newRun(controller)
 	descriptor := spec.Descriptor()
@@ -225,7 +228,7 @@ func (r *Runner) Resume(ctx context.Context, runID string, spec RunSpec) (*Run, 
 	if workspaceRoot == "" {
 		workspaceRoot = r.workspaceRoot
 	}
-	controller := newRunController(r, runID, runCtx, cancel, filepath.Join(workspaceRoot, runID), spec.Policy.Budget, redactor, spec.MaterializeSkills, r.clock)
+	controller := newRunController(r, runID, runCtx, cancel, workspaceRoot, r.workspace, spec.Policy.Budget, redactor, spec.MaterializeSkills, r.clock)
 	controller.maxObserveFailures = spec.Policy.Exploration.MaxAuthorityObserveFailures
 	controller.resumeCommit = &commit
 	controller.boardRevision = commit.Revision

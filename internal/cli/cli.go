@@ -108,7 +108,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	runner, err := harness.NewRunner(harness.Config{
 		Store: store, Clock: runtime.SystemClock{}, IDs: runtime.CryptoIDs{}, Secrets: runtime.OSSecrets{},
-		WorkspaceRoot: cfg.WorkspaceRoot, CloseTimeout: 30 * time.Second,
+		Workspace: runtime.OSWorkspace{}, WorkspaceRoot: cfg.WorkspaceRoot, CloseTimeout: 30 * time.Second,
 	})
 	if err != nil {
 		return err

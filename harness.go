@@ -181,7 +181,6 @@ const (
 
 var (
 	NewRunner                = engine.NewRunner
-	ValidateEvidencePath     = engine.ValidateEvidencePath
 	ArchiveAttemptEvidence   = engine.ArchiveAttemptEvidence
 	ArtifactContentID        = engine.ArtifactContentID
 	ValidateRunSpec          = engine.ValidateRunSpec
