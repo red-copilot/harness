@@ -38,6 +38,34 @@ func nonTestGoFiles(t *testing.T, dir string) []string {
 	return files
 }
 
+// TestKernelDoesNotUseReadModelMethods keeps the kernel on the narrow Reader
+// surface; aggregate read-model queries belong to the CLI and the concrete store.
+func TestKernelDoesNotUseReadModelMethods(t *testing.T) {
+	forbidden := map[string]bool{
+		"ListRuns": true, "ListEvents": true, "ListLogs": true,
+		"GetVerdict": true, "ListClaims": true, "ListIntents": true,
+		"ListIntentAttempts": true, "ListBlackboardObservations": true,
+		"GetBoardRevision": true,
+	}
+	root := repoRoot(t)
+	for _, path := range nonTestGoFiles(t, filepath.Join(root, "engine")) {
+		if filepath.Base(path) == "ports.go" {
+			continue // the deprecated v4 interfaces are declared here
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		rel, _ := filepath.Rel(root, path)
+		ast.Inspect(file, func(node ast.Node) bool {
+			if sel, ok := node.(*ast.SelectorExpr); ok && forbidden[sel.Sel.Name] {
+				t.Errorf("%s uses read-model method %s; use Reader", rel, sel.Sel.Name)
+			}
+			return true
+		})
+	}
+}
+
 // TestKernelHasNoAmbientTimeRandomnessOrEnvironment keeps the kernel
 // deterministic: clocks, randomness, the process environment and filesystem
 // access are injected ports, not ambient calls. path/filepath is allowed

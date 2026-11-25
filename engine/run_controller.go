@@ -94,6 +94,8 @@ type runController struct {
 	workspaceRoot      string
 	workspace          Workspace
 	dirs               RunDirs
+	journal            Journal
+	reader             Reader
 	clock              Clock
 	redaction          *core.Redactor
 	budget             core.Budget
@@ -129,10 +131,16 @@ func newRunController(runner *Runner, id string, ctx context.Context, cancel con
 	if workspace == nil && runner != nil {
 		workspace = runner.workspace
 	}
+	var journal Journal
+	var reader Reader
+	if runner != nil {
+		journal = runner.store
+		reader = runner.store
+	}
 	return &runController{
 		runner: runner, id: id, ctx: ctx, cancel: cancel,
 		events: make(chan core.Event, 256), done: make(chan struct{}),
-		workspaceRoot: workspaceRoot, workspace: workspace,
+		workspaceRoot: workspaceRoot, workspace: workspace, journal: journal, reader: reader,
 		redaction: redaction, budget: budget, materializeSkills: materializeSkills, clock: clock,
 		state: runControlState{phase: core.RunPhaseQueued, sessions: map[string]AgentSession{}, sessionHistory: map[string]core.SessionResult{}},
 	}
@@ -410,7 +418,7 @@ func (c *runController) emitEvent(event core.Event) error {
 		return err
 	}
 	defer c.eventMu.Unlock()
-	stored, err := c.runner.store.AppendEvent(context.Background(), event)
+	stored, err := c.journal.AppendEvent(context.Background(), event)
 	if err != nil {
 		c.setControlError(err)
 		return fmt.Errorf("persist event %q: %w", event.Type, err)
@@ -427,7 +435,7 @@ func (c *runController) appendLog(record core.LogRecord) error {
 		return err
 	}
 	defer c.eventMu.Unlock()
-	if _, err := c.runner.store.AppendLog(context.Background(), record); err != nil {
+	if _, err := c.journal.AppendLog(context.Background(), record); err != nil {
 		c.setControlError(err)
 		return fmt.Errorf("persist log: %w", err)
 	}
@@ -444,7 +452,7 @@ func (c *runController) updatePhase(phase core.RunPhase) error {
 		}
 		return ErrRunClosed
 	}
-	record, err := c.runner.store.GetRun(context.Background(), c.id)
+	record, err := c.reader.GetRun(context.Background(), c.id)
 	if err != nil {
 		c.setControlError(err)
 		return err
@@ -454,7 +462,7 @@ func (c *runController) updatePhase(phase core.RunPhase) error {
 	if phase == core.RunPhaseProvisioning {
 		record.StartedAt = &now
 	}
-	if err := c.runner.store.UpdateRun(context.Background(), record); err != nil {
+	if err := c.journal.UpdateRun(context.Background(), record); err != nil {
 		c.setControlError(err)
 		return err
 	}
@@ -513,7 +521,7 @@ func (c *runController) finishExecution(outcome core.RunOutcome, finalErr error,
 		result.Error = redactError(redactor, finalErr)
 	}
 	result = core.RedactResult(redactor, result)
-	record, getErr := c.runner.store.GetRun(context.Background(), c.id)
+	record, getErr := c.reader.GetRun(context.Background(), c.id)
 	if getErr != nil {
 		outcome = core.RunOutcomeFailed
 		finalErr = getErr
@@ -540,7 +548,7 @@ func (c *runController) finishExecution(outcome core.RunOutcome, finalErr error,
 	var stored core.Event
 	finalizeErr := eventErr
 	if finalizeErr == nil {
-		stored, finalizeErr = c.runner.store.Finalize(context.Background(), FinalizationRecord{Run: record, Verdict: verdictRecord, Event: finalEvent})
+		stored, finalizeErr = c.journal.Finalize(context.Background(), FinalizationRecord{Run: record, Verdict: verdictRecord, Event: finalEvent})
 	}
 	if finalizeErr != nil {
 		outcome = core.RunOutcomeFailed
@@ -730,7 +738,7 @@ func (c *runController) arbitrateVerified(spec RunSpec, target core.TargetBindin
 		decision.finalErr = err
 		return decision
 	}
-	evidenceDir, cleanup, bundleErr := buildEvidenceBundle(c.ctx, c.runner.store, c.workspace, c.id, c.root)
+	evidenceDir, cleanup, bundleErr := buildEvidenceBundle(c.ctx, c.reader, c.workspace, c.id, c.root)
 	verifyVerdict, verifyErr := core.Verdict{}, bundleErr
 	if bundleErr == nil {
 		verifyVerdict, verifyErr = spec.Verifier.Verify(c.ctx, core.VerifyRequest{RunID: c.id, Task: spec.Task, Target: target, EvidenceDir: evidenceDir})
@@ -926,7 +934,7 @@ func (c *runController) commitBoard(ctx context.Context, commit Commit) error {
 	}
 	defer c.eventMu.Unlock()
 	commit.ExpectedRevision = c.boardRevision
-	stored, err := c.runner.store.Commit(ctx, commit)
+	stored, err := c.journal.Commit(ctx, commit)
 	if err != nil {
 		c.setControlError(err)
 		return err

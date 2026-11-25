@@ -34,7 +34,7 @@ func cleanEvidencePath(candidate string) (string, error) {
 
 // ArchiveAttemptEvidence validates and stores every referenced file, then
 // constructs Observations only after all Artifact writes succeed.
-func ArchiveAttemptEvidence(ctx context.Context, store ArtifactStore, redactor Redactor, workspace Workspace, req EvidenceArchiveRequest) ([]Observation, error) {
+func ArchiveAttemptEvidence(ctx context.Context, store ArtifactWriter, redactor Redactor, workspace Workspace, req EvidenceArchiveRequest) ([]Observation, error) {
 	if store == nil {
 		return nil, errors.New("artifact store is required")
 	}

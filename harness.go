@@ -21,7 +21,12 @@ type (
 	Backend             = engine.Backend
 	Verifier            = engine.Verifier
 	ArtifactStore       = engine.ArtifactStore
+	ArtifactWriter      = engine.ArtifactWriter
 	Store               = engine.Store
+	Journal             = engine.Journal
+	Reader              = engine.Reader
+	Recovery            = engine.Recovery
+	StoreCloser         = engine.StoreCloser
 	ReadStore           = engine.ReadStore
 	RunRecovery         = engine.RunRecovery
 	CanonicalWriter     = engine.CanonicalWriter

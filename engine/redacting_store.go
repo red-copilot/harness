@@ -119,30 +119,6 @@ func (s *redactingStore) Finalize(ctx context.Context, record FinalizationRecord
 func (s *redactingStore) GetRun(ctx context.Context, id string) (RunRecord, error) {
 	return s.inner.GetRun(ctx, id)
 }
-func (s *redactingStore) ListRuns(ctx context.Context, limit int) ([]RunRecord, error) {
-	return s.inner.ListRuns(ctx, limit)
-}
-func (s *redactingStore) ListEvents(ctx context.Context, runID string, after int64) ([]Event, error) {
-	return s.inner.ListEvents(ctx, runID, after)
-}
-func (s *redactingStore) ListLogs(ctx context.Context, runID string, after int64) ([]LogRecord, error) {
-	return s.inner.ListLogs(ctx, runID, after)
-}
-func (s *redactingStore) GetVerdict(ctx context.Context, runID string) (VerdictRecord, error) {
-	return s.inner.GetVerdict(ctx, runID)
-}
-func (s *redactingStore) ListClaims(ctx context.Context, runID string) ([]Claim, error) {
-	return s.inner.ListClaims(ctx, runID)
-}
-func (s *redactingStore) ListIntents(ctx context.Context, runID string) ([]Intent, error) {
-	return s.inner.ListIntents(ctx, runID)
-}
-func (s *redactingStore) ListIntentAttempts(ctx context.Context, runID string) ([]IntentAttempt, error) {
-	return s.inner.ListIntentAttempts(ctx, runID)
-}
-func (s *redactingStore) ListBlackboardObservations(ctx context.Context, runID string) ([]Observation, error) {
-	return s.inner.ListBlackboardObservations(ctx, runID)
-}
 func (s *redactingStore) ListArtifacts(ctx context.Context, runID string) ([]Artifact, error) {
 	return s.inner.ListArtifacts(ctx, runID)
 }
@@ -159,7 +135,3 @@ func (s *redactingStore) RestoreBoardState(ctx context.Context, runID string) (C
 func (s *redactingStore) Close() error { return s.inner.Close() }
 
 var _ Store = (*redactingStore)(nil)
-
-func (s *redactingStore) GetBoardRevision(ctx context.Context, runID string) (uint64, error) {
-	return s.inner.GetBoardRevision(ctx, runID)
-}
