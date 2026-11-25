@@ -46,6 +46,8 @@ func (b *Board) Apply(record Record) error {
 		return b.concludeIntent(p)
 	case IntentAbandonedRecord:
 		return b.abandonIntent(p)
+	case IntentReopenedRecord:
+		return b.reopenIntent(p)
 	case AttemptStartedRecord:
 		return b.addAttempt(p.Attempt)
 	case AttemptConcludedRecord:
@@ -151,6 +153,24 @@ func (b *Board) abandonIntent(p IntentAbandonedRecord) error {
 	}
 	intent.State = IntentAbandoned
 	intent.Error = p.Reason
+	b.Intents[i] = intent
+	b.Revision++
+	return nil
+}
+
+// reopenIntent returns a claimed Intent to the open column after an attempt
+// failed but the per-Intent attempt budget is not exhausted.
+func (b *Board) reopenIntent(p IntentReopenedRecord) error {
+	i, intent, ok := b.findIntent(p.IntentID)
+	if !ok {
+		return fmt.Errorf("intent %q not found", p.IntentID)
+	}
+	if intent.State != IntentClaimed {
+		return fmt.Errorf("intent %q is %s, not claimed", intent.ID, intent.State)
+	}
+	intent.State = IntentOpen
+	intent.ExecutorID = ""
+	intent.ClaimedAt = nil
 	b.Intents[i] = intent
 	b.Revision++
 	return nil

@@ -45,6 +45,7 @@ const (
 	RecordIntentClaimed      RecordType = "intent.claimed"
 	RecordIntentConcluded    RecordType = "intent.concluded"
 	RecordIntentAbandoned    RecordType = "intent.abandoned"
+	RecordIntentReopened     RecordType = "intent.reopened"
 	RecordAttemptStarted     RecordType = "attempt.started"
 	RecordAttemptConcluded   RecordType = "attempt.concluded"
 	RecordAttemptFailed      RecordType = "attempt.failed"
@@ -140,6 +141,10 @@ type (
 	IntentAbandonedRecord struct {
 		IntentID string    `json:"intent_id"`
 		Reason   string    `json:"reason"`
+		At       time.Time `json:"at"`
+	}
+	IntentReopenedRecord struct {
+		IntentID string    `json:"intent_id"`
 		At       time.Time `json:"at"`
 	}
 	AttemptStartedRecord struct {
@@ -247,6 +252,7 @@ var recordContracts = map[RecordType]recordContract{
 	RecordIntentClaimed:      {1, IntentClaimedRecord{}},
 	RecordIntentConcluded:    {1, IntentConcludedRecord{}},
 	RecordIntentAbandoned:    {1, IntentAbandonedRecord{}},
+	RecordIntentReopened:     {1, IntentReopenedRecord{}},
 	RecordAttemptStarted:     {1, AttemptStartedRecord{}},
 	RecordAttemptConcluded:   {1, AttemptConcludedRecord{}},
 	RecordAttemptFailed:      {1, AttemptFailedRecord{}},
