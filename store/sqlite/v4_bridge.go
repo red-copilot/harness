@@ -493,23 +493,23 @@ func (b *V4Bridge) Board(ctx context.Context, runID string) (core.Board, error) 
 	if err != nil {
 		return core.Board{}, err
 	}
-	claims, err := b.store.ListClaims(ctx, runID)
+	claims, err := v4BridgePayloads[core.Claim](ctx, b.store.db, `SELECT payload FROM claims WHERE run_id=? ORDER BY rowid`, runID)
 	if err != nil {
 		return core.Board{}, err
 	}
-	intents, err := b.store.ListIntents(ctx, runID)
+	intents, err := v4BridgePayloads[core.Intent](ctx, b.store.db, `SELECT payload FROM intents WHERE run_id=? ORDER BY rowid`, runID)
 	if err != nil {
 		return core.Board{}, err
 	}
-	attempts, err := b.store.ListIntentAttempts(ctx, runID)
+	attempts, err := v4BridgePayloads[core.IntentAttempt](ctx, b.store.db, `SELECT payload FROM attempts WHERE run_id=? ORDER BY rowid`, runID)
 	if err != nil {
 		return core.Board{}, err
 	}
-	observations, err := b.store.ListBlackboardObservations(ctx, runID)
+	observations, err := v4BridgePayloads[core.Observation](ctx, b.store.db, `SELECT payload FROM observations WHERE run_id=? ORDER BY rowid`, runID)
 	if err != nil {
 		return core.Board{}, err
 	}
-	artifacts, err := b.store.ListArtifacts(ctx, runID)
+	artifacts, err := v4BridgeArtifacts(ctx, b.store.db, runID)
 	if err != nil {
 		return core.Board{}, err
 	}
@@ -747,6 +747,17 @@ func projectV4BridgeRecordsTx(ctx context.Context, tx *sql.Tx, runID string, rec
 			if err := saveIntentTx(ctx, tx, intent); err != nil {
 				return err
 			}
+		case core.IntentReopenedRecord:
+			intent, err := loadV4IntentTx(ctx, tx, runID, p.IntentID)
+			if err != nil {
+				return err
+			}
+			intent.State = core.IntentOpen
+			intent.ExecutorID = ""
+			intent.ClaimedAt = nil
+			if err := saveIntentTx(ctx, tx, intent); err != nil {
+				return err
+			}
 		case core.AttemptStartedRecord:
 			if err := saveAttemptTx(ctx, tx, p.Attempt); err != nil {
 				return err
@@ -910,6 +921,49 @@ func updateV4AttemptTx(ctx context.Context, tx *sql.Tx, runID, attemptID string,
 	attempt.Error = failure
 	attempt.FinishedAt = at.UTC()
 	return saveAttemptTx(ctx, tx, attempt)
+}
+
+// v4BridgePayloads reads full domain payloads in insertion order, which is
+// journal order for a bridge Run (an updated row keeps its rowid).
+func v4BridgePayloads[T any](ctx context.Context, q v4BridgeQuerier, query, runID string) ([]T, error) {
+	rows, err := q.QueryContext(ctx, query, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []T
+	for rows.Next() {
+		var payload []byte
+		if err := rows.Scan(&payload); err != nil {
+			return nil, err
+		}
+		var value T
+		if err := json.Unmarshal(payload, &value); err != nil {
+			return nil, err
+		}
+		out = append(out, value)
+	}
+	return out, rows.Err()
+}
+
+func v4BridgeArtifacts(ctx context.Context, q v4BridgeQuerier, runID string) ([]core.Artifact, error) {
+	rows, err := q.QueryContext(ctx, `SELECT run_id,id,attempt_id,session_id,name,media_type,size,sha256,redacted,created_at FROM artifacts WHERE run_id=? ORDER BY rowid`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []core.Artifact
+	for rows.Next() {
+		var artifact core.Artifact
+		var created string
+		if err := rows.Scan(&artifact.RunID, &artifact.ID, &artifact.AttemptID, &artifact.SessionID, &artifact.Name,
+			&artifact.MediaType, &artifact.Size, &artifact.SHA256, &artifact.Redacted, &created); err != nil {
+			return nil, err
+		}
+		artifact.CreatedAt = parseTime(created)
+		out = append(out, artifact)
+	}
+	return out, rows.Err()
 }
 
 func writeV4BoardCommitTx(ctx context.Context, tx *sql.Tx, state core.State) error {

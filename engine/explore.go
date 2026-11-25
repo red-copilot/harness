@@ -10,6 +10,15 @@ import (
 
 type defaultExploreStrategy struct{}
 
+// DefaultExploreStrategy returns the protocol-compliant Explore strategy.
+func DefaultExploreStrategy() ExploreStrategy { return defaultExploreStrategy{} }
+
+// RunExploreAttempt is the exported bounded Execute/Conclude turn pair used by
+// the v5 kernel. It shares the v4 protocol implementation.
+func RunExploreAttempt(ctx context.Context, session AgentSession, req ExploreRequest, limits TurnLimits, concludeTimeout time.Duration, sink EventSink, strategy ExploreStrategy, clock Clock, workspace Workspace) (AttemptReport, string, error) {
+	return runExploreAttempt(ctx, session, req, limits, concludeTimeout, sink, strategy, clock, workspace)
+}
+
 func (defaultExploreStrategy) ExecutePrompt(req ExploreRequest) (string, error) {
 	var out strings.Builder
 	out.WriteString("You are an Explore task for one bounded authorized exploration Intent.\n")

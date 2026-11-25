@@ -318,6 +318,17 @@ func projectRecordsTx(ctx context.Context, tx *sql.Tx, runID string, records []c
 			if err := upsertIntentTx(ctx, tx, record.Seq, intent); err != nil {
 				return err
 			}
+		case core.IntentReopenedRecord:
+			intent, err := loadIntentTx(ctx, tx, runID, p.IntentID)
+			if err != nil {
+				return err
+			}
+			intent.State = core.IntentOpen
+			intent.ExecutorID = ""
+			intent.ClaimedAt = nil
+			if err := upsertIntentTx(ctx, tx, record.Seq, intent); err != nil {
+				return err
+			}
 		case core.AttemptStartedRecord:
 			if err := upsertAttemptTx(ctx, tx, record.Seq, p.Attempt); err != nil {
 				return err

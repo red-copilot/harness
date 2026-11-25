@@ -9,6 +9,9 @@ const maxReasonClaims = 64
 
 type defaultReasonStrategy struct{}
 
+// DefaultReasonStrategy returns the protocol-compliant Reason strategy.
+func DefaultReasonStrategy() ReasonStrategy { return defaultReasonStrategy{} }
+
 func (defaultReasonStrategy) Prompt(req ReasonRequest) (string, error) {
 	return reasonPrompt(req), nil
 }
